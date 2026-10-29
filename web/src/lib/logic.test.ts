@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Job, Part } from '../types';
-import { hiddenParts, isPartName, jointsOf, levelsFor, partLabel, resolvePart } from './parts';
+import { hiddenParts, isPartName, jointsOf, levelsFor, ownNodes, partLabel, resolvePart } from './parts';
 import { MAX_POLL_FAILURES, describe as describePoll, nextDelayMs, pollReducer, type PollState } from './jobs';
 import { blenderToGltf, cameraFor, gltfToBlender, jointAxisGltf } from './frames';
 import { assetLabel, clothesSlot, mergePatch, toggleIn } from './spec';
@@ -45,6 +45,39 @@ describe('nearest part from a node chain', () => {
   it('falls back to the naming rule without a parts list', () => {
     expect(resolvePart(['Cube', 'Roof__Horn', 'Scene'])).toBe('Roof__Horn');
     expect(resolvePart(['station__helm', 'Scene'])).toBeNull();
+  });
+});
+
+describe('a part\'s own nodes (what its highlight lights)', () => {
+  type N = { name: string; children: N[] };
+  const n = (name: string, ...children: N[]): N => ({ name, children });
+  // Hull__Main is the root every other part hangs from, as the ship builders emit it.
+  const tree = n('Hull__Main',
+    n('Hull__Main_1'), n('Hull__Main_2'),
+    n('Accommodation__House', n('Accommodation__House_1'), n('Bridge__Wheelhouse')),
+    n('station__helm', n('helm_marker')),
+    n('Cargo__Hatch_01', n('Cargo__Bay_01')));
+  const known = ['Hull__Main', 'Accommodation__House', 'Bridge__Wheelhouse', 'station__helm', 'Cargo__Hatch_01', 'Cargo__Bay_01'];
+  const names = (node: N, k?: string[]) => ownNodes(node, k).map((x) => x.name);
+
+  it('the hull is the hull and its material pieces, not the parts attached to it', () => {
+    expect(names(tree, known)).toEqual(['Hull__Main', 'Hull__Main_1', 'Hull__Main_2', 'station__helm', 'helm_marker']);
+  });
+  it('a mid-level part keeps its own pieces and drops the part on top of it', () => {
+    expect(names(tree.children[2], known)).toEqual(['Accommodation__House', 'Accommodation__House_1']);
+  });
+  it('matches picking: every own node resolves to the part, every other node does not', () => {
+    const chains: Array<[N, string[]]> = [];
+    const walk = (node: N, up: string[]) => { const c = [node.name, ...up]; chains.push([node, c]); node.children.forEach((x) => walk(x, c)); };
+    walk(tree, ['Scene']);
+    for (const p of known.filter((k) => !k.startsWith('station__'))) {
+      const node = chains.find(([x]) => x.name === p)![0];
+      const own = new Set(ownNodes(node, known));
+      for (const [x, chain] of chains) {
+        if (own.has(x)) expect(resolvePart(chain, known)).toBe(p);
+        else if (chain.includes(p)) expect(resolvePart(chain, known)).not.toBe(p);
+      }
+    }
   });
 });
 

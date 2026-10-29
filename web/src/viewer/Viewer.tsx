@@ -6,7 +6,7 @@ import { Html, OrbitControls, useAnimations, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { cameraFor, jointAxisGltf, type Bounds, type ViewName } from '../lib/frames';
-import { isStationName, partLabel, resolvePart } from '../lib/parts';
+import { isStationName, ownNodes, partLabel, resolvePart } from '../lib/parts';
 import type { Pin, Vec3 } from '../types';
 import { ErrorBoundary } from '../components/common';
 
@@ -92,13 +92,15 @@ function useClonedScene(url: string) {
   return { root, animations: gltf.animations };
 }
 
+function stdMaterialsOf(o: THREE.Object3D, fn: (m: THREE.MeshStandardMaterial) => void) {
+  const mesh = o as THREE.Mesh;
+  if (!mesh.isMesh) return;
+  const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const mat of mats) if ((mat as THREE.MeshStandardMaterial).emissive) fn(mat as THREE.MeshStandardMaterial);
+}
+
 function forEachStdMaterial(o: THREE.Object3D, fn: (m: THREE.MeshStandardMaterial) => void) {
-  o.traverse((c) => {
-    const mesh = c as THREE.Mesh;
-    if (!mesh.isMesh) return;
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    for (const mat of mats) if ((mat as THREE.MeshStandardMaterial).emissive) fn(mat as THREE.MeshStandardMaterial);
-  });
+  o.traverse((c) => stdMaterialsOf(c, fn));
 }
 
 export interface ShipModelProps {
@@ -132,13 +134,15 @@ function ShipModel(p: ShipModelProps) {
       m.emissive.setHex(m.userData.baseEmissive);
       m.emissiveIntensity = m.userData.baseIntensity;
     });
+    // Only the part's own meshes: the parts attached under it (the hull carries the whole ship) stay unlit.
     const tint = (name: string | null | undefined, k: number) => {
       const o = name ? root.getObjectByName(name) : null;
-      if (o) forEachStdMaterial(o, (m) => { m.emissive.set('#5B9BFF'); m.emissiveIntensity = k; });
+      if (!o) return;
+      for (const n of ownNodes(o, p.partPaths)) stdMaterialsOf(n, (m) => { m.emissive.set('#5B9BFF'); m.emissiveIntensity = k; });
     };
     tint(p.pickMode ? hover : null, 0.25);
     tint(p.selectedPart, 0.55);
-  }, [root, p.selectedPart, hover, p.pickMode]);
+  }, [root, p.selectedPart, hover, p.pickMode, p.partPaths]);
 
   // Joint preview: rotate each articulated node about its joint axis from its rest pose.
   useEffect(() => {
