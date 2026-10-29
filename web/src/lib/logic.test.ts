@@ -606,3 +606,71 @@ describe('work across models', () => {
     expect(activeFor(jobs, undefined)).toEqual([]);
   });
 });
+
+import { DEFAULT_FILTER, UNCATEGORIZED, applyFilter, categoryCounts, filterFromParams, filterToParams, groupByCategory, isFiltered } from './projectFilter';
+
+describe('finding ships and crew', () => {
+  const p = (id: string, name: string, extra: Record<string, unknown> = {}) => ({
+    id, kind: 'ship' as const, name, base: 'container', version: 1, updated: '2026-10-29T10:00:00Z', category: 'Commercial vessels', ...extra,
+  });
+  const list = [
+    p('a', 'PC 303', { category: 'Law enforcement and coast guard', base: 'sampan', updated: '2026-10-29T12:00:00Z', version: 4 }),
+    p('b', 'Container ship', { version: 2 }),
+    p('c', 'Container ship with lesser cargo', { derived_from: { project: 'b', version: 1, name: 'Container ship' }, updated: '2026-10-29T11:00:00Z' }),
+    p('d', 'Tanker 2', { base: 'tanker', version: 0 }),
+    p('e', 'Gunboat', { category: 'Military vessels', draft: { stage: 'ready' }, derived_from: { project: 'a', version: 4, name: 'PC 303' } }),
+    p('f', 'Old one', { category: null }),
+  ];
+  const ctx = { working: new Set(['b']), baseLabel: (b: string) => ({ container: 'Container ship', sampan: 'Sampan', tanker: 'Tanker' })[b] ?? b };
+  const ids = (f: Partial<typeof DEFAULT_FILTER>) => applyFilter(list, { ...DEFAULT_FILTER, ...f }, ctx).map((x) => x.id);
+
+  it('searches names, categories, base types and originals, word by word, ignoring case', () => {
+    expect(ids({ q: 'container' })).toEqual(['c', 'b', 'e', 'f']); // e and f are built on the container base
+    expect(ids({ q: 'pc 303' })).toEqual(['a', 'e']);                 // e is a variant of PC 303
+    expect(ids({ q: 'coast' })).toEqual(['a']);
+    expect(ids({ q: 'tanker' })).toEqual(['d']);
+    expect(ids({ q: 'lesser container' })).toEqual(['c']);
+    expect(ids({ q: '  ' })).toHaveLength(6);
+  });
+  it('filters by category, status, origin and base', () => {
+    expect(ids({ category: 'Military vessels' })).toEqual(['e']);
+    expect(ids({ category: UNCATEGORIZED })).toEqual(['f']);
+    expect(ids({ status: 'approval' })).toEqual(['e']);
+    expect(ids({ status: 'working' })).toEqual(['b']);
+    expect(ids({ status: 'unbuilt' })).toEqual(['d']);
+    expect(ids({ status: 'built' })).not.toContain('d');
+    expect(ids({ origin: 'variants' })).toEqual(['c', 'e']);
+    expect(ids({ origin: 'originals' })).toEqual(['a', 'b', 'd', 'f']);
+    expect(ids({ base: 'tanker' })).toEqual(['d']);
+  });
+  it('sorts by recent change, name or versions', () => {
+    expect(ids({}).slice(0, 2)).toEqual(['a', 'c']);
+    expect(ids({ sort: 'name' })).toEqual(['b', 'c', 'e', 'f', 'a', 'd']);
+    expect(ids({ sort: 'name_desc' })[0]).toBe('d');
+    expect(ids({ sort: 'versions' })[0]).toBe('a');
+  });
+  it('counts each category under the other filters, defaults first, empty defaults kept', () => {
+    const counts = categoryCounts(list, ['Commercial vessels', 'Military vessels', 'Fishing and small craft']);
+    expect(counts).toEqual([
+      { category: 'Commercial vessels', count: 3 }, { category: 'Military vessels', count: 1 },
+      { category: 'Fishing and small craft', count: 0 }, { category: 'Law enforcement and coast guard', count: 1 },
+      { category: UNCATEGORIZED, count: 1 },
+    ]);
+  });
+  it('groups by category in the same order', () => {
+    const groups = groupByCategory(applyFilter(list, DEFAULT_FILTER, ctx), ['Military vessels', 'Commercial vessels']);
+    expect(groups.map((g) => [g.category, g.items.map((x) => x.id)])).toEqual([
+      ['Military vessels', ['e']], ['Commercial vessels', ['c', 'b', 'd']], ['Law enforcement and coast guard', ['a']], [UNCATEGORIZED, ['f']],
+    ]);
+  });
+  it('keeps the filter in the address, leaving out defaults', () => {
+    const f = { ...DEFAULT_FILTER, q: 'pc', category: 'Military vessels', status: 'working' as const, group: true };
+    const params = filterToParams(f);
+    expect(params).toEqual({ q: 'pc', cat: 'Military vessels', status: 'working', group: '1' });
+    expect(filterFromParams(new URLSearchParams(params))).toEqual(f);
+    expect(filterFromParams(new URLSearchParams('status=nonsense&sort=zzz'))).toEqual(DEFAULT_FILTER);
+    expect(isFiltered(DEFAULT_FILTER)).toBe(false);
+    expect(isFiltered({ ...DEFAULT_FILTER, sort: 'name', group: true })).toBe(false); // sorting and grouping hide nothing
+    expect(isFiltered(f)).toBe(true);
+  });
+});

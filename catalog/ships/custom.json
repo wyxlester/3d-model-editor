@@ -3,6 +3,7 @@
  "type": "custom",
  "id": "custom_vessel",
  "name": "Custom vessel",
+ "category": "Other",
  "description": "Any monohull, shaped by params: principal dimensions, bow and stern forms, sheer, deadrise and bilge, paint, bulwark / rail / fender, hull windows, superstructure tiers stacked from the deck, and an optional mast, radar arch and funnel. The default is a plain 20 m workboat with a small wheelhouse. Everything no param covers (fly-bridge furniture, cranes, guns, davits, towing gear) is added with custom ops.",
  "params": {
   "loa_m": 20.0,

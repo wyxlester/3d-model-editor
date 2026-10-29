@@ -453,3 +453,98 @@ def test_custom_ship_jobs_carry_their_project_and_a_plain_label(make_client, wit
     assert job["project"] == pid and job["label"] == "Building Yacht from the approved plan"
     assert "• Building the approved design plan" in job["log"]
 
+
+
+# ---- categories (Lester, 29 Oct: a described ship starts in "Other"; research files it) -------
+
+SHIP_CATEGORIES = {"ship": ["Commercial vessels", "Military vessels", "Passenger and leisure", "Other"],
+                   "crew": ["Navy", "Other"]}
+
+
+@pytest.fixture
+def with_categories(with_custom):
+    (with_custom / "categories.json").write_text(json.dumps(SHIP_CATEGORIES))
+    data = dict(CUSTOM_CATALOG, category="Other")
+    (with_custom / "ships" / "custom.json").write_text(json.dumps(data))
+    return with_custom
+
+
+def category_of(c, pid):
+    listed = next(p for p in c.get("/api/projects").json() if p["id"] == pid)
+    assert listed["category"] == c.get(f"/api/projects/{pid}").json()["category"]
+    return listed["category"]
+
+
+def test_real_catalog_files_custom_ships_under_other():
+    from app.config import REPO_ROOT
+    cats = json.loads((REPO_ROOT / "catalog" / "categories.json").read_text())
+    custom = json.loads((REPO_ROOT / "catalog" / "ships" / "custom.json").read_text())
+    assert custom["category"] == "Other" and "Other" in cats["ship"]
+    assert "Passenger and leisure" in cats["ship"]
+
+
+def test_custom_ship_starts_under_other(make_client, with_categories):
+    c = make_client()
+    out, _ = create_custom(c, brief="a motor yacht")
+    assert out["project"]["category"] == "Other"
+    assert category_of(c, out["project"]["id"]) == "Other"
+
+
+def test_set_category_accepts_a_catalog_category_and_refuses_an_invented_one(make_client, with_categories):
+    agent = ScriptedAgent([("set_category", {"category": "Superyachts"}),
+                           ("set_category", {"category": "passenger  and leisure"})])
+    c = make_client(agent=agent)
+    out, _ = create_custom(c, brief="a motor yacht")
+    pid = out["project"]["id"]
+    research_turn(c, pid)
+    (_, refused, refused_err), (_, ok, ok_err) = agent.results
+    assert refused_err and "not one of the catalog's ship categories" in refused
+    assert "Passenger and leisure" in refused  # it tells the AI what it may pick
+    assert not ok_err and ok == "Filed under Passenger and leisure."
+    assert category_of(c, pid) == "Passenger and leisure"
+
+
+def test_refused_category_changes_nothing(make_client, with_categories):
+    agent = ScriptedAgent([("set_category", {"category": "Luxury toys"})])
+    c = make_client(agent=agent)
+    out, _ = create_custom(c, brief="a motor yacht")
+    research_turn(c, out["project"]["id"])
+    assert agent.results[0][2] is True
+    assert category_of(c, out["project"]["id"]) == "Other"
+
+
+def test_set_category_is_research_only(make_client, with_categories):
+    agent = ScriptedAgent([("set_category", {"category": "Military vessels"})])
+    c = make_client(agent=agent)
+    p = c.post("/api/projects", json={"kind": "ship", "base": "container"}).json()
+    wait_job(c, p["job_id"])
+    pid = p["project"]["id"]
+    job = wait_job(c, c.post(f"/api/projects/{pid}/chat", json={"message": "file it"}).json()["job_id"])
+    assert job["status"] == "done", job
+    assert agent.results[0][1:] == ("Unknown tool set_category.", True)
+    assert category_of(c, pid) != "Military vessels"
+
+
+def test_yacht_research_files_it_under_passenger_and_leisure_and_says_so(make_client, with_categories):
+    reply = ("A generic 24 m fly-bridge motor yacht; the plan is ready to approve. "
+             "I filed it under Passenger and leisure.")
+    agent = ScriptedAgent([("save_research", {"research": RESEARCH}),
+                           ("set_category", {"category": "Passenger and leisure"}),
+                           ("save_design_plan", {"summary": SUMMARY, "spec": YACHT})], reply=reply)
+    c = make_client(agent=agent)
+    out, _ = create_custom(c, brief="create a yacht ship model to look like the image attached")
+    pid = out["project"]["id"]
+    job = research_turn(c, pid)
+    assert all(not err for _, _, err in agent.results), agent.results
+    assert "Filed under: Other" in agent.prompts[0]  # the AI is told where it starts
+    assert category_of(c, pid) == "Passenger and leisure"
+    assert job["result"]["reply"] == reply
+    assert c.get(f"/api/projects/{pid}").json()["messages"][-1]["text"] == reply
+    assert job["result"]["built_versions"] == []  # filing it builds nothing
+
+
+def test_research_prompt_and_progress_line_for_filing():
+    from app.agent import CUSTOM_RESEARCH_PROMPT, describe_tool
+    assert "set_category" in CUSTOM_RESEARCH_PROMPT and "Passenger and leisure" in CUSTOM_RESEARCH_PROMPT
+    assert describe_tool("set_category", {"category": "Passenger and leisure"}) == \
+        "Filing it under Passenger and leisure"

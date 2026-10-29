@@ -29,7 +29,7 @@ const jobs: Record<string, MockJob> = {};
 
 function seed(): Store {
   const ship: Store['projects'][string] = {
-    id: 'p_pc303', kind: 'ship', name: 'PCG 3-Series · PC 303', base: 'sampan', version: 2,
+    id: 'p_pc303', kind: 'ship', name: 'PCG 3-Series · PC 303', base: 'sampan', version: 2, category: 'Law enforcement and coast guard',
     spec: {
       schema: 'me3d.ship_spec/1', type: 'sampan', id: 'pcg_pc303', name: 'PCG 3-Series · PC 303',
       params: { loa_m: 16, beam_m: 4.2, draught_m: 0.8, depth_m: 1.6, hull_color: [0.6, 0.64, 0.68] },
@@ -210,6 +210,7 @@ function createCustom(body: { name?: string; brief?: string }) {
     spec: { schema: 'me3d.ship_spec/1', type: 'custom', id, name, params: {}, overrides: {}, joint_limits: {}, custom_ops: [] },
     versions: [], model_url: null, parts: shipParts, build_report: {}, pins: [], messages: [], research: null,
     research_rev: 0, design_plan: null, brief: brief || null, plan_built: false, glbs: {},
+    category: catalog.ships.find((s) => s.type === 'custom')?.category ?? 'Other',
   };
   store.projects[id] = p;
   // The placeholder hull "builds" at once here: nobody polls this job, the Research screen opens first.
@@ -218,6 +219,18 @@ function createCustom(body: { name?: string; brief?: string }) {
   const job = startJob(['Creating the project'], () => ({ version: p.version }));
   save();
   return { project: strip(p), ...job };
+}
+
+/** Decision A's mock: the closest catalog ship category for a description; the yacht files under leisure. */
+const CATEGORY_WORDS: [RegExp, string][] = [
+  [/frigate|corvette|destroyer|warship|navy/i, 'Military vessels'],
+  [/patrol|coast ?guard|police/i, 'Law enforcement and coast guard'],
+  [/trawler|fishing|junk|dhow|sampan/i, 'Fishing and small craft'],
+  [/tug|dredger|barge|pilot boat|lifeboat|harbour|harbor/i, 'Service and harbour craft'],
+  [/tanker|container|cargo|bulk/i, 'Commercial vessels'],
+];
+function closestCategory(text: string): string {
+  return CATEGORY_WORDS.find(([re]) => re.test(text))?.[1] ?? 'Passenger and leisure';
 }
 
 function customResearchTurn(p: Store['projects'][string], message: string) {
@@ -262,6 +275,12 @@ function customResearchTurn(p: Store['projects'][string], message: string) {
       ],
       spec: { schema: 'me3d.ship_spec/1', type: 'custom', params: { loa_m: loa, beam_m: beam, draught_m: 2.1 } },
     };
+  }
+  // A described ship starts under "Other"; the research files it in the closest catalog category and
+  // says so. Only from "Other", so a category Lester picked in the preview panel is left alone.
+  if (!p.category || p.category === 'Other') {
+    p.category = closestCategory(`${p.brief ?? ''} ${message}`);
+    note += ` Filed it under ${p.category}; change that in the ship list's preview panel.`;
   }
   const reply: Message = { who: 'AI', text: `(mock) ${note}`, at: now() };
   p.messages = [...p.messages, reply];
@@ -318,13 +337,18 @@ function route(message: string): RouteResult {
 
 const catalog: Catalog = {
   ships: [
-    { type: 'container', name: 'Container ship', description: 'Box-hulled cargo ship with cranes' },
-    { type: 'sampan', name: 'Sampan', description: 'Small open boat with an outboard' },
-    { type: 'tanker', name: 'Tanker', description: 'Crude oil tanker' },
+    { type: 'container', name: 'Container ship', description: 'Box-hulled cargo ship with cranes', category: 'Commercial vessels' },
+    { type: 'sampan', name: 'Sampan', description: 'Small open boat with an outboard', category: 'Fishing and small craft' },
+    { type: 'tanker', name: 'Tanker', description: 'Crude oil tanker', category: 'Commercial vessels' },
     // As the server lists it; the Ship page starts these from "Describe a new ship", not as a base.
-    { type: 'custom', name: 'Any ship', description: 'A general monohull shaped from research and an approved design plan' },
+    // Filed under "Other" until the research AI picks the closest category (Lester, 29 Oct).
+    { type: 'custom', name: 'Any ship', description: 'A general monohull shaped from research and an approved design plan', category: 'Other' },
   ],
-  crew: [{ id: 'male_default', name: 'Default male crew' }],
+  crew: [{ id: 'male_default', name: 'Default male crew', category: 'Merchant crew' }],
+  categories: {
+    ship: ['Commercial vessels', 'Military vessels', 'Law enforcement and coast guard', 'Fishing and small craft', 'Passenger and leisure', 'Service and harbour craft', 'Other'],
+    crew: ['Navy', 'Coast guard and police', 'Merchant crew', 'Fishermen', 'Civilians and passengers', 'Other'],
+  },
   // Mirrors catalog/crew/male_default.json options (suits, shoes, hats).
   clothes: ['male_worksuit01', 'male_casualsuit01', 'male_casualsuit02', 'male_elegantsuit01', 'female_casualsuit01', 'female_elegantsuit01', 'female_sportsuit01',
     'shoes01', 'shoes02', 'shoes03', 'fedora01', 'fedora_cocked'],
@@ -344,7 +368,8 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
   if (method === 'GET' && path === '/api/catalog') return catalog;
   if (method === 'POST' && path === '/api/route') return route(String(body?.message ?? ''));
   if (method === 'GET' && path === '/api/projects') {
-    return Object.values(store.projects).filter((p) => !p.discarded).map((p): ProjectSummary => ({ id: p.id, kind: p.kind, name: p.name, base: p.base, version: p.version, ok: p.build_report.ok, updated: p.versions[p.versions.length - 1]?.at, model_url: p.model_url, open_pins: p.pins.filter((x) => x.status !== 'resolved').length, derived_from: p.derived_from ?? null, draft: p.draft ?? null }));
+    return Object.values(store.projects).filter((p) => !p.discarded).map((p): ProjectSummary => ({ id: p.id, kind: p.kind, name: p.name, base: p.base, version: p.version, ok: p.build_report.ok, updated: p.versions[p.versions.length - 1]?.at, model_url: p.model_url, open_pins: p.pins.filter((x) => x.status !== 'resolved').length, derived_from: p.derived_from ?? null, draft: p.draft ?? null, plan_built: p.plan_built,
+      category: p.category ?? (p.kind === 'crew' ? 'Coast guard and police' : catalog.ships.find((s) => s.type === p.base)?.category ?? null) }));
   }
   if (method === 'POST' && path === '/api/projects' && body.kind === 'ship' && body.base === 'custom') return createCustom(body);
   if (method === 'POST' && path === '/api/projects') {
@@ -360,6 +385,18 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
     return { project: strip(p), ...job };
   }
   if ((r = m(/^\/api\/projects\/([^/]+)$/)) && method === 'GET') return strip(proj(r[1]));
+  if ((r = m(/^\/api\/projects\/([^/]+)$/)) && method === 'PATCH') {
+    const p = proj(r[1]);
+    for (const key of ['category', 'name'] as const) {
+      if (key in (body ?? {})) {
+        const v = String(body[key] ?? '').trim();
+        if (!v || v.length > 60) throw new HttpErr(400, `${key} must be text of 1 to 60 characters`);
+        p[key] = v;
+      }
+    }
+    save();
+    return { project: strip(p) };
+  }
   if ((r = m(/^\/api\/projects\/([^/]+)\/versions\/(\d+)\/parts\.json$/))) return proj(r[1]).parts;
   if ((r = m(/^\/api\/projects\/([^/]+)\/spec$/)) && method === 'POST') {
     const p = proj(r[1]);

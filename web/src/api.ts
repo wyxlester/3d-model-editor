@@ -86,6 +86,9 @@ export const api = {
   setPinStatus: (id: string, pinId: string, status: 'open' | 'resolved') =>
     call<{ pin: Pin }>('PATCH', `/api/projects/${enc(id)}/pins/${enc(pinId)}`, { status }),
   undo: (id: string) => call<{ project: Project }>('POST', `/api/projects/${enc(id)}/undo`),
+  /** Rename a project or file it under a category; no rebuild. */
+  patchProject: (id: string, fields: { category?: string; name?: string }) =>
+    call<{ project: Project }>('PATCH', `/api/projects/${enc(id)}`, fields),
   createVariant: (id: string, req: VariantRequest) =>
     call<{ project: Project; job_id: string }>('POST', `/api/projects/${enc(id)}/variants`, req),
   approve: (id: string) => call<ApproveResult>('POST', `/api/projects/${enc(id)}/approve`),

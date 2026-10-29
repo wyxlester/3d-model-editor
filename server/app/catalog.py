@@ -1,6 +1,8 @@
 """Reads catalog/ships/<type>.json and catalog/crew/<id>.json.
 
-A catalog file is a default spec plus documentation (description, param_docs, options). The
+A catalog file is a default spec plus documentation (description, param_docs, options, and
+`category`: the category a new project from it starts in). catalog/categories.json lists the
+default categories for ships and for crew. The
 builders own those files and may add doc keys; the spec is whatever the contract's spec schema
 names, so we keep exactly those keys and treat everything else as documentation.
 """
@@ -63,6 +65,28 @@ class Catalog:
                 spec.setdefault(k, empty)
         return spec
 
+    def categories(self) -> dict:
+        """{"ship": [label], "crew": [label]} from catalog/categories.json; empty lists without it."""
+        out: dict = {"ship": [], "crew": []}
+        try:
+            data = json.loads((self.root / "categories.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return out
+        if isinstance(data, dict):
+            for kind in out:
+                labels = data.get(kind)
+                if isinstance(labels, list):
+                    out[kind] = [s for s in labels if isinstance(s, str) and s.strip()]
+        return out
+
+    def category(self, kind: str, base: str) -> str | None:
+        """The category a project from this catalog base starts in, if the catalog gives one."""
+        try:
+            value = self._read(kind, base).get("category")
+        except CatalogError:
+            return None
+        return value if isinstance(value, str) and value.strip() else None
+
     def _list(self, folder: str) -> list[tuple[str, dict]]:
         out = []
         d = self.root / folder
@@ -87,7 +111,7 @@ class Catalog:
         for stem, data in self._list("ships"):
             spec = data.get("spec", data)
             ships.append({"type": spec.get("type", stem), "name": spec.get("name", stem),
-                          "description": data.get("description", "")})
+                          "description": data.get("description", ""), "category": data.get("category")})
         crew, clothes, equipment, animations = [], [], [], []
 
         def add(target: list, values):
@@ -101,7 +125,7 @@ class Catalog:
 
         for stem, data in self._list("crew"):
             spec = data.get("spec", data)
-            crew.append({"id": stem, "name": spec.get("name", stem)})
+            crew.append({"id": stem, "name": spec.get("name", stem), "category": data.get("category")})
             opts = self._options(data)
             cl = opts.get("clothes")
             if isinstance(cl, dict):
@@ -114,4 +138,4 @@ class Catalog:
             add(equipment, opts.get("equipment"))
             add(animations, opts.get("animations"))
         return {"ships": ships, "crew": crew, "clothes": clothes, "equipment": equipment,
-                "animations": animations}
+                "animations": animations, "categories": self.categories()}

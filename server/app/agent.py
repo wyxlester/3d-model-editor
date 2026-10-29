@@ -181,6 +181,12 @@ class AgentSession:
                 tools.append(("save_design_plan", self._design_plan_doc(),
                               _obj({"summary": {"type": "array", "items": {"type": "string"}},
                                     "spec": {"type": "object"}}, ["summary", "spec"])))
+            if self.kind == "ship":
+                cats = self.catalog.categories()["ship"]
+                tools.append(("set_category", "File this ship in the ship list under one of the catalog's ship "
+                              "categories, exactly as written: " + ("; ".join(cats) or "(none defined)") +
+                              ". Pick the closest; any other label is refused. Say in your reply where you "
+                              "filed it.", _obj({"category": {"type": "string"}}, ["category"])))
             return tools
         common = [
             ("get_project", "Read the project: spec, parts (path, label, joint, station, bounds), the last "
@@ -730,6 +736,21 @@ class AgentSession:
                 }.get(plan.get("status"), "")
         return f"Research saved (revision {rev}).{note}"
 
+    def t_set_category(self, category: str) -> str:
+        """Lester, 29 Oct: research files a ship under one of the catalog's ship categories, never an
+        invented one. Saved where PATCH /api/projects/{id} saves it (the project's `category`)."""
+        if self.kind != "ship":
+            raise ToolError("Categories from research are only for ships.")
+        cats = self.catalog.categories()["ship"]
+        wanted = " ".join(str(category or "").split())
+        label = next((c for c in cats if c.casefold() == wanted.casefold()), None)
+        if label is None:
+            raise ToolError(f"{wanted!r} is not one of the catalog's ship categories, so nothing was changed. "
+                            f"Pick the closest of: {'; '.join(cats) or '(none defined)'}.")
+        with self.store.edit(self.pid) as project:
+            project["category"] = label
+        return f"Filed under {label}."
+
     def t_save_design_plan(self, summary: list, spec: dict) -> str:
         if not self.is_custom:
             raise ToolError("Design plans are only for custom ships.")
@@ -854,7 +875,8 @@ CUSTOM_RESEARCH_PROMPT = """You research a vessel of any type that the user aske
 - Amend, do not restart: the saved research and design plan so far are given below. Each user message is a correction, an answer or more photos: fold it into the research (answered questions become claims with the user as source, status 'Official' when they state a fact about their own vessel), and resave the whole record with save_research.
 - When the research is good enough to build from, or the user asks for a plan, draft the design plan with save_design_plan (after save_research). Redraft it whenever the research changes. Keep its summary in plain English: size, hull form, each superstructure tier, colours, details to add, and assumptions with values.
 - Articulation: what moves (radar spin, davit, tender crane) and what must not.
-- Reply in two to four plain sentences: what you found or changed, the most important open question, and whether a plan is ready to approve."""
+- The ship starts filed under "Other" in the ship list. As soon as you know what kind of vessel it is, file it in the closest of the catalog's ship categories with set_category (a motor yacht goes under "Passenger and leisure"), and say in your reply where you filed it. Lester can change it in the ship list.
+- Reply in two to four plain sentences: what you found or changed, the most important open question, whether a plan is ready to approve, and the category you filed it under if you filed it this turn."""
 
 
 def custom_research_context(project: dict, spec: dict, cat_entry: dict) -> str:
@@ -873,6 +895,7 @@ def custom_research_context(project: dict, spec: dict, cat_entry: dict) -> str:
         said = f"Brief (the user's original request): {project.get('brief') or '(none given)'}"
     lines = [said,
              f"Research revision: {project.get('research_rev', 0)}",
+             f"Filed under: {project.get('category') or 'Other'}",
              "Saved research so far: " + (json.dumps(research) if research else "none yet."),
              ]
     if plan:
@@ -947,6 +970,7 @@ def describe_tool(name: str, args: dict | None) -> str | None:
         "set_place": f"Moving {_words([a.get('item') or 'an item'])} to the {_words([a.get('place') or 'new place'])}",
         "set_accessories": f"Setting accessories: {_words(_item_names(a.get('accessories') or ['none']))}",
         "save_design_plan": "Drafting the design plan",
+        "set_category": f"Filing it under {a.get('category') or 'a category'}",
         "set_animations": f"Setting moves: {_words(a.get('animations') or ['none'])}",
         "WebSearch": f"Searching the web: {a.get('query', '')}",
         "WebFetch": f"Reading {urlparse(str(a.get('url', ''))).netloc or 'a web page'}",
