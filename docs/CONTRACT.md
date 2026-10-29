@@ -109,6 +109,25 @@ the exit code**: Blender returns 0 even when a script raises an error, unless th
 }
 ```
 
+**Made by description** (Lester, 29 Oct: "describe in words what the human should wear … what
+equipment the human should hold"). Optional fields, all absent in the default spec:
+
+| Field | Meaning |
+|---|---|
+| `body.hair_color` | `[r,g,b]` 0..1 or null. Recolours hair *and* eyebrows to read as that colour (blonde must look blonde, not a darkened tint), keeping the strand texture. |
+| `clothes.shoes_color`, `clothes.hat_color` | `[r,g,b]` or null, like `suit_color`. |
+| `custom_items` | `[{"id":"item_1","description":str,"code":str}]`: Blender Python the AI writes, run after the human and catalog equipment are built and **before** animations bake, with `bpy`, `mathutils` and helper module `crew` (`blender/crew/custom.py`) in scope. Same code rules as ship custom ops (no os/sys/subprocess, open, eval, exec). |
+
+Objects a custom item creates are named `Clothes__<Name>` (worn, skinned to the skeleton) or
+`Equipment__<Name>` (held or attached, parented to a bone), `[A-Za-z0-9_]` only, and are listed
+in `parts.json` like catalog items. Garments are cut from the body's own surface for the bones
+they cover and pushed out, so they fit every body slider setting and deform with every animation.
+`blender/crew/custom.py` exposes, each with a one-line docstring (the AI's tool docs are generated
+from them): `body()`, `armature()`, `REGIONS` (named bone sets: torso, upper_arms, forearms, hands,
+pelvis, thighs, shins, feet, neck, head), `garment(name, regions, color, ...)`,
+`hold(obj, hand)`, `attach(obj, bone)`, `material(name, color)`, and the low-poly mesh helpers used
+by catalog equipment. A failing item is reported as a build error naming its id and line.
+
 - **Rig:** MPFB2 `game_engine` skeleton for every human, the same skeleton for all.
 - Animations are **glTF animations named exactly as listed**, on that skeleton.
 - Equipment is a mesh named `Equipment__<Name>`, parented to a bone.

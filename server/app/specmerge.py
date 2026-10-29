@@ -13,6 +13,23 @@ import copy
 from typing import Any
 
 
+CREW_NULLABLE_SECTIONS = ("body", "clothes")
+
+
+def keep_crew_nulls(merged: dict, patch: dict) -> dict:
+    """In a crew spec, null in body/clothes means "empty slot" or "no tint", not "use the default".
+    deep_merge deletes the key on null and the Blender side then refills it from its defaults, so
+    {"clothes": {"suit": null}} would bring the work suit back. Put those nulls back."""
+    out = copy.deepcopy(merged)
+    for section in CREW_NULLABLE_SECTIONS:
+        fields = patch.get(section)
+        if isinstance(fields, dict):
+            for key, value in fields.items():
+                if value is None:
+                    out.setdefault(section, {})[key] = None
+    return out
+
+
 def deep_merge(base: dict, patch: dict) -> dict:
     if not isinstance(base, dict) or not isinstance(patch, dict):
         raise TypeError("deep_merge needs two dicts")

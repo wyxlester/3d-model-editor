@@ -28,7 +28,7 @@ from .config import Settings, find_claude_cli
 from .jobs import JobError, JobManager
 from .packaging import export_scene, stations_of
 from .router import LLM, claude_llm, route
-from .specmerge import deep_merge, gltf_to_blender, label_for
+from .specmerge import deep_merge, gltf_to_blender, keep_crew_nulls, label_for
 from .store import NotFound, ProjectStore, atomic_write_json, read_json
 from .uploads import UploadRejected, check_size, content_blocks, decode, resolve_type
 from .uploads import TYPES as UPLOAD_TYPES
@@ -190,6 +190,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             raise HTTPException(409, "The first build has not finished yet")
         old = store.spec(pid)
         new = deep_merge(old, patch)
+        if project.get("kind") == "crew":
+            new = keep_crew_nulls(new, patch)
         summary = summarise_change(old, new, "Edited in Inspect")
         return {"job_id": jobs.submit("build", lambda log: build_or_fail(pid, new, summary, log))}
 

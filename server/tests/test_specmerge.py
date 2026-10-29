@@ -1,4 +1,4 @@
-from app.specmerge import deep_merge, diff_keys, gltf_to_blender, label_for
+from app.specmerge import keep_crew_nulls, deep_merge, diff_keys, gltf_to_blender, label_for
 
 
 def test_dicts_merge_recursively():
@@ -53,3 +53,13 @@ def test_label():
 def test_diff_keys():
     assert diff_keys({"a": {"b": 1, "c": 2}}, {"a": {"b": 1, "c": 3}, "d": 1}) == ["a.c", "d"]
     assert diff_keys({"a": 1, "gone": 2}, {"a": 1}) == ["gone"]
+
+
+def test_crew_null_means_empty_slot_not_default():
+    old = {"clothes": {"suit": "male_worksuit01", "shoes": "shoes01"}, "body": {"hair_color": [1, 1, 0]}}
+    patch = {"clothes": {"suit": None}, "body": {"hair_color": None}}
+    new = keep_crew_nulls(deep_merge(old, patch), patch)
+    assert new["clothes"] == {"suit": None, "shoes": "shoes01"}  # absent would rebuild the default suit
+    assert new["body"] == {"hair_color": None}
+    # other sections keep deep_merge's delete-on-null (ship overrides rely on it)
+    assert keep_crew_nulls({"overrides": {}}, {"overrides": {"A__B": None}}) == {"overrides": {}}

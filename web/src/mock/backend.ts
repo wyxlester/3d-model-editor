@@ -150,6 +150,26 @@ function newVersion(p: Store['projects'][string], summary: string) {
   return n;
 }
 
+/**
+ * A crew chat sent from a "describe it" box ("Clothes: a white singlet") makes a fake custom item,
+ * so the "Made by description" list has something in it. Hair gets blonde if the words say so.
+ */
+function mockDescribed(p: Store['projects'][string], message: string) {
+  if (p.kind !== 'crew') return;
+  const m = message.match(/^(Clothes|Head|Equipment|Hair):\s*(.+)$/s);
+  if (!m) return;
+  const spec = p.spec as Record<string, unknown>;
+  if (m[1] === 'Hair') {
+    if (/blond/i.test(m[2])) p.spec = mergePatch(spec, { body: { hair_color: [0.687, 0.479, 0.188] } }) as Project['spec'];
+    return;
+  }
+  const items = (spec.custom_items as { id: string; description: string; code: string }[] | undefined) ?? [];
+  const n = items.length + 1;
+  const kind = m[1] === 'Equipment' ? 'Equipment' : 'Clothes';
+  const code = `# (mock) nothing is built in mock mode\nobj = crew.garment("${kind}__Mock_${n}", ["torso"], (1, 1, 1))`;
+  p.spec = { ...spec, custom_items: [...items, { id: `item_${++store.seq}`, description: m[2].trim(), code }] } as Project['spec'];
+}
+
 const buildSteps = ['Merging the spec', 'Running the builder in Blender', 'Applying overrides', 'Exporting glTF', 'Checking the build report'];
 
 function route(message: string): RouteResult {
@@ -232,6 +252,7 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
     return startJob(research ? ['Reading the research', 'Searching sources', 'Updating the research'] : ['Reading the request', ...buildSteps], () => {
       const reply: Message = { who: 'AI', text: research ? `(mock) Noted for the research: “${body.message}”. No real search runs in mock mode.` : `(mock) Done: “${body.message}”. Rebuilt as a new version.`, at: now() };
       p.messages = [...p.messages, reply];
+      if (!research) mockDescribed(p, String(body.message));
       if (!research) newVersion(p, String(body.message).slice(0, 60));
       return { message: reply };
     });

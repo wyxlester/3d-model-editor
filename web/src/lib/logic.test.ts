@@ -228,3 +228,48 @@ describe('chat attachments', () => {
     expect(sizeText(3.25 * MB)).toBe('3.3 MB');
   });
 });
+
+import { HAIR_SWATCHES, describeMessage, hexToLinear, itemKind, itemsFor, removeItemPatch, selectedSwatch } from './describe';
+
+describe('made by description', () => {
+  const item = (id: string, code: string, description = 'thing') => ({ id, code, description });
+
+  it('converts a screen colour to the linear colour Blender takes', () => {
+    expect(hexToLinear('#FFFFFF')).toEqual([1, 1, 1]);
+    expect(hexToLinear('#000000')).toEqual([0, 0, 0]);
+    // sRGB mid-grey is ~0.216 linear, not 0.5: sending 0.5 would look much paler
+    expect(hexToLinear('#808080')[0]).toBeCloseTo(0.216, 2);
+  });
+
+  it('lights the swatch the spec holds, default when unset, none for an AI-chosen colour', () => {
+    const blonde = hexToLinear(HAIR_SWATCHES.find((s) => s.id === 'blonde')!.hex);
+    expect(selectedSwatch(blonde, HAIR_SWATCHES)).toBe('blonde');
+    expect(selectedSwatch(null, HAIR_SWATCHES)).toBe('default');
+    expect(selectedSwatch(undefined, HAIR_SWATCHES)).toBe('default');
+    expect(selectedSwatch([0.2, 0.9, 0.2], HAIR_SWATCHES)).toBeNull();
+  });
+
+  it('prefixes the slot and refuses a blank description', () => {
+    expect(describeMessage('Clothes', '  a white   singlet ')).toBe('Clothes: a white singlet');
+    expect(describeMessage('Equipment', '   ')).toBeNull();
+  });
+
+  it('sorts items into tabs by the object names their code makes', () => {
+    expect(itemKind(item('a', 'crew.garment("Clothes__Singlet", ...)', 'white singlet'))).toBe('clothes');
+    expect(itemKind(item('b', 'crew.garment("Clothes__Cap", ...)', 'navy cap with badge'))).toBe('head');
+    expect(itemKind(item('c', 'o.name = "Equipment__Boat_hook"', 'boat hook'))).toBe('equipment');
+    expect(itemKind(item('d', 'pass', 'mystery'))).toBe('other');
+    const items = [item('a', 'Clothes__X'), item('c', 'Equipment__Y'), item('d', 'pass'), item('b', 'Clothes__Z', 'a beard')];
+    expect(itemsFor(items, 'Clothes').map((i) => i.id)).toEqual(['a', 'd']);
+    expect(itemsFor(items, 'Equipment').map((i) => i.id)).toEqual(['c']);
+    expect(itemsFor(items, 'Head').map((i) => i.id)).toEqual(['b']);
+    expect(itemsFor(undefined, 'Clothes')).toEqual([]);
+  });
+
+  it('removes one item and sends the whole remaining list', () => {
+    const items = [item('a', 'Clothes__X'), item('b', 'Equipment__Y')];
+    expect(removeItemPatch(items, 'a')).toEqual({ custom_items: [items[1]] });
+    expect(removeItemPatch(items, 'zzz').custom_items).toHaveLength(2);
+    expect(removeItemPatch(undefined, 'a')).toEqual({ custom_items: [] });
+  });
+});

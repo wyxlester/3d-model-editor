@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
-import { ChatPanel, ErrorNote, JobLines, Loading, TopBar, useCarried } from '../components/common';
+import { AiWorking, ChatPanel, ErrorNote, JobLines, Loading, TopBar, useCarried } from '../components/common';
 import { remember, useCatalog, useJobs, useProject, useProjects } from '../hooks';
 import { paths } from '../lib/routing';
 import { assetLabel, groupClothes, mergePatch, toggleIn } from '../lib/spec';
-import type { CrewSpec } from '../types';
+import { GEAR_SWATCHES, HAIR_SWATCHES, describeMessage, hexToLinear, itemsFor, removeItemPatch, selectedSwatch, type DescribeSlot, type Swatch } from '../lib/describe';
+import type { CrewSpec, CustomItem, Vec3 } from '../types';
 import { CrewViewer } from '../viewer/Viewer';
 import { useCrewChat, useSpecEditor } from './CrewShared';
 
@@ -47,10 +48,10 @@ function Tile({ label, note, on, color, onClick }: { label: string; note?: strin
   );
 }
 
-function PromptTile() {
+function PromptTile({ target = 'chat-ask' }: { target?: string }) {
   return (
     <button style={{ ...TILE, border: '1px dashed var(--border-2)', background: 'transparent', color: 'var(--text-2)' }}
-      onClick={() => document.getElementById('chat-ask')?.focus()} title="Describe the item in the chat on the left">
+      onClick={() => document.getElementById(target)?.focus()} title={target === 'chat-ask' ? 'Describe the item in the chat on the left' : 'Describe the item in words below'}>
       <span style={{ fontSize: 18 }}>+</span><span>Prompt new</span>
     </button>
   );
@@ -77,6 +78,9 @@ export function CrewWorkshop() {
   const [pickerName, setPickerName] = useState('');
   const [pickerSlot, setPickerSlot] = useState('Equipment');
   const [answeredAt, setAnsweredAt] = useState<number | null>(null);
+  const [said, setSaid] = useState<Partial<Record<DescribeSlot, string>>>({});
+  const [describing, setDescribing] = useState<{ slot: DescribeSlot; since: number } | null>(null);
+  const [blank, setBlank] = useState<DescribeSlot | null>(null);
 
   useEffect(() => { if (id) remember('crew', id); }, [id]);
 
@@ -122,6 +126,27 @@ export function CrewWorkshop() {
     edit({ body: patchBody });
   }
 
+  const customItems = spec.custom_items ?? [];
+  // A description goes through the same chat as the panel on the left, prefixed with its slot, so
+  // the AI knows where it belongs and the conversation stays one thread.
+  const describe = async (slot: DescribeSlot) => {
+    const text = describeMessage(slot, said[slot] ?? '');
+    if (!text) { setBlank(slot); return; }
+    setBlank(null);
+    setSaid((d) => ({ ...d, [slot]: '' }));
+    setDescribing({ slot, since: Date.now() });
+    try { await sendChat(text); } finally { setDescribing(null); }
+  };
+  const describeBox = (slot: DescribeSlot, placeholder: string) => (
+    <DescribeBox slot={slot} placeholder={placeholder} value={said[slot] ?? ''} busy={busy} blank={blank === slot}
+      working={describing?.slot === slot ? describing.since : null}
+      onChange={(v) => { setSaid((d) => ({ ...d, [slot]: v })); if (blank === slot) setBlank(null); }}
+      onSend={() => void describe(slot)} />
+  );
+  const madeList = (tab: 'Clothes' | 'Head' | 'Equipment') => (
+    <MadeList items={itemsFor(customItems, tab)} onRemove={(itemId) => edit(removeItemPatch(customItems, itemId))} />
+  );
+
   const msgs = p?.messages ?? [];
   const last = msgs[msgs.length - 1];
   const offerPicker = last?.who === 'AI' && msgs.length > 1 && answeredAt !== msgs.length;
@@ -161,6 +186,7 @@ export function CrewWorkshop() {
             empty="Ask for anything the pickers don't have: a life vest like the boarding team wears, a beard, a move."
             onSend={sendChat}
             projectId={id}
+            footer={describing ? <AiWorking text="AI is making what you described…" since={describing.since} /> : undefined}
             afterLastAi={offerPicker ? (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                 <button className="btn primary" style={{ height: 36, padding: '0 14px', borderRadius: 8 }} onClick={() => { setPickerName(''); setDialog(true); }}>Add as a picker</button>
@@ -222,6 +248,9 @@ export function CrewWorkshop() {
                     ))}
                   </div>
                 </div>
+                <SwatchRow label="Hair colour" swatches={HAIR_SWATCHES} value={body.hair_color}
+                  onPick={(c) => edit({ body: { hair_color: c } })} />
+                {describeBox('Hair', 'Blonde, shoulder length')}
                 <span className="faint" style={{ fontSize: 12 }}>Each change rebuilds the person in the human generator; it takes a little while.</span>
               </>
             )}
@@ -230,21 +259,31 @@ export function CrewWorkshop() {
                 <Group label="Suit">
                   <Tile label="None" on={!clothes.suit} color="#2E333B" onClick={() => edit({ clothes: { suit: null } })} />
                   {groups.suit.map((c) => <Tile key={c} label={assetLabel(c)} on={clothes.suit === c} color={swatch(c)} onClick={() => edit({ clothes: { suit: c } })} />)}
-                  <PromptTile />
+                  <PromptTile target="describe-Clothes" />
                 </Group>
                 <Group label="Footwear">
                   <Tile label="None" on={!clothes.shoes} color="#2E333B" onClick={() => edit({ clothes: { shoes: null } })} />
                   {groups.shoes.map((c) => <Tile key={c} label={assetLabel(c)} on={clothes.shoes === c} color={swatch(c)} onClick={() => edit({ clothes: { shoes: c } })} />)}
-                  <PromptTile />
+                  <PromptTile target="describe-Clothes" />
                 </Group>
+                {clothes.shoes && <SwatchRow label="Footwear colour" swatches={GEAR_SWATCHES} value={clothes.shoes_color}
+                  onPick={(c) => edit({ clothes: { shoes_color: c } })} />}
+                {describeBox('Clothes', 'A white singlet and navy shorts')}
+                {madeList('Clothes')}
               </>
             )}
             {slot === 'Head' && (
-              <Group label="Hats and helmets">
-                <Tile label="None" on={!clothes.hat} color="#2E333B" onClick={() => edit({ clothes: { hat: null } })} />
-                {groups.hat.map((c) => <Tile key={c} label={assetLabel(c)} on={clothes.hat === c} color={swatch(c)} onClick={() => edit({ clothes: { hat: c } })} />)}
-                <PromptTile />
-              </Group>
+              <>
+                <Group label="Hats and helmets">
+                  <Tile label="None" on={!clothes.hat} color="#2E333B" onClick={() => edit({ clothes: { hat: null } })} />
+                  {groups.hat.map((c) => <Tile key={c} label={assetLabel(c)} on={clothes.hat === c} color={swatch(c)} onClick={() => edit({ clothes: { hat: c } })} />)}
+                  <PromptTile target="describe-Head" />
+                </Group>
+                {clothes.hat && <SwatchRow label="Hat colour" swatches={GEAR_SWATCHES} value={clothes.hat_color}
+                  onPick={(c) => edit({ clothes: { hat_color: c } })} />}
+                {describeBox('Head', 'A short grey beard')}
+                {madeList('Head')}
+              </>
             )}
             {slot === 'Equipment' && (
               <Group label="Carried or worn">
@@ -255,9 +294,11 @@ export function CrewWorkshop() {
                 {equipment.filter((e) => !(catalog.data?.equipment ?? []).includes(e)).map((e) => (
                   <Tile key={e} label={assetLabel(e)} note="Not in catalogue" on color={swatch(e)} onClick={() => edit({ equipment: toggleIn(equipment, e) })} />
                 ))}
-                <PromptTile />
+                <PromptTile target="describe-Equipment" />
               </Group>
             )}
+            {slot === 'Equipment' && describeBox('Equipment', 'Holding a boat hook in the right hand')}
+            {slot === 'Equipment' && madeList('Equipment')}
             {slot === 'Moves' && (
               <>
                 <Group label="Animations">
@@ -335,6 +376,73 @@ function SliderRow({ id, label, text, ...input }: {
         <span>{label}</span><span style={{ color: 'var(--text)' }}>{text}</span>
       </label>
       <input id={`crew-${id}`} type="range" {...input} />
+    </div>
+  );
+}
+
+/** Colour swatches where a colour is the whole change: no AI, just a spec patch. "Default" clears it. */
+function SwatchRow({ label, swatches, value, onPick }: {
+  label: string; swatches: Swatch[]; value: Vec3 | null | undefined; onPick: (c: Vec3 | null) => void;
+}) {
+  const on = selectedSwatch(value, swatches);
+  const ring = (sel: boolean) => `3px solid ${sel ? 'var(--accent)' : 'transparent'}`;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span className="faint">{label}{on === null && <span style={{ color: 'var(--text-2)' }}> · a colour the AI chose</span>}</span>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button aria-label={`${label}: default`} aria-pressed={on === 'default'} title="Default" onClick={() => onPick(null)}
+          style={{ width: 36, height: 36, borderRadius: '50%', border: ring(on === 'default'), background: 'var(--panel-2)', boxShadow: 'inset 0 0 0 1px var(--border-2)', color: 'var(--text-2)', fontSize: 10, padding: 0 }}>Def</button>
+        {swatches.map((s) => (
+          <button key={s.id} aria-label={`${label}: ${s.label}`} aria-pressed={on === s.id} title={s.label} onClick={() => onPick(hexToLinear(s.hex))}
+            style={{ width: 36, height: 36, borderRadius: '50%', background: s.hex, border: ring(on === s.id), boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.12)', padding: 0 }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** "Or describe it": a description typed where the user is picking, sent through the crew chat. */
+function DescribeBox({ slot, placeholder, value, busy, blank, working, onChange, onSend }: {
+  slot: DescribeSlot; placeholder: string; value: string; busy: boolean; blank: boolean; working: number | null;
+  onChange: (v: string) => void; onSend: () => void;
+}) {
+  const fieldId = `describe-${slot}`;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <label htmlFor={fieldId} className="faint">Or describe it</label>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input id={fieldId} className="field dark" style={{ flex: 1, minWidth: 0 }} value={value} placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !busy) onSend(); }} />
+        <button className="btn primary lg" style={{ height: 40, flexShrink: 0 }} onClick={onSend} disabled={busy}>Make it</button>
+      </div>
+      {blank && <span className="bad" style={{ fontSize: 12 }}>Describe it in a few words first.</span>}
+      {working != null
+        ? <AiWorking text="The AI is making it. Its reply appears in the chat on the left." since={working} />
+        : busy && <span className="faint" style={{ fontSize: 12 }}>Wait for the current change to finish.</span>}
+    </div>
+  );
+}
+
+/** What the AI made from descriptions, each removable (a rebuild, like any picker change). */
+function MadeList({ items, onRemove }: { items: CustomItem[]; onRemove: (id: string) => void }) {
+  const [asking, setAsking] = useState<string | null>(null);
+  if (!items.length) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span className="faint">Made by description</span>
+      {items.map((i) => (
+        <div key={i.id} className="card" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px' }}>
+          <span style={{ flex: 1, minWidth: 0, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{i.description || i.id}</span>
+          {asking === i.id ? (
+            <>
+              <button className="btn sm" onClick={() => setAsking(null)}>Keep</button>
+              <button className="btn sm" style={{ color: 'var(--red-text)' }} onClick={() => { setAsking(null); onRemove(i.id); }}>Remove</button>
+            </>
+          ) : (
+            <button className="btn sm" aria-label={`Remove ${i.description || i.id}`} onClick={() => setAsking(i.id)}>Remove</button>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
