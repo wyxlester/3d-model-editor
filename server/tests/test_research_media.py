@@ -515,3 +515,12 @@ def test_no_photo_turn_when_there_are_enough_photos(make_client, settings, monke
     job = wait_job(c, c.post(f"/api/projects/{p['id']}/chat", json={"message": "more detail", "mode": "research"}).json()["job_id"])
     assert job["status"] == "done", job
     assert len(agent.prompts) == 1
+
+
+def test_running_out_of_steps_keeps_the_work_and_says_so():
+    # Live run, 29 Oct: "do a deep web research" hit the step limit after saving 4 photos and
+    # 4 close-ups, and the job showed as an error. Now it is a reply, not a failure.
+    from app.agent import out_of_steps_reply
+    r = out_of_steps_reply(["Searching.", "Added four photographs of Penang sampans."])
+    assert r.startswith("Added four photographs") and "ran out of steps" in r and "continue" in r
+    assert "ran out of steps" in out_of_steps_reply([])

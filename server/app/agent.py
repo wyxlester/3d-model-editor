@@ -1326,6 +1326,10 @@ class AgentRunner(Protocol):
 class ClaudeAgentRunner:
     """Real runner: the local Claude Code login through claude-agent-sdk (no API key)."""
 
+    # Research does many small steps (searches, page reads, a download and crop per photo): the
+    # 29 Oct live run of "do a deep web research" ran out at 24. Building keeps the tighter limit.
+    RESEARCH_MAX_TURNS = 60
+
     def __init__(self, model: str = "claude-opus-5-5", max_turns: int = 24, timeout_s: float = 1200):
         self.model, self.max_turns, self.timeout_s = model, max_turns, timeout_s
 
@@ -1352,7 +1356,7 @@ class ClaudeAgentRunner:
         builtins = ["WebSearch", "WebFetch"] if mode == "research" else []
         opts = ClaudeAgentOptions(
             mcp_servers={"editor": server}, tools=builtins + names, allowed_tools=builtins + names,
-            setting_sources=[], max_turns=self.max_turns, model=self.model,
+            setting_sources=[], max_turns=self.RESEARCH_MAX_TURNS if mode == "research" else self.max_turns, model=self.model,
             system_prompt=system_prompt(session.kind, mode, session.base),
             cwd=str(session.store.version_dir(session.pid, 0).parent),
             # Photos and attachments travel inside messages; the SDK's 1 MB default killed a research
@@ -1379,10 +1383,21 @@ class ClaudeAgentRunner:
                         if doing:
                             log(f"• {doing}")
             elif isinstance(m, ResultMessage):
+                if m.is_error and m.subtype == "error_max_turns":
+                    # Out of steps is not a failure: everything the tools saved stays saved.
+                    return out_of_steps_reply(texts)
                 if m.is_error:
                     raise RuntimeError(f"AI run failed ({m.subtype}): {m.result}")
                 final = m.result
         return (final or (texts[-1] if texts else "")).strip()
+
+
+def out_of_steps_reply(texts: list[str]) -> str:
+    """The reply when the AI used all its steps: what it last said, plus a plain note."""
+    last = texts[-1].strip() if texts else ""
+    note = ("I ran out of steps before finishing. Everything I saved so far is kept; ask me to "
+            "continue and I'll pick up from there.")
+    return f"{last}\n\n{note}".strip()
 
 
 class ScriptedAgent:
