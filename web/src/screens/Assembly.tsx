@@ -1,7 +1,7 @@
 // Assembly: put crew on a ship's crew points (station__* empties), choose what each one does,
 // and play the scene. Recreates Assembly.dc.html on the scene API (CONTRACT §7, §10).
 import { Fragment, Suspense, useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Html } from '@react-three/drei';
 import { api, errorText, modelUrl } from '../api';
 import { ChatPanel, ErrorNote, JobLines, Loading, TopBar } from '../components/common';
@@ -30,7 +30,8 @@ export function specOf(s: Scene, crew: SceneCrew[] = s.crew): SceneSpec {
 export function useCrewProjects() {
   return useLoad<Project[]>(async () => {
     const list = await api.projects();
-    return Promise.all(list.filter((p) => p.kind === 'crew').map((p) => api.project(p.id)));
+    // A variant awaiting approval can't go in a scene yet (the server refuses it).
+    return Promise.all(list.filter((p) => p.kind === 'crew' && !p.draft).map((p) => api.project(p.id)));
   }, []);
 }
 
@@ -54,6 +55,7 @@ function AssemblyScene({ sceneId }: { sceneId: string }) {
   const [view, setView] = useState<ViewName>('top');
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const nav = useNavigate();
 
   useEffect(() => { remember('scene', sceneId); }, [sceneId]);
 
@@ -70,6 +72,8 @@ function AssemblyScene({ sceneId }: { sceneId: string }) {
     return same ? `${base} ${same + 1}` : base;
   };
   const occupant = (station: string) => crew.findIndex((c) => c.station === station);
+  // A variant of the ship may have lost a crew point; its crew keep it until moved (export refuses it).
+  const lost = (station: string) => !!ship.data && !stations.some((p) => p.path === station);
 
   const save = async (next: SceneCrew[]) => {
     if (!s) return;
@@ -104,6 +108,22 @@ function AssemblyScene({ sceneId }: { sceneId: string }) {
     setPicked(null);
   };
 
+  /** Same ship, different crew: a copy of this scene to change. */
+  const duplicate = async () => {
+    if (!s) return;
+    setSaving(true); setErr(null);
+    try {
+      const { id: _id, ...spec } = specOf(s);
+      void _id;
+      const r = await api.createScene({ ...spec, name: `${s.name} (copy)` });
+      nav(paths.assembly(r.scene.id));
+    } catch (e) {
+      setErr(errorText(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const setAnimation = (i: number, animation: string) => void save(crew.map((c, j) => (j === i ? { ...c, animation } : c)));
   const remove = (i: number) => void save(crew.filter((_, j) => j !== i));
 
@@ -126,6 +146,8 @@ function AssemblyScene({ sceneId }: { sceneId: string }) {
         <div className="topbar-right" style={{ fontSize: 13 }}>
           {ship.data?.name ?? 'Ship'} · v{s.ship.version} · {crew.length} crew placed on {stations.length} crew points
           {saving && <span className="spinner" aria-label="Saving" />}
+          <button className="btn sm" onClick={() => void duplicate()} disabled={saving}
+            title="A copy of this scene, to try the same ship with different crew">Duplicate scene</button>
         </div>
       </TopBar>
       <div className="workspace">
@@ -140,7 +162,9 @@ function AssemblyScene({ sceneId }: { sceneId: string }) {
                   <span style={{ width: 36, height: 36, borderRadius: '50%', background: CREW_COLORS[i % CREW_COLORS.length], flexShrink: 0 }} />
                   <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                     <span style={{ fontWeight: 500 }}>{nameOf(c, i)}</span>
-                    <span className="muted" style={{ fontSize: 12 }}>At {stationLabel(c.station).toLowerCase()}</span>
+                    {lost(c.station)
+                      ? <span className="warn" style={{ fontSize: 12 }}>{stationLabel(c.station)} is gone from this ship. Click, then pick a point.</span>
+                      : <span className="muted" style={{ fontSize: 12 }}>At {stationLabel(c.station).toLowerCase()}</span>}
                   </span>
                 </button>
                 <button className="btn sm muted" aria-label={`Take ${nameOf(c, i)} off the ship`} title="Take off the ship" onClick={() => remove(i)}>×</button>

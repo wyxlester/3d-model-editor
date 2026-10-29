@@ -1,9 +1,10 @@
 // Crew workshop (canvas: Crew.dc.html). Sims-style pickers and body sliders edit the crew spec
 // (CONTRACT §6) through POST /spec; the viewer plays the chosen animation from the built GLB.
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { ChatPanel, ErrorNote, JobLines, Loading, TopBar, useCarried } from '../components/common';
+import { DerivedFromLink, useVariantDialog } from '../components/VariantDialog';
 import { remember, useCatalog, useJobs, useProject, useProjects } from '../hooks';
 import { paths } from '../lib/routing';
 import { assetLabel, groupClothes, mergePatch, toggleIn } from '../lib/spec';
@@ -66,6 +67,8 @@ export function CrewWorkshop() {
   const projects = useProjects();
   const catalog = useCatalog();
   const { jobs, run, dismiss, busy } = useJobs();
+  const [search] = useSearchParams();
+  const variant = useVariantDialog();
   const reload = project.reload;
   const { edit, optimistic } = useSpecEditor(id, run, reload);
   const sendChat = useCrewChat(id, run, reload);
@@ -79,6 +82,11 @@ export function CrewWorkshop() {
   const [answeredAt, setAnsweredAt] = useState<number | null>(null);
 
   useEffect(() => { if (id) remember('crew', id); }, [id]);
+  const showVariant = variant.show;
+  useEffect(() => {
+    // Home routed here to make a variant: open the dialog with the request as the brief.
+    if (id && search.get('variant')) showVariant(id, [...(carried ?? [])].reverse().find((m) => m.who === 'You')?.text ?? '');
+  }, [id, search, carried, showVariant]);
 
   const p = project.data;
   const spec = useMemo(() => mergePatch((p?.spec ?? {}) as Record<string, unknown>, optimistic) as unknown as Partial<CrewSpec>, [p, optimistic]);
@@ -173,6 +181,7 @@ export function CrewWorkshop() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text-2)' }}>
             <span style={{ color: 'var(--text)', fontWeight: 500 }}>{name}</span><span>·</span>
             <span>{body.gender === 'female' ? 'Female' : 'Male'}, {drafts.height_cm ?? body.height_cm} cm</span>
+            <DerivedFromLink project={p} />
             <span style={{ marginLeft: 'auto' }}>Playing: {anim ? assetLabel(anim) : 'nothing'}</span>
           </div>
           {project.error && <div style={{ padding: 12 }}><ErrorNote error={project.error} retry={reload} /></div>}
@@ -183,7 +192,8 @@ export function CrewWorkshop() {
           {jobs.length > 0 && <div style={{ padding: '8px 16px 0' }}><JobLines jobs={jobs} dismiss={dismiss} /></div>}
           <div style={{ display: 'flex', gap: 8, padding: '12px 16px', borderTop: '1px solid var(--border)', background: 'var(--panel)', flexWrap: 'wrap', marginTop: 8 }}>
             <button className="btn" style={{ height: 36, borderRadius: 8 }} disabled title="Saved outfits need a catalogue endpoint, which the API does not have yet">Save as outfit</button>
-            <button className="btn" style={{ height: 36, borderRadius: 8 }} disabled title="The API has no copy-project endpoint yet. Use + Person and the pickers instead">Duplicate person</button>
+            <button className="btn" style={{ height: 36, borderRadius: 8 }} disabled={!p?.version || !!p?.draft} onClick={() => id && variant.show(id)}
+              title="A new crew member copied from this one, changed as you describe; this one stays as it is">Make a variant</button>
             <Link to={paths.assembly()} className="btn primary" style={{ marginLeft: 'auto', height: 36, borderRadius: 8 }}>Put crew on the ship</Link>
           </div>
         </section>
@@ -309,6 +319,7 @@ export function CrewWorkshop() {
           </div>
         </div>
       )}
+      {variant.dialog}
     </>
   );
 }

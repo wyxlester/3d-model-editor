@@ -7,6 +7,7 @@ swap in fakes; the module-level `app` uses the real ones.
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 import shutil
@@ -20,15 +21,15 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from .agent import AgentRunner, AgentSession, ClaudeAgentRunner
+from .agent import AgentRunner, AgentSession, ClaudeAgentRunner, variant_prompt, variant_research_prompt
 from .builder import BlenderRunner, BuilderRunner
-from .builds import Builds, summarise_change
+from .builds import Builds, built_line, summarise_change
 from .catalog import Catalog, CatalogError
 from .config import Settings, find_claude_cli
 from .jobs import JobError, JobManager
 from .packaging import export_scene, stations_of
 from .router import LLM, claude_llm, route
-from .specmerge import deep_merge, gltf_to_blender, label_for
+from .specmerge import deep_merge, gltf_to_blender, label_for, variant_id
 from .store import NotFound, ProjectStore, atomic_write_json, read_json
 
 UnrealRunner = Callable[[Path, Callable[[str], None]], dict]
@@ -107,6 +108,23 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
                            result={"version": n, "build_report": report})
         return {"version": n, "build_report": report}
 
+    def start_project(project: dict, spec: dict) -> tuple[int, Path]:
+        """Write v1's spec now, so the screen can show it while the first build runs."""
+        n, d = store.reserve_version(project["id"])
+        atomic_write_json(d / "spec.json", spec)
+        return n, d
+
+    def first_build(project: dict, n: int, d: Path, summary: str, log) -> dict:
+        log(f"• Building version {n} in Blender: {summary}")
+        report = builds.runner.build(project["kind"], d / "spec.json", d, log)
+        atomic_write_json(d / "build_report.json", report)
+        store.record_version(project["id"], n, report, summary)
+        log(built_line(n, report))
+        if not report.get("ok"):
+            raise JobError("First build failed: " + "; ".join(report.get("errors") or ["unknown"]),
+                           result={"version": n, "build_report": report})
+        return {"version": n, "build_report": report}
+
     # ---- health and catalog -----------------------------------------------------------
     @app.get("/api/health")
     def health():
@@ -122,14 +140,16 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         msg = body.get("message")
         if not isinstance(msg, str) or not msg.strip():
             raise HTTPException(400, "message is required")
-        projects = [store.api_summary(pid) for pid in store.ids()]
-        return route(msg, projects, llm)
+        return route(msg, listed_projects(), llm)
 
     # ---- projects -----------------------------------------------------------------------
+    def listed_projects() -> list[dict]:
+        """Every project except discarded variants."""
+        return [s for s in (store.api_summary(pid) for pid in store.ids()) if not s["discarded"]]
+
     @app.get("/api/projects")
     def list_projects():
-        out = [store.api_summary(pid) for pid in store.ids()]
-        return sorted(out, key=lambda p: p.get("updated") or "", reverse=True)
+        return sorted(listed_projects(), key=lambda p: p.get("updated") or "", reverse=True)
 
     @app.post("/api/projects")
     def create_project(body: dict = Body(...)):
@@ -139,21 +159,130 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         spec = catalog.default_spec(kind, base)
         name = body.get("name") or spec.get("name") or base
         project = store.create(kind, base, name)
-        pid = project["id"]
-        n, d = store.reserve_version(pid)  # v1 holds the spec while the first build runs
-        atomic_write_json(d / "spec.json", spec)
+        n, d = start_project(project, spec)
+        job_id = jobs.submit("build", lambda log: first_build(
+            project, n, d, f"Created from the {base} catalog default", log))
+        return {"project": store.api_project(project["id"]), "job_id": job_id}
 
-        def first_build(log):
-            report = builds.runner.build(kind, d / "spec.json", d, log)
-            atomic_write_json(d / "build_report.json", report)
-            store.record_version(pid, n, report, f"Created from the {base} catalog default")
-            if not report.get("ok"):
-                raise JobError("First build failed: " + "; ".join(report.get("errors") or ["unknown"]),
-                               result={"version": n, "build_report": report})
-            return {"version": n, "build_report": report}
+    def not_a_draft(project: dict, doing: str) -> None:
+        if project.get("discarded"):
+            raise HTTPException(409, f"{project['name']} was discarded, so it can't be {doing}.")
+        if project.get("draft"):
+            raise HTTPException(409, f"{project['name']} is a variant awaiting review. Approve it before it is {doing}.")
 
-        job_id = jobs.submit("build", first_build)
-        return {"project": store.api_project(pid), "job_id": job_id}
+    def draft_running(project: dict) -> bool:
+        """The variant's own job is still going (a server restart ends it, so a lost job counts as finished)."""
+        job = jobs.get((project.get("draft") or {}).get("job_id") or "")
+        return bool(job and job["status"] in ("queued", "running"))
+
+    @app.post("/api/projects/{pid}/variants")
+    def create_variant(pid: str, body: dict = Body(...)):
+        source = need_project(pid)
+        not_a_draft(source, "copied")
+        if not source["version"]:
+            raise HTTPException(409, "The first build has not finished yet")
+        version = body.get("version", source["version"])
+        if not isinstance(version, int) or isinstance(version, bool):
+            raise HTTPException(400, "version must be a whole number")
+        built = next((v for v in source["versions"] if v["n"] == version), None)
+        if built is None:
+            raise HTTPException(404, f"{source['name']} has no version {version}")
+        if not built["ok"]:
+            raise HTTPException(400, f"Version {version} did not build. Pick a version that did.")
+        name, brief = body.get("name"), body.get("brief")
+        if name is not None and not isinstance(name, str) or brief is not None and not isinstance(brief, str):
+            raise HTTPException(400, "name and brief must be text")
+        name = (name or "").strip() or f"{source['name']} (variant)"
+        brief = (brief or "").strip() or None
+        research = bool(body.get("research"))
+        if research and (source["kind"] != "ship" or not brief):
+            raise HTTPException(400, "Research needs a ship and a description of what is different")
+        scene = None
+        if body.get("scene"):
+            if source["kind"] != "ship":
+                raise HTTPException(400, "Only a ship variant can bring a scene along")
+            scene = load_scene(body["scene"])
+            if scene["ship"]["project"] != pid:
+                raise HTTPException(400, f"That scene is not on {source['name']}")
+
+        spec = copy.deepcopy(store.spec(pid, version))
+        spec["id"], spec["name"] = variant_id(name, store.spec_ids()), name
+        draft = {"stage": "copying", "job_id": None, "research": research,
+                 "scene": scene["id"] if scene else None, "error": None}
+        project = store.create_variant(source, version, name, brief, draft)
+        vid = project["id"]
+        n, d = start_project(project, spec)
+        if brief:
+            store.add_message(vid, "You", brief)
+
+        def work(log):
+            log(f"• Copying {source['name']} v{version}")
+            try:
+                result = first_build(project, n, d, f"Copied from {source['name']} v{version}", log)
+            except JobError as e:
+                store.set_draft(vid, stage="failed", error=str(e))
+                raise
+            failure = None
+            try:
+                if research:
+                    store.set_draft(vid, stage="researching")
+                    log("• Researching the changes from public sources")
+                    _, reply = run_agent(vid, variant_research_prompt(source, brief, project["research"]),
+                                         "research", log)
+                    store.add_message(vid, "AI", reply)
+                if brief:
+                    store.set_draft(vid, stage="changing")
+                    log("• The AI is making the changes")
+                    _, reply = run_agent(vid, variant_prompt(source, version, brief), "build", log)
+                    store.add_message(vid, "AI", reply)
+                    result["reply"] = reply
+            except Exception as e:
+                store.add_message(vid, "AI", f"Sorry, I hit a problem and stopped: {e}")
+                failure = e
+            result["version"] = store.load(vid)["version"]
+            result["build_report"] = store.report(vid, result["version"]) or {}
+            if failure:
+                store.set_draft(vid, stage="ready", error=f"The AI step failed ({failure}). What you see is the "
+                                                           "last version that built.")
+                log("• The AI step failed. You can still review what was built.")
+                raise JobError(f"AI run failed: {failure}", result=result)
+            store.set_draft(vid, stage="ready")
+            log("• Ready for your review")
+            return result
+
+        store.set_draft(vid, job_id=jobs.submit("variant", work))
+        return {"project": store.api_project(vid), "job_id": store.load(vid)["draft"]["job_id"]}
+
+    @app.post("/api/projects/{pid}/approve")
+    def approve_variant(pid: str):
+        project = need_project(pid)
+        draft = project.get("draft")
+        if not draft or project.get("discarded"):
+            raise HTTPException(409, f"{project['name']} is not awaiting review")
+        if draft_running(project):
+            raise HTTPException(409, "The variant is still being made. Approve it when it is ready.")
+        if not project["version"] or not (store.report(pid, project["version"]) or {}).get("ok"):
+            raise HTTPException(409, "Nothing built to approve. Discard this variant and try again.")
+        with store.edit(pid) as p:
+            p["draft"] = None
+        scene = None
+        if draft.get("scene"):
+            try:
+                scene = copy_scene_to(load_scene(draft["scene"]), pid, lambda line: None)
+            except NotFound:  # the original scene was deleted meanwhile
+                scene = None
+        return {"project": store.api_project(pid), "scene": scene}
+
+    @app.post("/api/projects/{pid}/discard")
+    def discard_variant(pid: str):
+        project = need_project(pid)
+        if not project.get("draft") or project.get("discarded"):
+            raise HTTPException(409, "Only a variant awaiting review can be discarded")
+        if draft_running(project):
+            raise HTTPException(409, "The variant is still being made. Discard it when it is ready.")
+        with store.edit(pid) as p:
+            p["discarded"] = True
+        return {"project": store.api_project(pid)}
 
     @app.get("/api/projects/{pid}")
     def get_project(pid: str):
@@ -340,6 +469,11 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
                 raise HTTPException(400, f"crew[{i}].project must be an existing crew project")
             if not isinstance(c.get("station"), str):
                 raise HTTPException(400, f"crew[{i}].station is required")
+        for ref in [ship, *crew]:
+            p = store.load(ref["project"])
+            if p.get("draft") or p.get("discarded"):
+                raise HTTPException(400, f"{p['name']} is a variant that has not been approved. "
+                                         "Approve it before putting it in a scene.")
         return {"schema": "me3d.scene_spec/1", "name": body.get("name") or "Untitled scene",
                 "ship": {"project": ship["project"], "version": int(ship.get("version") or
                                                                     store.load(ship["project"])["version"])},
@@ -347,6 +481,21 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
                           "version": int(c.get("version") or store.load(c["project"])["version"]),
                           "station": c["station"], "animation": c.get("animation") or "idle"}
                          for c in crew]}
+
+    def copy_scene_to(scene: dict, pid: str, log) -> dict:
+        """A copy of `scene` on project pid's current version, with the same crew. Crew whose station
+        that version lacks keep it and are reported, so the user moves them rather than losing them."""
+        project = store.load(pid)
+        names = {s["name"] for s in stations_of(store.parts(pid, project["version"]))}
+        missing = sorted({c["station"] for c in scene["crew"]} - names)
+        new = {"schema": "me3d.scene_spec/1", "id": "scene_" + uuid.uuid4().hex[:8],
+               "name": f"{project['name']} with crew",
+               "ship": {"project": pid, "version": project["version"]},
+               "crew": copy.deepcopy(scene["crew"])}
+        atomic_write_json(scene_path(new["id"]), new)
+        log(f"Copied the scene {scene['name']!r} onto the variant."
+            + (f" These crew points are gone: {', '.join(missing)}. Move the crew on them." if missing else ""))
+        return {"id": new["id"], "missing_stations": missing}
 
     def with_stations(scene: dict) -> dict:
         ship = scene["ship"]

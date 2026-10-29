@@ -7,6 +7,7 @@ import { CrewWorkshop } from './screens/CrewWorkshop';
 import { Moves } from './screens/Moves';
 import { Assembly } from './screens/Assembly';
 import { Review } from './screens/Review';
+import { VariantReview } from './screens/VariantReview';
 
 export function App() {
   return (
@@ -24,6 +25,7 @@ export function App() {
           <Route path="/assembly/:sceneId" element={<Assembly />} />
           <Route path="/review" element={<Review />} />
           <Route path="/review/:sceneId" element={<Review />} />
+          <Route path="/variant/:id" element={<VariantReview />} />
           <Route path="*" element={<Home />} />
         </Routes>
       </div>

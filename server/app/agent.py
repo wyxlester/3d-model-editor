@@ -19,6 +19,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Callable, Protocol
+from urllib.parse import urlparse
 
 from .builds import Builds, summarise_change
 from .catalog import Catalog, CatalogError
@@ -480,6 +481,64 @@ RESEARCH_PROMPT = """You research one real vessel so a 3D model of it can be bui
 - Save with save_research (it validates; fix and resave on errors). Then reply in two or three plain sentences: the verdict and the biggest open question."""
 
 
+def _lower_first(s: str) -> str:
+    """"Small searchlight" -> "small searchlight", but "PC 303 mast" stays as it is."""
+    return s[:1].lower() + s[1:] if s[:2].istitle() else s
+
+
+def _words(keys) -> str:
+    return ", ".join(str(k).replace("_", " ") for k in keys)
+
+
+def describe_tool(name: str, args: dict | None) -> str | None:
+    """One plain line for the progress feed: what the AI is doing with this tool call. None when
+    something else already logs it (a rebuild logs its own build line)."""
+    a = args if isinstance(args, dict) else {}
+    patch = a.get("patch") if isinstance(a.get("patch"), dict) else {}
+    part = label_for(str(a.get("part", "")))
+    if name == "set_part_override":
+        override = a.get("override")
+        if override is None:
+            return f"Resetting {part}"
+        return f"Hiding {part}" if isinstance(override, dict) and override.get("hidden") else f"Adjusting {part}"
+    simple = {
+        "get_project": "Looking at the current model",
+        "rebuild": None,
+        "reply_to_pin": "Answering the comment",
+        "save_research": "Saving the research",
+        "set_params": f"Changing {_words(patch)}",
+        "set_joint_limits": f"Setting how far {part} can move",
+        "add_custom_op": f"Adding {_lower_first(str(a.get('description') or 'new geometry'))}",
+        "remove_custom_op": "Removing an added piece",
+        "set_body": f"Changing the body: {_words(patch)}",
+        "set_clothes": f"Changing clothes: {_words(patch)}",
+        "set_equipment": f"Setting equipment: {_words(a.get('equipment') or ['none'])}",
+        "set_animations": f"Setting moves: {_words(a.get('animations') or ['none'])}",
+        "WebSearch": f"Searching the web: {a.get('query', '')}",
+        "WebFetch": f"Reading {urlparse(str(a.get('url', ''))).netloc or 'a web page'}",
+    }
+    return simple[name] if name in simple else f"Using {name}"
+
+
+def variant_prompt(source: dict, version: int, brief: str) -> str:
+    """First build turn of a variant: the project is an exact copy of `source` v`version`."""
+    return (f"This project is a new variant of \"{source['name']}\", copied exactly from its v{version}. "
+            "Change the copy into the variant described below. Keep everything the description does not "
+            "mention. If part of it cannot be done with your tools, do the rest and say plainly what you "
+            f"could not do.\n\nWhat is different:\n{brief}")
+
+
+def variant_research_prompt(source: dict, brief: str, research: dict | None) -> str:
+    """Research turn of a variant: extend the original's research to cover what the brief changes."""
+    if research:
+        start = ("The research for the original, to build on: keep what still applies, change what the "
+                 "variant changes, and add sources for the new equipment.\n" + json.dumps(research, indent=1))
+    else:
+        start = "The original has no research yet, so research the vessel and the changes."
+    return (f"This vessel is a variant of \"{source['name']}\". What is different:\n{brief}\n\n{start}\n\n"
+            "Save the research for the variant with save_research.")
+
+
 def system_prompt(kind: str, mode: str) -> str:
     if mode == "research":
         return RESEARCH_PROMPT
@@ -531,8 +590,14 @@ class ClaudeAgentRunner:
                 for b in m.content:
                     if isinstance(b, TextBlock) and b.text.strip():
                         texts.append(b.text.strip())
+                        said = " ".join(b.text.split())
+                        log(f"• AI: {said[:240]}{'…' if len(said) > 240 else ''}")
                     elif isinstance(b, ToolUseBlock):
-                        log(f"AI → {b.name.removeprefix('mcp__editor__')}")
+                        name = b.name.removeprefix('mcp__editor__')
+                        log(f"AI → {name}")
+                        doing = describe_tool(name, b.input)
+                        if doing:
+                            log(f"• {doing}")
             elif isinstance(m, ResultMessage):
                 if m.is_error:
                     raise RuntimeError(f"AI run failed ({m.subtype}): {m.result}")
@@ -547,10 +612,12 @@ class ScriptedAgent:
         self.steps = steps or []
         self.reply = reply
         self.prompts: list[str] = []
+        self.modes: list[str] = []
         self.results: list[tuple[str, str, bool]] = []
 
     def run(self, session: AgentSession, prompt: str, mode: str, log: Log) -> str:
         self.prompts.append(prompt)
+        self.modes.append(mode)
         for name, args in self.steps:
             args = {k: (v.format(pin_id=session.pin_id) if isinstance(v, str) else v) for k, v in args.items()}
             text, err = session.call(name, args)

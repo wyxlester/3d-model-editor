@@ -152,6 +152,7 @@ const buildSteps = ['Merging the spec', 'Running the builder in Blender', 'Apply
 function route(message: string): RouteResult {
   const t = message.toLowerCase();
   const R: [RegExp, RouteResult['destination'], string, string | null][] = [
+    [/variant|version of .*(with|but)|copy of|same .* but/, /crew|coxswain|person|helmet/.test(t) ? 'crew_variant' : 'ship_variant', 'That’s a new one made from an existing one, keeping the original, so Make a variant.', /crew|coxswain|person|helmet/.test(t) ? 'c_cox' : 'p_pc303'],
     [/customer|meeting|present|review|export|unreal|\bmak\b|compare|version/, 'review', 'That’s about showing or shipping a version, so Review and export is the place.', null],
     [/\bput\b|place|on board|aboard|alongside|scenario|assembl|crew on/, 'assembly', 'That puts people on a ship and has them do something, so Assembly.', null],
     [/animat|\bmove\b|brace|walk|\brun\b|squat|pose|gesture|signal/, 'animation', 'That’s a movement, so the animation editor.', 'c_cox'],
@@ -188,7 +189,7 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
   if (method === 'GET' && path === '/api/catalog') return catalog;
   if (method === 'POST' && path === '/api/route') return route(String(body?.message ?? ''));
   if (method === 'GET' && path === '/api/projects') {
-    return Object.values(store.projects).map((p): ProjectSummary => ({ id: p.id, kind: p.kind, name: p.name, base: p.base, version: p.version, ok: p.build_report.ok, updated: p.versions[p.versions.length - 1]?.at, model_url: p.model_url, open_pins: p.pins.filter((x) => x.status !== 'resolved').length }));
+    return Object.values(store.projects).filter((p) => !p.discarded).map((p): ProjectSummary => ({ id: p.id, kind: p.kind, name: p.name, base: p.base, version: p.version, ok: p.build_report.ok, updated: p.versions[p.versions.length - 1]?.at, model_url: p.model_url, open_pins: p.pins.filter((x) => x.status !== 'resolved').length, derived_from: p.derived_from ?? null, draft: p.draft ?? null }));
   }
   if (method === 'POST' && path === '/api/projects') {
     const id = `${body.kind === 'ship' ? 'p' : 'c'}_${++store.seq}`;
@@ -252,6 +253,64 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
     p.pins = p.pins.map((x) => (x.id === r![2] ? { ...x, status: body.status } : x));
     save();
     return { pin: p.pins.find((x) => x.id === r![2]) };
+  }
+  if ((r = m(/^\/api\/projects\/([^/]+)\/variants$/)) && method === 'POST') {
+    const src = proj(r[1]);
+    const version = body.version ?? src.version;
+    const name = String(body.name || `${src.name} (variant)`);
+    const brief = typeof body.brief === 'string' && body.brief.trim() ? body.brief.trim() : null;
+    const id = `${src.kind === 'ship' ? 'p' : 'c'}_${++store.seq}`;
+    const p: Store['projects'][string] = JSON.parse(JSON.stringify(src));
+    Object.assign(p, {
+      id, name, version: 0, versions: [], pins: [], model_url: null, glbs: {}, brief,
+      derived_from: { project: src.id, version, name: src.name },
+      draft: { stage: 'copying', job_id: null, research: !!body.research, scene: body.scene ?? null, error: null },
+      discarded: false,
+      messages: brief ? [{ who: 'You', text: brief, at: now() }] : [],
+    });
+    p.spec = { ...p.spec, id: name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'variant', name };
+    store.projects[id] = p;
+    const steps = [
+      `• Copying ${src.name} v${version}`, `• Building version 1 in Blender: Copied from ${src.name} v${version}`, ...buildSteps, '• Version 1 built',
+      ...(body.research ? ['• Researching the changes from public sources', '• Searching the web: (mock) no real search'] : []),
+      ...(brief ? ['• The AI is making the changes', '• Looking at the current model', `• AI: (mock) I'll make this change: ${brief}`, '• Building version 2 in Blender: AI edit', ...buildSteps, '• Version 2 built'] : []),
+      '• Ready for your review',
+    ];
+    const job = startJob(steps, () => {
+      newVersion(p, `Copied from ${src.name} v${version}`);
+      let reply: string | undefined;
+      if (brief) {
+        reply = `(mock) Made the variant: “${brief}”. Rebuilt as v2.`;
+        p.messages = [...p.messages, { who: 'AI', text: reply, at: now() }];
+        newVersion(p, brief.slice(0, 60));
+      }
+      p.draft = { ...p.draft!, stage: 'ready' };
+      return { version: p.version, build_report: p.build_report, reply };
+    });
+    p.draft = { ...p.draft!, job_id: job.job_id };
+    save();
+    return { project: strip(p), ...job };
+  }
+  if ((r = m(/^\/api\/projects\/([^/]+)\/approve$/)) && method === 'POST') {
+    const p = proj(r[1]);
+    if (!p.draft || p.discarded) throw new HttpErr(409, `${p.name} is not awaiting review`);
+    const sceneId = p.draft.scene;
+    p.draft = null;
+    let scene = null;
+    if (sceneId && store.scenes[sceneId]) {
+      const sid = `scene_${++store.seq}`;
+      store.scenes[sid] = { ...store.scenes[sceneId], id: sid, name: `${p.name} with crew`, ship: { project: p.id, version: p.version } };
+      scene = { id: sid, missing_stations: [] };
+    }
+    save();
+    return { project: strip(p), scene };
+  }
+  if ((r = m(/^\/api\/projects\/([^/]+)\/discard$/)) && method === 'POST') {
+    const p = proj(r[1]);
+    if (!p.draft || p.discarded) throw new HttpErr(409, 'Only a variant awaiting review can be discarded');
+    p.discarded = true;
+    save();
+    return { project: strip(p) };
   }
   if ((r = m(/^\/api\/projects\/([^/]+)\/undo$/)) && method === 'POST') {
     const p = proj(r[1]);

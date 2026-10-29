@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, errorText, modelUrl } from '../api';
 import { ChatPanel, ErrorNote, JobLines, PRIORITY, TopBar, useCarried } from '../components/common';
+import { DerivedFromLink, useVariantDialog } from '../components/VariantDialog';
 import { remember, useJobs, useLoad, useProject } from '../hooks';
 import { blenderToGltf, type ViewName } from '../lib/frames';
 import { hiddenParts, isStationName, jointsOf, levelsFor, partLabel } from '../lib/parts';
@@ -26,6 +27,7 @@ export function ShipBuild() {
   const { jobs, run, dismiss, busy } = useJobs();
   const carried = useCarried();
   const stageRef = useRef<HTMLDivElement>(null);
+  const variant = useVariantDialog();
 
   const [tab, setTab] = useState<'chat' | 'comments'>(carried?.length ? 'chat' : 'comments');
   const [pinMode, setPinMode] = useState(false);
@@ -44,6 +46,11 @@ export function ShipBuild() {
 
   useEffect(() => { if (id) remember('ship', id); }, [id]);
   useEffect(() => { if (search.get('part')) { setSelPart(search.get('part')); setInspect(true); } }, [search]);
+  const showVariant = variant.show;
+  useEffect(() => {
+    // Home routed here to make a variant: open the dialog with the request as the brief.
+    if (id && search.get('variant')) showVariant(id, [...(carried ?? [])].reverse().find((m) => m.who === 'You')?.text ?? '');
+  }, [id, search, carried, showVariant]);
   useEffect(() => {
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { setPinMode(false); setDraft(null); setSelPin(null); } };
     window.addEventListener('keydown', esc);
@@ -123,6 +130,7 @@ export function ShipBuild() {
         {id && <ModeSwitch id={id} mode="build" />}
         <div className="topbar-right">
           <span>{project ? `${project.name} · ${current ? `v${current}` : 'not built yet'} · ${busy ? 'working…' : 'saved'}` : ''}</span>
+          <DerivedFromLink project={project} />
           {project && project.versions.length > 0 && (
             <select className="field" aria-label="Version shown" value={shownVersion} onChange={(e) => { const n = Number(e.target.value); setViewing(n === current ? null : n); setDraft(null); }}>
               {[...project.versions].reverse().map((v) => (
@@ -130,6 +138,8 @@ export function ShipBuild() {
               ))}
             </select>
           )}
+          <button className="btn" onClick={() => id && variant.show(id)} disabled={!current || !!project?.draft}
+            title="A new ship copied from this one, changed as you describe; this one stays as it is">Make a variant</button>
           <button className="btn" onClick={() => void undo()} disabled={!project || project.can_undo === false || busy || !!viewing}
             title={project?.can_undo === false ? 'Nothing to undo' : 'Go back to the previous version'}>Undo last change</button>
         </div>
@@ -220,6 +230,7 @@ export function ShipBuild() {
             onPatch={(label, patch) => void run(label, () => api.patchSpec(project.id, patch), afterJob, afterJob)} />
         )}
       </div>
+      {variant.dialog}
     </>
   );
 }

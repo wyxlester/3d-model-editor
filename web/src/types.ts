@@ -119,8 +119,54 @@ export interface Project {
   pins: Pin[];
   messages: Message[];
   research: Research | null;
+  /** Set on a variant: the project and version it was copied from. */
+  derived_from?: DerivedFrom | null;
+  /** Set on a variant: what was asked to differ. */
+  brief?: string | null;
+  /** Set on a variant until it is approved. */
+  draft?: Draft | null;
+  discarded?: boolean;
   /** Server extra: whether POST /undo has something to undo. */
   can_undo?: boolean;
+}
+
+export type DraftStage = 'copying' | 'researching' | 'changing' | 'ready' | 'failed';
+
+/** A variant's review state until it is approved (CONTRACT §10). */
+export interface Draft {
+  stage: DraftStage | string;
+  job_id: string | null;
+  research: boolean;
+  scene: string | null;
+  error: string | null;
+}
+
+export interface DerivedFrom {
+  project: string;
+  version: number;
+  name: string;
+}
+
+/** POST /api/projects/{id}/variants body. */
+export interface VariantRequest {
+  name?: string;
+  version?: number;
+  brief?: string;
+  research?: boolean;
+  scene?: string;
+}
+
+/** The variant job's result. */
+export interface VariantResult {
+  version: number;
+  build_report: BuildReport;
+  reply?: string;
+}
+
+/** POST /api/projects/{id}/approve. */
+export interface ApproveResult {
+  project: Project;
+  scene: { id: string; missing_stations: string[] } | null;
 }
 
 /** As the server sends it (not in §10's table). */
@@ -134,6 +180,9 @@ export interface ProjectSummary {
   model_url?: string | null;
   open_pins?: number;
   ok?: boolean;
+  derived_from?: DerivedFrom | null;
+  draft?: Draft | null;
+  discarded?: boolean;
 }
 
 export interface Catalog {
@@ -147,7 +196,9 @@ export interface Catalog {
 export type Destination =
   | 'ship_research'
   | 'ship_build'
+  | 'ship_variant'
   | 'crew'
+  | 'crew_variant'
   | 'animation'
   | 'assembly'
   | 'review'

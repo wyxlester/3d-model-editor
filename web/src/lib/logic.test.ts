@@ -127,6 +127,12 @@ describe('routing', () => {
     expect(targetFor('animation', 'c1')?.path).toBe('/crew/c1/moves');
     expect(targetFor('clarify', null)).toBeNull();
   });
+  it('opens the variant dialog on the source project, or the picker without one', () => {
+    expect(targetFor('ship_variant', 'p1')?.path).toBe('/ship/p1/build?variant=1');
+    expect(targetFor('ship_variant', null)?.path).toBe('/ship');
+    expect(targetFor('crew_variant', 'c1')?.path).toBe('/crew/c1?variant=1');
+    expect(targetFor('crew_variant', null)?.path).toBe('/crew');
+  });
 });
 
 describe('job polling state machine', () => {
@@ -198,5 +204,36 @@ describe('comment summaries', () => {
     expect(shortTime('nonsense')).toBe('');
     expect(shortTime(null)).toBe('');
     expect(shortTime('2026-10-29T00:39:39Z')).toMatch(/^\d{1,2} Oct, \d{2}:\d{2}$/);
+  });
+});
+
+import { activityLines, variantSteps } from './variant';
+import { projectPath } from './routing';
+
+describe('variant review', () => {
+  const draft = (stage: string, error: string | null = null) => ({ stage, job_id: 'j', research: false, scene: null, error }) as const;
+  const states = (s: { key: string; state: string }[]) => s.map((x) => `${x.key}:${x.state}`).join(' ');
+
+  it('lists only the steps that will happen', () => {
+    expect(variantSteps(draft('copying'), { brief: false }).map((s) => s.key)).toEqual(['copy', 'review']);
+    expect(variantSteps({ ...draft('copying'), research: true }, { brief: true }).map((s) => s.key)).toEqual(['copy', 'research', 'change', 'review']);
+  });
+  it('follows the stage', () => {
+    expect(states(variantSteps(draft('copying'), { brief: true }))).toBe('copy:active change:todo review:todo');
+    expect(states(variantSteps(draft('changing'), { brief: true }))).toBe('copy:done change:active review:todo');
+    expect(states(variantSteps(draft('ready'), { brief: true }))).toBe('copy:done change:done review:active');
+    expect(states(variantSteps(null, { brief: true }))).toBe('copy:done change:done review:done');
+  });
+  it('shows where it failed', () => {
+    expect(states(variantSteps(draft('failed', 'no hull'), { brief: true }))).toBe('copy:failed change:todo review:todo');
+    expect(states(variantSteps(draft('ready', 'AI down'), { brief: true }))).toBe('copy:done change:failed review:active');
+  });
+  it('keeps only the lines written for people', () => {
+    expect(activityLines(['$ blender -b', '• Copying PC 303 v4', 'Read prefs', '• AI: Done.'])).toEqual(['Copying PC 303 v4', 'AI: Done.']);
+  });
+  it('opens a draft on its review screen', () => {
+    expect(projectPath({ kind: 'ship', id: 'p1', draft: { stage: 'ready' } })).toBe('/variant/p1');
+    expect(projectPath({ kind: 'ship', id: 'p1', draft: null })).toBe('/ship/p1/build');
+    expect(projectPath({ kind: 'crew', id: 'c1' })).toBe('/crew/c1');
   });
 });

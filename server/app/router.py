@@ -8,13 +8,16 @@ import json
 import re
 from typing import Callable
 
-DESTINATIONS = ["ship_research", "ship_build", "crew", "animation", "assembly", "review", "clarify"]
+DESTINATIONS = ["ship_research", "ship_build", "ship_variant", "crew", "crew_variant", "animation",
+                "assembly", "review", "clarify"]
 
 ROUTE_SYSTEM = """You route a message in a 3D model editor for maritime simulators to one screen.
 Destinations:
 - ship_research: a new vessel or class to look up before building ("make me a Fearless-class patrol boat").
 - ship_build: change a part or dimension of an existing ship model.
+- ship_variant: a new ship made from an existing one, keeping the original ("PC 303 but with a 25 mm gun", "a version of the tanker with a second radar").
 - crew: a person, their body, clothes or equipment.
+- crew_variant: a new person made from an existing crew member, keeping the original ("the coxswain again, but in a helmet").
 - animation: how a person moves (walk, brace, salute).
 - assembly: putting crew on a ship, stations, crew acting on a ship.
 - review: a customer meeting, presenting, exporting, Unreal.

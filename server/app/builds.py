@@ -16,15 +16,23 @@ class Builds:
         n, out_dir = self.store.reserve_version(pid)
         spec_path = out_dir / "spec.json"
         atomic_write_json(spec_path, spec)
-        log(f"Building version {n}: {summary}")
+        log(f"• Building version {n} in Blender: {summary}")
         report = self.runner.build(kind, spec_path, out_dir, log)
         atomic_write_json(out_dir / "build_report.json", report)  # normalised copy
         self.store.record_version(pid, n, report, summary)
+        log(built_line(n, report))
         for e in report.get("errors", []):
             log(f"error: {e}")
         for w in report.get("warnings", []):
             log(f"warning: {w}")
         return n, report
+
+
+def built_line(n: int, report: dict) -> str:
+    """The progress-feed line for a finished build (contract §10: lines starting "• ")."""
+    if report.get("ok"):
+        return f"• Version {n} built"
+    return f"• Version {n} failed to build: {'; '.join(report.get('errors') or ['unknown error'])}"
 
 
 def summarise_change(old: dict, new: dict, fallback: str) -> str:
