@@ -11,7 +11,7 @@ import { isStationName, partLabel } from '../lib/parts';
 import { paths } from '../lib/routing';
 import type { Attachment, Project, Scene, SceneCrew, SceneSpec } from '../types';
 import { AttachTo, CrewModel, ShipViewer, ViewButtons, stationObjects } from '../viewer/Viewer';
-import { ScenePicker } from './AssemblyScenePicker';
+import { ScenePicker, SceneSwitch } from './AssemblyScenePicker';
 
 const CREW_COLORS = ['#5B9BFF', '#B58CFF', '#4CC38A', '#F2914F', '#E6B04A', '#7FDDB0'];
 
@@ -144,6 +144,7 @@ function AssemblyScene({ sceneId }: { sceneId: string }) {
     <>
       <TopBar title={s.name}>
         <div className="topbar-right" style={{ fontSize: 13 }}>
+          <SceneSwitch current={s.id} to={paths.assembly} />
           {ship.data?.name ?? 'Ship'} · v{s.ship.version} · {crew.length} crew placed on {stations.length} crew points
           {saving && <span className="spinner" aria-label="Saving" />}
           <button className="btn sm" onClick={() => void duplicate()} disabled={saving}
