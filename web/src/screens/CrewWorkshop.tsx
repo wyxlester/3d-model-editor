@@ -13,7 +13,7 @@ import { paths } from '../lib/routing';
 import { assetLabel, groupClothes, mergePatch } from '../lib/spec';
 import { GEAR_SWATCHES, HAIR_SWATCHES, hexToLinear, madeSomethingNew, removeItemPatch, selectedSwatch, type Swatch } from '../lib/describe';
 import {
-  ACCESSORIES, HAIR_STYLES, accessoryName, presetPatch, HATS, MODULES, PANTS_STYLES, PANTS_SWATCHES, PLACES, SHIRT_STYLES, SHIRT_SWATCHES, SHOE_SWATCHES, SKIN_TONES,
+  ACCESSORIES, HAIR_STYLES, accessoryName, presetPatch, HATS, MODULES, PANTS_STYLES, PANTS_SWATCHES, placesFor, SHIRT_STYLES, SHIRT_SWATCHES, SHOE_SWATCHES, SKIN_TONES,
   changedModules, equipmentName, garmentColorPatch, garmentStylePatch, itemsInModule, moduleMessage, moduleSummary, outfitPatch,
   outfitWouldRemove, placePatch, placementRows, shoeLabel, suitLabel, suitsFor, toggleAccessory, toggleEquipment, type ModuleDef,
 } from '../lib/modules';
@@ -275,7 +275,7 @@ export function CrewWorkshop() {
               <div key={r.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <span style={{ color: 'var(--text-soft)', overflowWrap: 'anywhere' }}>{r.label}{r.place === 'fixed' && <span className="faint"> · fixed</span>}</span>
                 {r.place !== 'fixed' && (
-                  <div className="picks">{PLACES.map((pl) => chip(pl.label, r.place === pl.id, () => edit(placePatch(spec, r, pl.id)), pl.id))}</div>
+                  <div className="picks">{placesFor(r).map((pl) => chip(pl.label, r.place === pl.id, () => edit(placePatch(spec, r, pl.id)), pl.id))}</div>
                 )}
               </div>
             ))}

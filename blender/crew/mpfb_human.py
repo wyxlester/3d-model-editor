@@ -187,9 +187,73 @@ def build_human(spec, warnings, log):
         for path in ("Head__Hair", "Head__Eyebrows"):
             if path in objects:
                 recolour_hair(objects[path], b["hair_color"], log)
+    if "Head__Eyes" in objects:
+        drop_clear_shells(objects["Head__Eyes"], log)
     for path, o in objects.items():
         set_alpha_mode(o, "MASK" if path in ALPHA_CLIPPED else "OPAQUE")
     return armature, objects, barefoot_h, height_macro
+
+
+def drop_clear_shells(obj, log=print):
+    """Delete the mesh islands whose texture is fully transparent.
+
+    MakeHuman's high-poly eyes are two spheres per eye: the eyeball (sclera, iris, pupil) and a
+    slightly larger cornea shell, UV-mapped onto a corner of the eye texture whose alpha is 0 and
+    whose colour is pale blue-white (0.71, 0.77, 1.0). set_alpha_mode makes the eyes OPAQUE, which
+    drops that alpha, so the shell was drawn solid over the iris: white, glowing eyes (Lester, 29
+    Oct screenshot). The shell is meant to be invisible, so it goes; that also saves about 1000
+    triangles and keeps the eyes an opaque material for Unreal."""
+    import bmesh
+    import numpy as np
+    img = None
+    for slot in obj.material_slots:
+        mat = slot.material
+        if mat is None or not mat.use_nodes:
+            continue
+        bsdf = next((n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if bsdf is not None and bsdf.inputs["Base Color"].is_linked:
+            src = bsdf.inputs["Base Color"].links[0].from_node
+            if src.type == "TEX_IMAGE" and src.image is not None:
+                img = src.image
+    if img is None or not img.size[0]:
+        return 0
+    w, h = img.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    img.pixels.foreach_get(px)
+    alpha = px.reshape(h, w, 4)[:, :, 3]
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    uv = bm.loops.layers.uv.active
+    if uv is None:
+        bm.free()
+        return 0
+    seen, doomed = set(), []
+    for f in bm.faces:
+        if f.index in seen:
+            continue
+        stack, isl = [f], []
+        seen.add(f.index)
+        while stack:
+            cur = stack.pop()
+            isl.append(cur)
+            for e in cur.edges:
+                for g in e.link_faces:
+                    if g.index not in seen:
+                        seen.add(g.index)
+                        stack.append(g)
+        samples = [alpha[min(h - 1, max(0, int((l[uv].uv.y % 1.0) * h))),
+                         min(w - 1, max(0, int((l[uv].uv.x % 1.0) * w)))]
+                   for g in isl for l in g.loops]
+        if float(np.mean(samples)) < 0.5:
+            doomed += isl
+    if doomed:
+        bmesh.ops.delete(bm, geom=doomed, context="FACES")
+        bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
+        bm.to_mesh(obj.data)
+        obj.data.update()
+        log("%s: removed %d faces of transparent shell (cornea) that would draw opaque" % (obj.name, len(doomed)))
+    bm.free()
+    return len(doomed)
 
 
 # Card-like meshes whose texture alpha cuts out strands; everything else is solid.

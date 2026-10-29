@@ -33,7 +33,14 @@ KEY_OWNER: dict[tuple[str, str], str] = {
 # Whole top-level lists owned by one module. `equipment` and `custom_items` are split per entry.
 LIST_OWNER = {"accessories": "accessories"}
 
-PLACES = ("right_hand", "left_hand", "chest", "back", "hip", "head")
+PLACES = ("right_hand", "left_hand", "chest", "back", "hip", "head", "both_hands")
+# both_hands is a two-handed ready carry (long items: a rifle, a boat hook); it needs both hands,
+# so nothing else may be held in one (same rule as blender/crew/spec.py hand_conflicts).
+HAND_PLACES = ("right_hand", "left_hand", "both_hands")
+# Where an equipment entry without a place is drawn (blender/crew/spec.py DEFAULT_PLACE and
+# CUSTOM_DEFAULT_PLACE): binoculars on the chest, the radio on the hip, described items in the right hand.
+DEFAULT_PLACES = {"binoculars": "chest", "radio": "hip"}
+CUSTOM_DEFAULT_PLACE = "right_hand"
 # Worn catalog equipment with one fixed spot: no `place` (contract §6 Placement).
 FIXED_PLACE_EQUIPMENT = ("life_vest", "helmet")
 SHIRT_STYLES = ("tshirt", "singlet", "long_sleeve", "polo")
@@ -362,3 +369,29 @@ def ensure_clothed(spec: dict) -> list[str]:
             clothes[m] = copy.deepcopy(FILL_IN[m])
             notes.append(FILL_IN_NOTE[m])
     return notes
+
+
+def hand_conflicts(spec: dict) -> list[str]:
+    """Why the spec's hands cannot do what it asks: two items in both hands, or an item in both
+    hands and another held in one. Empty when there is no both_hands item or nothing clashes."""
+    held: list[tuple[str, str]] = []
+    for e in spec.get("equipment") or []:
+        name = e if isinstance(e, str) else e.get("name") if isinstance(e, dict) else None
+        if name is None or name in FIXED_PLACE_EQUIPMENT:
+            continue
+        place = (e.get("place") if isinstance(e, dict) else None) or DEFAULT_PLACES.get(name, CUSTOM_DEFAULT_PLACE)
+        held.append((str(name), place))
+    for it in spec.get("custom_items") or []:
+        if isinstance(it, dict) and item_module(it) == "equipment":
+            label = f"{it.get('id')} ({it['description']})" if it.get("description") else str(it.get("id"))
+            held.append((label, it.get("place") or CUSTOM_DEFAULT_PLACE))
+    both = [n for n, p in held if p == "both_hands"]
+    if not both:
+        return []
+    if len(both) > 1:
+        return [f"Only one item can be carried in both hands; {', '.join(both)} are all in both hands."]
+    others = [f"{n} ({p})" for n, p in held if p in ("right_hand", "left_hand")]
+    if others:
+        return [f"{both[0]} is carried in both hands, so nothing else can be held in a hand: move "
+                f"{', '.join(others)} to chest, back, hip or head first."]
+    return []

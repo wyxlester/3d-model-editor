@@ -115,7 +115,7 @@ export interface PartOverride {
 export type ModuleId = 'gender' | 'skin' | 'hair' | 'shirt' | 'pants' | 'outfit' | 'shoes' | 'equipment' | 'placement' | 'accessories';
 
 /** Where a held or attached equipment item goes (§6 "Placement"). Absent = the item's fixed spot. */
-export type Place = 'right_hand' | 'left_hand' | 'chest' | 'back' | 'hip' | 'head';
+export type Place = 'right_hand' | 'left_hand' | 'chest' | 'back' | 'hip' | 'head' | 'both_hands';
 
 /** `clothes.shirt` / `clothes.pants`: a preset garment. */
 export interface Garment { style: string; color?: Vec3 | null }

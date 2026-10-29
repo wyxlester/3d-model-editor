@@ -180,7 +180,7 @@ in words (the AI then writes a custom item **tagged with that module**).
 | `outfit` | `clothes.suit`, `clothes.suit_color` | catalog suits (textured, fill shirt *and* pants) or null |
 | `shoes` | `clothes.shoes`, `clothes.shoes_color`; custom items `module: "shoes"` | catalog shoes, or null = barefoot |
 | `equipment` | `equipment[]` items (name, color); custom items `module: "equipment"` | life_vest, helmet, binoculars, radio |
-| `placement` | the `place` of each equipment entry and each equipment custom item | right_hand, left_hand, chest, back, hip, head |
+| `placement` | the `place` of each equipment entry and each equipment custom item | right_hand, left_hand, chest, back, hip, head, both_hands |
 | `accessories` | `accessories[]` (`{"name","color"}`), `clothes.hat`, `clothes.hat_color`; custom items `module: "accessories"` | cap, sunglasses, ear_defenders, gloves, fedora01, fedora_cocked |
 
 Rules:
@@ -190,11 +190,32 @@ Rules:
   do this; the builder just draws the suit if set.)
 - **A described item replaces its module's preset:** a `shirt` custom item means `clothes.shirt`
   is null. Describing a module again replaces that module's custom items, nothing else.
-- **Placement:** `place` is one of `right_hand`, `left_hand`, `chest`, `back`, `hip`, `head`, or
-  absent for worn items that have one fixed spot (life_vest, helmet). Equipment custom items are
+- **Placement:** `place` is one of `right_hand`, `left_hand`, `chest`, `back`, `hip`, `head`,
+  `both_hands`, or absent for worn items that have one fixed spot (life_vest, helmet). Equipment custom items are
   modelled at the origin (grip point at the origin, +Z up, +X forward) and **not parented by their
   code**; the builder attaches every equipment object by its `place`, so moving an item is a
   spec change with no AI and no code change.
+- **Both hands** (Lester, 29 Oct: "carry rifle in both hands. left hand on barrel, right hand on
+  trigger"): `both_hands` is a two-handed ready carry for long items (at least 30 cm; a rifle, a
+  boat hook). The builder (`blender/crew/two_hands.py`) parents the item to `spine_03`, across the
+  front of the body, its long axis forward and 30–45° down and turned 15–45° toward the left, clear
+  of the torso (and vest), at a height and distance measured from the body so it fits every size.
+  Both arms are solved onto it by two-bone IK (elbows down and out; a shoulder may come forward up
+  to 20° to reach) and the result is **baked into every clip**, fingers closed on the item, so the
+  GLB and Unreal get the hold with no runtime IK. Right palm on the **grip**, left palm on the
+  **support**: custom item code may declare both with `crew.two_hand_grips(obj, grip, support)`
+  (item-local metres, as modelled); otherwise the long axis is the item's longest extent, its front
+  the end further from the origin, the grip the origin when that lies 15–50% along from the back
+  end (the one-hand grip: a rifle's pistol grip) or else a third along, and the support two thirds
+  along. *Down* (it faces the deck) is the side the item reaches furthest from the grip–support line
+  (a magazine). One `both_hands` item at most, and no other item may then be in `right_hand` or
+  `left_hand`: the spec check, the AI's tools and the builder refuse it, naming both items.
+  **hands_up** lets go: the hands rise, the item stays where it is carried (as on a sling) and the
+  hands return to it at the end. The item is a rigid mesh riding a bone; dropping it or holding it
+  overhead would need the item itself animated, which Unreal does not import for such a mesh.
+  `parts.json` gives the item `"place": "both_hands"`, `"grip_m"` and `"support_m"` (item mesh
+  frame). The screen offers "Both hands" for described items only (the catalog's binoculars and
+  radio are too short).
 - Custom items gain `"module"` (required for new items; an item without one is treated as
   `equipment` if it makes `Equipment__` objects, else `shirt`) and, for equipment, `"place"`.
 - **A preset replaces what was described:** choosing a hair/shirt/pants/shoes preset removes that

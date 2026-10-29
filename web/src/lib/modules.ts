@@ -207,6 +207,7 @@ export function toggleAccessory(list: Accessory[] | undefined, name: string): Ac
 export const PLACES: { id: Place; label: string }[] = [
   { id: 'right_hand', label: 'Right hand' }, { id: 'left_hand', label: 'Left hand' }, { id: 'chest', label: 'Chest' },
   { id: 'back', label: 'Back' }, { id: 'hip', label: 'Hip' }, { id: 'head', label: 'Head' },
+  { id: 'both_hands', label: 'Both hands' },
 ];
 export const placeLabel = (p: Place) => PLACES.find((x) => x.id === p)?.label ?? p;
 
@@ -218,6 +219,15 @@ export const FIXED_SPOT = ['life_vest', 'helmet'];
  * and the radio on the right hip; anything else held goes in the right hand.
  */
 const DEFAULT_PLACE: Record<string, Place> = { binoculars: 'chest', radio: 'hip' };
+
+/**
+ * The places offered for one row. "Both hands" (a two-handed ready carry, §6) is for long items, so
+ * it is offered for described items (a rifle, a boat hook) and not for the short catalog ones
+ * (binoculars, radio), which the builder refuses to carry in both hands.
+ */
+export function placesFor(row: Pick<PlacementRow, 'kind'>): { id: Place; label: string }[] {
+  return row.kind === 'item' ? PLACES : PLACES.filter((p) => p.id !== 'both_hands');
+}
 
 export interface PlacementRow { key: string; label: string; kind: 'equipment' | 'item'; ref: string; place: Place | 'fixed' }
 

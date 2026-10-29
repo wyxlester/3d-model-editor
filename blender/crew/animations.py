@@ -264,12 +264,14 @@ def frame_count(anim):
 # ---------------------------------------------------------------------------------------------
 # Baking inside Blender.
 
-def bake_all(armature, names, log=print):
+def bake_all(armature, names, log=print, hold=None):
+    """Bake every named clip. ``hold`` (a two_hands.Hold, or None) solves both arms onto an item
+    carried in both hands on every frame; without one the arms are exactly the clip's."""
     import bpy  # noqa: F401  (only inside Blender)
     rest = _rest_info(armature)
     actions = []
     for name in names:
-        actions.append(bake(armature, name, ANIMATIONS[name], rest))
+        actions.append(bake(armature, name, ANIMATIONS[name], rest, hold))
         log("baked animation %s (%d frames)" % (name, frame_count(ANIMATIONS[name]) + 1))
     return actions
 
@@ -287,7 +289,7 @@ def _rest_info(armature):
     return info
 
 
-def bake(armature, name, anim, rest):
+def bake(armature, name, anim, rest, hold=None):
     import bpy
     from mathutils import Euler, Matrix, Quaternion, Vector
 
@@ -322,6 +324,8 @@ def bake(armature, name, anim, rest):
         view_layer.update()
         for side in ("l", "r"):
             _solve_leg(armature, rest, side, pose["foot_" + side], view_layer)
+        if hold is not None:
+            hold.apply(armature, name, t, view_layer)
         frame = f + 1
         for pb in pbones:
             q = pb.rotation_quaternion.copy()

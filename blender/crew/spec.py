@@ -33,7 +33,9 @@ GARMENT_DEFAULT_COLOR = {"shirt": [0.85, 0.85, 0.82], "pants": [0.04, 0.06, 0.18
 ACCESSORIES = ["cap", "sunglasses", "ear_defenders", "gloves"]
 ACCESSORY_DEFAULT_COLOR = {"cap": [0.03, 0.06, 0.20], "sunglasses": [0.02, 0.02, 0.02],
                            "ear_defenders": [0.75, 0.55, 0.03], "gloves": [0.55, 0.42, 0.25]}
-PLACES = ["right_hand", "left_hand", "chest", "back", "hip", "head"]
+PLACES = ["right_hand", "left_hand", "chest", "back", "hip", "head", "both_hands"]
+# both_hands (a two-handed ready carry) needs both hands free: no other item may be held in one.
+HAND_PLACES = ["right_hand", "left_hand", "both_hands"]
 # Items with one fixed spot have no place; the others default to where the catalog puts them.
 FIXED_SPOT = {"life_vest", "helmet"}
 DEFAULT_PLACE = {"binoculars": "chest", "radio": "hip"}
@@ -253,6 +255,27 @@ CLOTHED_DEFAULT = {"shirt": {"style": "tshirt", "color": [0.85, 0.85, 0.82]},
                    "pants": {"style": "trousers", "color": [0.05, 0.07, 0.15]}}
 
 
+def hand_conflicts(spec):
+    """Errors for a both_hands carry that the hands cannot also do: two items in both hands, or a
+    both_hands item and another item held in one hand. Takes a normalised spec (equipment custom
+    items without a place are held in the right hand)."""
+    held = [(e["name"], e["place"]) for e in spec.get("equipment", []) if e.get("place") in HAND_PLACES]
+    held += [("%s (%s)" % (i["id"], i["description"]) if i.get("description") else i["id"],
+              i.get("place") or CUSTOM_DEFAULT_PLACE)
+             for i in spec.get("custom_items", []) if i.get("module") == "equipment"]
+    held = [(n, p) for n, p in held if p in HAND_PLACES]
+    both = [n for n, p in held if p == "both_hands"]
+    if not both:
+        return []
+    if len(both) > 1:
+        return ["only one item can be carried in both hands; %s are all placed both_hands" % ", ".join(both)]
+    others = ["%s (%s)" % (n, p) for n, p in held if p != "both_hands"]
+    if others:
+        return ["%s is carried in both hands, so nothing else can be held in a hand: move %s to "
+                "chest, back, hip or head" % (both[0], ", ".join(others))]
+    return []
+
+
 def normalize(spec):
     """Merge a spec over the defaults and validate it. Returns (spec, errors, warnings).
 
@@ -356,6 +379,7 @@ def normalize(spec):
         errors.append("animations must be from %s, got unknown %s" % (ANIMATIONS, bad))
     spec["animations"] = [a for a in anims if a in ANIMATIONS]
     spec["custom_items"] = custom_items(spec.get("custom_items"), errors, warnings)
+    errors.extend(hand_conflicts(spec))
     # Lester, 29 Oct: a person is always clothed. With no suit, a top or trousers that has neither a
     # preset nor a described item gets the plain default (the server does the same; this catches
     # any spec saved before that rule).
