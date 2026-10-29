@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../api';
 import { AiWorking, ChatPanel, ErrorNote, JobLines, Loading, TopBar, useCarried } from '../components/common';
 import { DerivedFromLink, useVariantDialog } from '../components/VariantDialog';
+import { OtherWork, useProjectWork } from '../components/JobCenter';
 import { remember, useCatalog, useJobs, useProject, useProjects } from '../hooks';
 import { paths } from '../lib/routing';
 import { assetLabel, groupClothes, mergePatch, toggleIn } from '../lib/spec';
@@ -73,6 +74,8 @@ export function CrewWorkshop() {
   const reload = project.reload;
   const { edit, optimistic } = useSpecEditor(id, run, reload);
   const sendChat = useCrewChat(id, run, reload);
+  // Work on this person carries on while the user is elsewhere; when it finishes, show the result.
+  const work = useProjectWork(id, () => void reload(), jobs);
   const [slot, setSlot] = useState<Slot>('Body');
   const [anim, setAnim] = useState<string | null>(null);
   const [clips, setClips] = useState<string[]>([]);
@@ -197,6 +200,7 @@ export function CrewWorkshop() {
             empty="Ask for anything the pickers don't have: a life vest like the boarding team wears, a beard, a move."
             onSend={sendTracked}
             projectId={id}
+            working={work.chatWorking}
             footer={describing ? <AiWorking text="AI is making what you described…" since={describing.since} /> : undefined}
             afterLastAi={offerPicker ? (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
@@ -219,7 +223,12 @@ export function CrewWorkshop() {
             <CrewViewer urls={p?.model_url ? [p.model_url] : []} animation={anim} playing
               onDuration={(_d, c) => setClips((old) => (old.join() === c.join() ? old : c))} />
           )}
-          {jobs.length > 0 && <div style={{ padding: '8px 16px 0' }}><JobLines jobs={jobs} dismiss={dismiss} /></div>}
+          {(jobs.length > 0 || work.others.length > 0) && (
+            <div style={{ padding: '8px 16px 0', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <JobLines jobs={jobs} dismiss={dismiss} />
+              <OtherWork jobs={work.others} />
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, padding: '12px 16px', borderTop: '1px solid var(--border)', background: 'var(--panel)', flexWrap: 'wrap', marginTop: 8 }}>
             <button className="btn" style={{ height: 36, borderRadius: 8 }} disabled title="Saved outfits need a catalogue endpoint, which the API does not have yet">Save as outfit</button>
             <button className="btn" style={{ height: 36, borderRadius: 8 }} disabled={!p?.version || !!p?.draft} onClick={() => id && variant.show(id)}

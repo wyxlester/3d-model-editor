@@ -5,6 +5,8 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api, modelUrl } from '../api';
 import { ErrorNote, JobLines, TopBar } from '../components/common';
 import { useVariantDialog } from '../components/VariantDialog';
+import { useJobCenter } from '../components/JobCenter';
+import { activeFor } from '../lib/jobcenter';
 import { recall, remember, useCatalog, useJobs, useProjects } from '../hooks';
 import type { ViewName } from '../lib/frames';
 import { paths, projectPath } from '../lib/routing';
@@ -27,6 +29,12 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
   const variant = useVariantDialog();
   const mine = (projects.data ?? []).filter((p) => p.kind === kind);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Models being changed in the background: marked in the list, and re-read when a change finishes
+  // so the picture and preview show the new version.
+  const center = useJobCenter();
+  const finishedHere = mine.reduce((n, p) => n + (center.finished[p.id] ?? 0), 0);
+  const reloadProjects = projects.reload;
+  useEffect(() => { if (finishedHere) void reloadProjects(); }, [finishedHere, reloadProjects]);
   const open = (id: string) => (kind === 'ship' ? paths.shipBuild(id) : paths.crew(id));
   const bases: { base: ProjectBase; name: string; description?: string }[] = kind === 'ship'
     ? (catalog.data?.ships.map((s) => ({ base: s.type as ProjectBase, name: s.name, description: s.description })) ?? [])
@@ -67,7 +75,7 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'flex-start' }}>
             <div role="listbox" aria-label={kind === 'ship' ? 'Ships' : 'Crew'} style={{ flex: '1 1 380px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
               {mine.map((p) => (
-                <ProjectRow key={p.id} p={p} kind={kind} on={p.id === selectedId}
+                <ProjectRow key={p.id} p={p} kind={kind} on={p.id === selectedId} working={activeFor(center.jobs, p.id).length > 0}
                   onSelect={() => setSelectedId(p.id)} onOpen={() => go(p)} />
               ))}
               {!projects.loading && !mine.length && !projects.error && <span className="faint">None yet. Start one below.</span>}
@@ -119,8 +127,8 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
 }
 
 /** One project: its picture, name and state. Click to preview it; double-click (or Enter) to open it. */
-function ProjectRow({ p, kind, on, onSelect, onOpen }: {
-  p: ProjectSummary; kind: ProjectKind; on: boolean; onSelect: () => void; onOpen: () => void;
+function ProjectRow({ p, kind, on, working, onSelect, onOpen }: {
+  p: ProjectSummary; kind: ProjectKind; on: boolean; working: boolean; onSelect: () => void; onOpen: () => void;
 }) {
   const { src, failed } = useThumbnail(urlOf(p), PICTURE_VIEW[kind]);
   return (
@@ -138,6 +146,7 @@ function ProjectRow({ p, kind, on, onSelect, onOpen }: {
         {p.derived_from && <span className="faint" style={{ fontSize: 12 }}>Variant of {p.derived_from.name} v{p.derived_from.version}</span>}
         {p.draft ? <span className="chip amber" style={{ alignSelf: 'flex-start' }}>Awaiting your approval</span>
           : <span className="muted" style={{ fontSize: 12 }}>{p.version ? `v${p.version}` : 'not built yet'}</span>}
+        {working && <span className="chip blue" style={{ alignSelf: 'flex-start', display: 'inline-flex', gap: 6, alignItems: 'center' }}><span className="spinner" aria-hidden="true" />Working on a change</span>}
       </span>
     </button>
   );

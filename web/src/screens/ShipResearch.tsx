@@ -5,6 +5,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { ChatPanel, ErrorNote, EvidenceChip, JobLines, Loading, PRIORITY, TopBar, useCarried } from '../components/common';
+import { OtherWork, useProjectWork } from '../components/JobCenter';
 import { remember, useJobs, useProject } from '../hooks';
 import { partLabel } from '../lib/parts';
 import { paths } from '../lib/routing';
@@ -21,6 +22,7 @@ export function ShipResearch() {
   const { data: project, error, reload, loading } = useProject(id);
   const { jobs, run, dismiss, busy } = useJobs();
   const carried = useCarried();
+  const work = useProjectWork(id, () => void reload(), jobs);
   const [sec, setSec] = useState<Sec>('summary');
   const [sel, setSel] = useState<Sel>(null);
   const [excluded, setExcluded] = useState<Record<string, boolean>>({});
@@ -57,10 +59,11 @@ export function ShipResearch() {
             onSend={ask}
             projectId={id}
             busy={busy}
+            working={work.chatWorking}
             label="Ask or direct the research"
             placeholder="Find a true overhead photo"
             empty="Tell the AI which vessel to research, and as of when. It checks for existing work first, then gathers sources for you to verify before anything is modelled."
-            footer={<JobLines jobs={jobs} dismiss={dismiss} />}
+            footer={<><JobLines jobs={jobs} dismiss={dismiss} /><OtherWork jobs={work.others} /></>}
           />
         </aside>
 

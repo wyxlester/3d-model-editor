@@ -6,6 +6,7 @@ import { recall, useTicker, type RunningJob } from '../hooks';
 import { describe } from '../lib/jobs';
 import { paths } from '../lib/routing';
 import type { Attachment, EvidenceStatus, Message } from '../types';
+import { WorkIndicator } from './JobCenter';
 
 export function Logo() {
   return (
@@ -41,6 +42,7 @@ export function TopBar({ title, children, home, back }: {
         <Link to={paths.assembly(scene)} className={on('/assembly')}>Assembly</Link>
         <Link to={paths.review(scene)} className={on('/review')}>Review</Link>
       </nav>
+      <WorkIndicator />
       {MOCK && <span className="chip amber" title="VITE_MOCK=1: data and AI replies are canned, nothing reaches the server">Mock data</span>}
       {children}
     </header>
@@ -180,14 +182,24 @@ export function ChatPanel(props: {
   footer?: ReactNode;
   afterLastAi?: ReactNode;
   empty?: string;
+  /** A change for this model still running on the server (e.g. sent before the user went to another model). */
+  working?: { text: string } | null;
 }) {
   const lastCarried = [...(props.carried ?? [])].reverse().find((m) => m.who === 'You');
-  const [draft, setDraft] = useState(() => lastCarried?.text ?? '');
+  const pid = props.projectId;
+  // An unsent message stays with its model for the session, so moving to another model and back loses nothing.
+  const [draft, setDraftRaw] = useState(() => lastCarried?.text ?? loadDraft(pid));
+  const setDraft = (text: string) => { setDraftRaw(text); saveDraft(pid, text); };
+  const shownFor = useRef(pid);
+  useEffect(() => {
+    if (shownFor.current === pid) return;
+    shownFor.current = pid;
+    setDraftRaw(loadDraft(pid)); // the same panel now shows another model
+  }, [pid]);
   const [err, setErr] = useState(false);
   // What was just sent, until the AI's job finishes: shown at once, with a spinner under it.
   const [waiting, setWaiting] = useState<{ text: string; atts: Attachment[]; from: number; since: number } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
-  const pid = props.projectId;
   // Files attached on Home come along pre-attached, ready to send with the carried request.
   const files = useAttachPicker(pid ? (f) => api.upload(pid, f) : null, lastCarried?.attachments ?? []);
   const { uploading, ready } = files;
@@ -230,6 +242,7 @@ export function ChatPanel(props: {
         ))}
         {waiting && !echoed && <div className="bubble me"><AttachmentList items={waiting.atts} />{waiting.text}</div>}
         {waiting && <div className="bubble ai"><AiWorking since={waiting.since} /></div>}
+        {!waiting && props.working && <div className="bubble ai"><AiWorking text={props.working.text} /></div>}
       </div>
       <div className="chat-input">
         {props.footer}
@@ -250,6 +263,19 @@ export function ChatPanel(props: {
       </div>
     </div>
   );
+}
+
+const draftKey = (pid: string) => `me3d-chat-draft-${pid}`;
+/** Per-viewer convenience, for this browser session only; safe when storage is blocked. */
+function loadDraft(pid: string | undefined): string {
+  if (!pid) return '';
+  try { return sessionStorage.getItem(draftKey(pid)) ?? ''; } catch { return ''; }
+}
+function saveDraft(pid: string | undefined, text: string) {
+  if (!pid) return;
+  try {
+    if (text) sessionStorage.setItem(draftKey(pid), text); else sessionStorage.removeItem(draftKey(pid));
+  } catch { /* ignore */ }
 }
 
 /** Home's conversation, carried into the destination's chat. Shown, and pre-filled, but never sent silently. */

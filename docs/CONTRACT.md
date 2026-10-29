@@ -219,10 +219,20 @@ returns 0 on failure (library: `unreal-automation-runner-exits-zero-on-failed-te
 ## 10. Server HTTP API (FastAPI, port 8787; the web app proxies `/api`)
 
 Every body is JSON. Long work returns `{"job_id"}`; poll `GET /api/jobs/{id}`, which returns
-`{"id","status":"queued|running|done|error","log":[str],"result":any,"error":str|null}`.
+`{"id","status":"queued|running|done|error","log":[str],"result":any,"error":str|null,
+"project":str|null,"label":str}`. `label` says what the job is for people ("Chat: make the hull
+red", "Comment on Roof › Searchlight").
 Log lines that start with `• ` are milestones written for people ("• Building version 2 in
 Blender: …", "• AI: …", "• Changing hull color"); the web app shows them as the progress feed.
 Every other line is raw detail.
+
+**Several models at once.** Jobs on different projects run side by side (Blender itself still
+builds one model at a time). Jobs on the same project run one after another, in the order sent,
+so a second change starts from the first one's result; until its turn a job is `queued`.
+`GET /api/jobs` returns `{"jobs": [{"id","kind","label","project","project_name","project_kind",
+"status","last","error","created","finished"}]}`: every job queued or running, and every job that
+finished in the last 5 minutes, oldest first. `last` is the latest `• ` line. The web app polls
+it on every page, so work carries on, and is reported, while the user is on another model.
 
 | Method and path | Body | Returns |
 |---|---|---|
@@ -245,6 +255,7 @@ Every other line is raw detail.
 | POST `/api/projects/{id}/variants` | `{"name"?,"version"?,"brief"?,"research"?:bool,"scene"?}` | `{"project","job_id"}` (below) |
 | POST `/api/projects/{id}/approve` | | `{"project","scene":{"id","missing_stations"}|null}` |
 | POST `/api/projects/{id}/discard` | | `{"project"}` |
+| GET `/api/jobs` | | `{"jobs":[JobSummary]}` (above) |
 | GET `/api/jobs/{id}` | | Job |
 | GET `/api/scenes` / POST `/api/scenes` | `SceneSpec` without `id` | `[Scene]` / `{"scene"}` |
 | GET `/api/scenes/{id}` | | `Scene` with `stations` from the ship's parts |

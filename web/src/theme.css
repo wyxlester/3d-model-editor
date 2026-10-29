@@ -192,3 +192,12 @@ select.field { height: 34px; padding: 0 8px; }
 .attach-chip.error { background: var(--red-bg); color: var(--red-text); }
 .attach-chip .attach-name { min-width: 0; overflow-wrap: anywhere; }
 .attach-chip button { width: 22px; height: 22px; flex-shrink: 0; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
+
+/* Work across models: the top-bar list of changes in progress, and notes when one finishes elsewhere. */
+.work-list { position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; width: 340px; max-height: 60vh; overflow-y: auto; background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 10px; padding: 6px; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); }
+.work-row { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 8px; color: var(--text); font-size: 13px; min-width: 0; }
+a.work-row:hover { background: var(--bubble); }
+.notes { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 32px)); }
+.note { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border-2); font-size: 13px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); }
+.note.ok { border-color: #2c5a44; }
+.note.bad { border-color: #5c2a2a; color: var(--red-text); }

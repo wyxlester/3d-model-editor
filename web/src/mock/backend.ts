@@ -4,7 +4,7 @@
 import { ApiError } from '../api';
 import { mergePatch } from '../lib/spec';
 import type {
-  Attachment, Catalog, Job, Message, Part, Pin, Project, ProjectSummary, RouteResult, Scene, SceneSpec, UnrealReport, VersionInfo,
+  Attachment, Catalog, Job, JobSummary, Message, Part, Pin, Project, ProjectSummary, RouteResult, Scene, SceneSpec, UnrealReport, VersionInfo,
 } from '../types';
 import shipPartsJson from '../../public/mock/ship_parts.json';
 import { mockResearch } from './research';
@@ -13,7 +13,7 @@ const shipParts = shipPartsJson as unknown as Part[];
 const now = () => new Date().toISOString();
 const JOB_MS = 3500;
 
-interface MockJob { job: Job; created: number; steps: string[]; finish: () => unknown; finished: boolean; fail?: string }
+interface MockJob { job: Job; created: number; steps: string[]; finish: () => unknown; finished: boolean; fail?: string; project?: string; label?: string; kind?: string }
 interface Store {
   projects: Record<string, Project & { glbs: Record<number, string> }>;
   scenes: Record<string, Scene>;
@@ -357,6 +357,16 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
     save();
     return { project: strip(p) };
   }
+  if (method === 'GET' && path === '/api/jobs') {
+    return { jobs: Object.entries(jobs).map(([id, j]): JobSummary => {
+      const job = tickJob(id);
+      const p = j.project ? store.projects[j.project] : undefined;
+      const said = job.log.filter((l) => l.startsWith('• ')).map((l) => l.slice(2));
+      return { id, kind: j.kind ?? 'build', label: j.label ?? 'Working', project: j.project ?? null, project_name: p?.name ?? null,
+        project_kind: p?.kind ?? null, status: job.status, last: said[said.length - 1] ?? job.log[job.log.length - 1] ?? '',
+        error: job.error, created: new Date(j.created).toISOString(), finished: j.finished ? now() : null };
+    }) };
+  }
   if ((r = m(/^\/api\/jobs\/([^/]+)$/))) return tickJob(r[1]);
   if (method === 'GET' && path === '/api/scenes') return Object.values(store.scenes).map(sceneWithStations);
   if (method === 'POST' && path === '/api/scenes') {
@@ -390,10 +400,25 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
   throw new HttpErr(404, `Mock has no route for ${method} ${path}`);
 }
 
+/** Tag a job just started with its project and a label, as the server does (CONTRACT §10). */
+function labelJob(method: string, path: string, body: any, out: any) {
+  const j = out && typeof out === 'object' && out.job_id ? jobs[out.job_id] : undefined;
+  if (!j || method !== 'POST') return;
+  const r = path.match(/^\/api\/projects\/([^/]+)\/(chat|pins|spec|variants|pins\/[^/]+\/reply)$/);
+  if (path === '/api/projects') Object.assign(j, { project: out.project?.id, kind: 'build', label: `First build of ${out.project?.name}` });
+  else if (r?.[2] === 'chat') Object.assign(j, { project: r[1], kind: 'chat', label: `Chat: ${String(body?.message ?? '').slice(0, 60)}` });
+  else if (r?.[2] === 'pins') Object.assign(j, { project: r[1], kind: 'pin', label: `Comment on ${body?.part}` });
+  else if (r?.[2]?.startsWith('pins/')) Object.assign(j, { project: r[1], kind: 'pin', label: 'Reply on a comment' });
+  else if (r?.[2] === 'spec') Object.assign(j, { project: r[1], kind: 'build', label: 'Rebuilding with your changes' });
+  else if (r?.[2] === 'variants') Object.assign(j, { project: out.project?.id, kind: 'variant', label: `Making the variant ${out.project?.name}` });
+}
+
 export async function mockTransport(method: string, path: string, body?: unknown): Promise<unknown> {
   await new Promise((r) => setTimeout(r, 120));
   try {
-    return JSON.parse(JSON.stringify(await handle(method, path, body ?? null)));
+    const out = await handle(method, path, body ?? null);
+    labelJob(method, path, body, out);
+    return JSON.parse(JSON.stringify(out));
   } catch (e) {
     if (e instanceof HttpErr) {
       throw new ApiError(e.status, `${method} ${path} failed (${e.status}): ${e.message}`);

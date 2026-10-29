@@ -8,10 +8,12 @@ import { Moves } from './screens/Moves';
 import { Assembly } from './screens/Assembly';
 import { Review } from './screens/Review';
 import { VariantReview } from './screens/VariantReview';
+import { JobCenterProvider } from './components/JobCenter';
 
 export function App() {
   return (
     <BrowserRouter>
+      <JobCenterProvider>
       <div className="app">
         <Routes>
           <Route path="/" element={<Home />} />
@@ -29,6 +31,7 @@ export function App() {
           <Route path="*" element={<Home />} />
         </Routes>
       </div>
+      </JobCenterProvider>
     </BrowserRouter>
   );
 }

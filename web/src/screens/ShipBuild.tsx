@@ -6,6 +6,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, errorText, modelUrl } from '../api';
 import { AiWorking, ChatPanel, ErrorNote, JobLines, PRIORITY, TopBar, useCarried } from '../components/common';
 import { DerivedFromLink, useVariantDialog } from '../components/VariantDialog';
+import { OtherWork, useProjectWork } from '../components/JobCenter';
 import { remember, useJobs, useLoad, useProject } from '../hooks';
 import { blenderToGltf, type ViewName } from '../lib/frames';
 import { hiddenParts, isStationName, jointsOf, levelsFor, partLabel } from '../lib/parts';
@@ -86,6 +87,8 @@ export function ShipBuild() {
   };
 
   const afterJob = async () => { const p = await reload(); if (p) setProject(p); };
+  // Work on this ship carries on while the user is on another model; when it finishes, show the result.
+  const work = useProjectWork(id, () => void afterJob(), jobs);
 
   const closeThread = () => { setSelPin(null); setShownPart(null); };
   /** Open an issue's thread because the user clicked it: its part lights up. */
@@ -154,7 +157,7 @@ export function ShipBuild() {
       <TopBar title={project?.name} back="ship">
         {id && <ModeSwitch id={id} mode="build" />}
         <div className="topbar-right">
-          <span>{project ? `${project.name} · ${current ? `v${current}` : 'not built yet'} · ${busy ? 'working…' : 'saved'}` : ''}</span>
+          <span>{project ? `${project.name} · ${current ? `v${current}` : 'not built yet'} · ${busy || work.active.length ? 'working…' : 'saved'}` : ''}</span>
           <DerivedFromLink project={project} />
           {project && project.versions.length > 0 && (
             <select className="field" aria-label="Version shown" value={shownVersion} onChange={(e) => { const n = Number(e.target.value); setViewing(n === current ? null : n); setDraft(null); }}>
@@ -176,7 +179,7 @@ export function ShipBuild() {
             <button role="tab" className={`tab ${tab === 'comments' ? 'on' : ''}`} onClick={() => setTab('comments')}>Comments ({pins.length})</button>
           </div>
           {tab === 'chat' ? (
-            <ChatPanel messages={project?.messages ?? []} carried={carried} onSend={chat} busy={busy} projectId={id}
+            <ChatPanel messages={project?.messages ?? []} carried={carried} onSend={chat} busy={busy} projectId={id} working={work.chatWorking}
               label="Ask about the whole ship" placeholder="What's still unverified?"
               empty="For a change to one part, pin a comment on it: the AI will know exactly which part you mean. Use this chat for the whole ship." />
           ) : (
@@ -234,9 +237,10 @@ export function ShipBuild() {
               )}
             </>}
           />
-          <div style={{ padding: jobs.length || error ? '8px 16px 0' : 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ padding: jobs.length || work.others.length || error ? '8px 16px 0' : 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
             <ErrorNote error={error} retry={reload} />
             <JobLines jobs={jobs} dismiss={dismiss} />
+            <OtherWork jobs={work.others} />
           </div>
           <div className="statusbar">
             {project && !project.model_url && <span className="faint">No build yet</span>}

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, errorText, modelUrl } from '../api';
 import { ChatPanel, ErrorNote, Loading, TopBar } from '../components/common';
+import { useProjectWork } from '../components/JobCenter';
 import { remember, useLoad, useProject, useTicker } from '../hooks';
 import type { ViewName } from '../lib/frames';
 import { pollJob } from '../lib/poll';
@@ -46,6 +47,7 @@ export function VariantReview() {
   }, []);
 
   const reload = project.reload;
+  useProjectWork(id, () => void reload()); // a change sent from another page lands here too
   /** Follow a job: its log feeds the progress list; the model is re-read when it ends. */
   const watch = useCallback((jobId: string, label: string) => {
     if (watched.current.has(jobId)) return;

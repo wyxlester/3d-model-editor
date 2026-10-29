@@ -244,6 +244,24 @@ export interface Job<R = unknown> {
   log: string[];
   result: R;
   error: string | null;
+  project?: string | null;
+  label?: string;
+}
+
+/** A row of GET /api/jobs: what is going on, on every model (CONTRACT §10). */
+export interface JobSummary {
+  id: string;
+  kind: string;
+  label: string;
+  project: string | null;
+  project_name: string | null;
+  project_kind: ProjectKind | null;
+  status: JobStatus | string;
+  /** The latest line written for people. */
+  last: string;
+  error: string | null;
+  created: string;
+  finished: string | null;
 }
 
 export interface SceneCrew {

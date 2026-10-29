@@ -73,7 +73,7 @@ def make_unreal_runner(settings: Settings) -> UnrealRunner:
 
 def create_app(settings: Settings | None = None, runner: BuilderRunner | None = None,
                agent: AgentRunner | None = None, llm: LLM | None = None,
-               unreal: UnrealRunner | None = None, workers: int = 3) -> FastAPI:
+               unreal: UnrealRunner | None = None, workers: int = 6) -> FastAPI:
     settings = settings or Settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     store = ProjectStore(settings.projects_dir)
@@ -165,7 +165,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         name = body.get("name") or spec.get("name") or base
         project = store.create(kind, base, name)
         n, d = start_project(project, spec)
-        job_id = jobs.submit("build", lambda log: first_build(
+        job_id = jobs.submit("build", project=project["id"], label=f"First build of {name}", fn=lambda log: first_build(
             project, n, d, f"Created from the {base} catalog default", log))
         return {"project": store.api_project(project["id"]), "job_id": job_id}
 
@@ -255,7 +255,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             log("• Ready for your review")
             return result
 
-        store.set_draft(vid, job_id=jobs.submit("variant", work))
+        store.set_draft(vid, job_id=jobs.submit("variant", work, project=vid, label=f"Making the variant {name}"))
         return {"project": store.api_project(vid), "job_id": store.load(vid)["draft"]["job_id"]}
 
     @app.post("/api/projects/{pid}/approve")
@@ -325,7 +325,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         if project.get("kind") == "crew":
             new = keep_crew_nulls(new, patch)
         summary = summarise_change(old, new, "Edited in Inspect")
-        return {"job_id": jobs.submit("build", lambda log: build_or_fail(pid, new, summary, log))}
+        return {"job_id": jobs.submit("build", lambda log: build_or_fail(pid, new, summary, log),
+                                      project=pid, label="Rebuilding with your changes")}
 
     @app.post("/api/projects/{pid}/undo")
     def undo(pid: str):
@@ -407,7 +408,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             return {"reply": reply, "version": store.load(pid)["version"],
                     "built_versions": session.built_versions, "research_saved": session.research_saved}
 
-        return {"job_id": jobs.submit("chat", work)}
+        what = "Research" if mode == "research" else "Chat"
+        return {"job_id": jobs.submit("chat", work, project=pid, label=f"{what}: {short(message)}")}
 
     def pin_prompt(pid: str, pin: dict) -> str:
         parts = store.parts(pid, store.load(pid)["version"])
@@ -459,7 +461,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         if point is not None and not (isinstance(point, list) and len(point) == 3):
             raise HTTPException(400, "point must be [x,y,z]")
         pin = store.add_pin(pid, part, point, text, body.get("author") or "You")
-        return {"pin": pin, "job_id": jobs.submit("pin", pin_job(pid, pin["id"]))}
+        return {"pin": pin, "job_id": jobs.submit("pin", pin_job(pid, pin["id"]), project=pid,
+                                                  label=f"Comment on {label_for(part)}")}
 
     @app.post("/api/projects/{pid}/pins/{pin_id}/reply")
     def reply_pin(pid: str, pin_id: str, body: dict = Body(...)):
@@ -469,7 +472,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             raise HTTPException(400, "text is required")
         store.get_pin(pid, pin_id)
         store.update_pin(pid, pin_id, status="working", message=(body.get("author") or "You", text))
-        return {"job_id": jobs.submit("pin", pin_job(pid, pin_id))}
+        part = store.get_pin(pid, pin_id)["part"]
+        return {"job_id": jobs.submit("pin", pin_job(pid, pin_id), project=pid, label=f"Reply on {label_for(part)}")}
 
     @app.patch("/api/projects/{pid}/pins/{pin_id}")
     def patch_pin(pid: str, pin_id: str, body: dict = Body(...)):
@@ -480,6 +484,14 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         return {"pin": store.update_pin(pid, pin_id, status=status)}
 
     # ---- jobs ---------------------------------------------------------------------------
+    @app.get("/api/jobs")
+    def list_jobs():
+        rows = jobs.listing()
+        for r in rows:
+            p = store.load(r["project"]) if r["project"] and store.exists(r["project"]) else None
+            r["project_name"], r["project_kind"] = (p["name"], p["kind"]) if p else (None, None)
+        return {"jobs": rows}
+
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str):
         job = jobs.get(job_id)
@@ -578,7 +590,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
     @app.post("/api/scenes/{sid}/export")
     def export(sid: str):
         scene = load_scene(sid)
-        return {"job_id": jobs.submit("export", lambda log: export_scene(
+        return {"job_id": jobs.submit("export", label=f"Export {scene.get('name', sid)}", fn=lambda log: export_scene(
             scene, store, settings.packages_dir, log))}
 
     @app.post("/api/scenes/{sid}/unreal-test")
@@ -588,7 +600,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         def work(log):
             pkg = export_scene(scene, store, settings.packages_dir, log)
             return unreal(Path(pkg["package_dir"]), log)
-        return {"job_id": jobs.submit("unreal", work)}
+        return {"job_id": jobs.submit("unreal", work, label=f"Unreal test of {scene.get('name', sid)}")}
 
     # ---- files --------------------------------------------------------------------------
     @app.get("/api/files/{path:path}")
@@ -599,6 +611,12 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         return FileResponse(target)
 
     return app
+
+
+def short(text: str, n: int = 60) -> str:
+    """One line of at most n characters, for a job label."""
+    one = " ".join(str(text).split())
+    return one if len(one) <= n else one[: n - 1].rstrip() + "…"
 
 
 def safe_data_path(data_dir: Path, rel: str) -> Path | None:

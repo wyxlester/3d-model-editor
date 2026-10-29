@@ -386,3 +386,32 @@ describe('hull footprint on the water (keeps water out of the boat)', () => {
     expect(convexHull([[0, 0]])).toEqual([]);
   });
 });
+
+import { activeFor, newlyFinished } from './jobcenter';
+
+describe('work across models', () => {
+  const job = (id: string, status: string, project: string | null = 'p1') => ({
+    id, status, project, kind: 'chat', label: id, last: '', error: null, created: '', finished: null,
+    project_name: null, project_kind: null,
+  }) as const;
+  const seen = (...js: { id: string; status: string }[]) => new Map(js.map((j) => [j.id, j.status]));
+
+  it('reports nothing on the first look: old jobs are not news', () => {
+    expect(newlyFinished(null, [job('a', 'done')])).toEqual([]);
+  });
+  it('reports a job that was running and has finished, once', () => {
+    expect(newlyFinished(seen(job('a', 'running')), [job('a', 'done')]).map((j) => j.id)).toEqual(['a']);
+    expect(newlyFinished(seen(job('a', 'queued')), [job('a', 'error')]).map((j) => j.id)).toEqual(['a']);
+    expect(newlyFinished(seen(job('a', 'done')), [job('a', 'done')])).toEqual([]);
+    expect(newlyFinished(seen(job('a', 'running')), [job('a', 'running')])).toEqual([]);
+  });
+  it('reports a job that started and finished between two looks', () => {
+    expect(newlyFinished(seen(), [job('b', 'done')]).map((j) => j.id)).toEqual(['b']);
+    expect(newlyFinished(seen(), [job('b', 'running')])).toEqual([]);
+  });
+  it('lists what is still going on for one model', () => {
+    const jobs = [job('a', 'running'), job('b', 'queued'), job('c', 'done'), job('d', 'running', 'p2')];
+    expect(activeFor(jobs, 'p1').map((j) => j.id)).toEqual(['a', 'b']);
+    expect(activeFor(jobs, undefined)).toEqual([]);
+  });
+});
