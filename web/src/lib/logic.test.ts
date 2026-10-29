@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Job, Part } from '../types';
-import { hiddenParts, isPartName, jointsOf, levelsFor, partLabel, resolvePart } from './parts';
+import { hiddenParts, isPartName, jointsOf, levelsFor, ownNodes, partLabel, resolvePart } from './parts';
 import { MAX_POLL_FAILURES, describe as describePoll, nextDelayMs, pollReducer, type PollState } from './jobs';
 import { blenderToGltf, cameraFor, gltfToBlender, jointAxisGltf } from './frames';
 import { assetLabel, clothesSlot, mergePatch, toggleIn } from './spec';
@@ -45,6 +45,39 @@ describe('nearest part from a node chain', () => {
   it('falls back to the naming rule without a parts list', () => {
     expect(resolvePart(['Cube', 'Roof__Horn', 'Scene'])).toBe('Roof__Horn');
     expect(resolvePart(['station__helm', 'Scene'])).toBeNull();
+  });
+});
+
+describe('a part\'s own nodes (what its highlight lights)', () => {
+  type N = { name: string; children: N[] };
+  const n = (name: string, ...children: N[]): N => ({ name, children });
+  // Hull__Main is the root every other part hangs from, as the ship builders emit it.
+  const tree = n('Hull__Main',
+    n('Hull__Main_1'), n('Hull__Main_2'),
+    n('Accommodation__House', n('Accommodation__House_1'), n('Bridge__Wheelhouse')),
+    n('station__helm', n('helm_marker')),
+    n('Cargo__Hatch_01', n('Cargo__Bay_01')));
+  const known = ['Hull__Main', 'Accommodation__House', 'Bridge__Wheelhouse', 'station__helm', 'Cargo__Hatch_01', 'Cargo__Bay_01'];
+  const names = (node: N, k?: string[]) => ownNodes(node, k).map((x) => x.name);
+
+  it('the hull is the hull and its material pieces, not the parts attached to it', () => {
+    expect(names(tree, known)).toEqual(['Hull__Main', 'Hull__Main_1', 'Hull__Main_2', 'station__helm', 'helm_marker']);
+  });
+  it('a mid-level part keeps its own pieces and drops the part on top of it', () => {
+    expect(names(tree.children[2], known)).toEqual(['Accommodation__House', 'Accommodation__House_1']);
+  });
+  it('matches picking: every own node resolves to the part, every other node does not', () => {
+    const chains: Array<[N, string[]]> = [];
+    const walk = (node: N, up: string[]) => { const c = [node.name, ...up]; chains.push([node, c]); node.children.forEach((x) => walk(x, c)); };
+    walk(tree, ['Scene']);
+    for (const p of known.filter((k) => !k.startsWith('station__'))) {
+      const node = chains.find(([x]) => x.name === p)![0];
+      const own = new Set(ownNodes(node, known));
+      for (const [x, chain] of chains) {
+        if (own.has(x)) expect(resolvePart(chain, known)).toBe(p);
+        else if (chain.includes(p)) expect(resolvePart(chain, known)).not.toBe(p);
+      }
+    }
   });
 });
 
@@ -318,5 +351,38 @@ describe('picker offer', () => {
     expect(madeSomethingNew(['item_1'], [item('item_1'), item('item_2')])).toBe(true);
     expect(madeSomethingNew(null, [item('item_1')])).toBe(false);         // page just opened
     expect(madeSomethingNew([], undefined)).toBe(false);
+  });
+});
+
+import { convexHull, waterlineCrossings } from './waterline';
+
+describe('hull footprint on the water (keeps water out of the boat)', () => {
+  // An open box "boat" 4 m long (x), 2 m wide (z), from 1 m below the waterline to 1 m above:
+  // its sides only, no deck, so the water plane would show inside it.
+  const corners = (y: number) => [[-2, y, -1], [2, y, -1], [2, y, 1], [-2, y, 1]];
+  const lo = corners(-1), hi = corners(1);
+  const pos = [...lo, ...hi].flat();
+  const index: number[] = [];
+  for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; index.push(i, j, 4 + j, i, 4 + j, 4 + i); }
+
+  it('finds where the sides cross the waterline, and nothing from parts clear of it', () => {
+    const pts = waterlineCrossings(pos, index);
+    expect(pts.length).toBeGreaterThan(0);
+    for (const [x, z] of pts) expect(Math.abs(x) === 2 || Math.abs(z) === 1).toBe(true);
+    expect(waterlineCrossings([0, 1, 0, 1, 2, 0, 0, 3, 1], null)).toEqual([]); // a mast above the water
+    expect(waterlineCrossings([0, -1, 0, 2, 1, 0, 0, 1, 2], null)).toEqual([[1, 0], [0, 1]]);
+  });
+  it('the footprint is the hull outline: the four corners, counter-clockwise', () => {
+    const hull = convexHull(waterlineCrossings(pos, index));
+    expect(hull).toHaveLength(4);
+    expect(new Set(hull.map((p) => p.join(',')))).toEqual(new Set(['-2,-1', '2,-1', '2,1', '-2,1']));
+    let area2 = 0;
+    for (let i = 0; i < hull.length; i++) { const [a, b] = [hull[i], hull[(i + 1) % hull.length]]; area2 += a[0] * b[1] - b[0] * a[1]; }
+    expect(area2).toBeCloseTo(16); // twice the 4 × 2 area, positive = counter-clockwise
+  });
+  it('drops interior and collinear points, and gives nothing for a line or a point', () => {
+    expect(convexHull([[0, 0], [1, 0], [2, 0], [2, 2], [0, 2], [1, 1]])).toHaveLength(4);
+    expect(convexHull([[0, 0], [1, 1], [2, 2]])).toEqual([]);
+    expect(convexHull([[0, 0]])).toEqual([]);
   });
 });

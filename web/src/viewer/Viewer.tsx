@@ -6,7 +6,8 @@ import { Html, OrbitControls, useAnimations, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { cameraFor, jointAxisGltf, type Bounds, type ViewName } from '../lib/frames';
-import { isStationName, partLabel, resolvePart } from '../lib/parts';
+import { isStationName, ownNodes, partLabel, resolvePart } from '../lib/parts';
+import { convexHull, waterlineCrossings, type Pt } from '../lib/waterline';
 import type { Pin, Vec3 } from '../types';
 import { ErrorBoundary } from '../components/common';
 
@@ -47,6 +48,10 @@ function CameraRig({ view, bounds, nonce }: { view: ViewName; bounds: Bounds | n
   return null;
 }
 
+// Stencil value inside the hull's waterline footprint: the water and its grid are not drawn there,
+// so an open boat (the sampan's floorboards sit below the waterline) does not look flooded.
+const IN_HULL = 1;
+
 function Water({ bounds }: { bounds: Bounds | null }) {
   const span = bounds ? Math.max(bounds.max[0] - bounds.min[0], bounds.max[2] - bounds.min[2]) : 20;
   const size = Math.max(20, span * 6);
@@ -54,10 +59,60 @@ function Water({ bounds }: { bounds: Bounds | null }) {
     <group>
       <mesh rotation-x={-Math.PI / 2} position-y={0} renderOrder={2}>
         <planeGeometry args={[size, size]} />
-        <meshStandardMaterial color="#1f5fb8" transparent opacity={0.28} depthWrite={false} side={THREE.DoubleSide} />
+        <meshStandardMaterial color="#1f5fb8" transparent opacity={0.28} depthWrite={false} side={THREE.DoubleSide}
+          stencilWrite stencilRef={IN_HULL} stencilFunc={THREE.NotEqualStencilFunc} />
       </mesh>
-      <gridHelper args={[size, 40, '#3F7BD8', '#22324a']} position-y={0.002} />
+      <gridHelper args={[size, 40, '#3F7BD8', '#22324a']} position-y={0.002}
+        material-stencilWrite material-stencilRef={IN_HULL} material-stencilFunc={THREE.NotEqualStencilFunc} />
     </group>
+  );
+}
+
+/** The hull's outline at the waterline, from the Hull__* parts' own meshes (every mesh if none is named so). */
+function hullFootprint(root: THREE.Object3D, partPaths: string[]): Pt[] {
+  root.updateMatrixWorld(true);
+  const hullParts = partPaths.filter((p) => p.startsWith('Hull__'));
+  const nodes: THREE.Object3D[] = [];
+  if (hullParts.length) {
+    for (const p of hullParts) { const o = root.getObjectByName(p); if (o) nodes.push(...ownNodes(o, partPaths)); }
+  } else {
+    root.traverse((o) => nodes.push(o));
+  }
+  const pts: Pt[] = [];
+  const v = new THREE.Vector3();
+  for (const o of nodes) {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) continue;
+    const attr = mesh.geometry.getAttribute('position');
+    const world = new Float32Array(attr.count * 3);
+    for (let i = 0; i < attr.count; i++) {
+      v.fromBufferAttribute(attr, i).applyMatrix4(mesh.matrixWorld);
+      world[i * 3] = v.x; world[i * 3 + 1] = v.y; world[i * 3 + 2] = v.z;
+    }
+    for (const pt of waterlineCrossings(world, mesh.geometry.index?.array ?? null)) pts.push(pt);
+  }
+  return convexHull(pts);
+}
+
+/** Marks the hull's footprint in the stencil buffer, drawn before the water; invisible and not pickable. */
+function WaterMask({ outline }: { outline: Pt[] }) {
+  const geometry = useMemo(() => {
+    if (outline.length < 3) return null;
+    const pos: number[] = [];
+    for (let i = 1; i + 1 < outline.length; i++) {
+      for (const [x, z] of [outline[0], outline[i], outline[i + 1]]) pos.push(x, 0, z);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    return g;
+  }, [outline]);
+  useEffect(() => () => geometry?.dispose(), [geometry]);
+  if (!geometry) return null;
+  return (
+    <mesh geometry={geometry} renderOrder={-1} raycast={() => null}>
+      <meshBasicMaterial colorWrite={false} depthWrite={false} depthTest={false} side={THREE.DoubleSide}
+        stencilWrite stencilRef={IN_HULL} stencilFunc={THREE.AlwaysStencilFunc} stencilZPass={THREE.ReplaceStencilOp} />
+    </mesh>
   );
 }
 
@@ -92,13 +147,15 @@ function useClonedScene(url: string) {
   return { root, animations: gltf.animations };
 }
 
+function stdMaterialsOf(o: THREE.Object3D, fn: (m: THREE.MeshStandardMaterial) => void) {
+  const mesh = o as THREE.Mesh;
+  if (!mesh.isMesh) return;
+  const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const mat of mats) if ((mat as THREE.MeshStandardMaterial).emissive) fn(mat as THREE.MeshStandardMaterial);
+}
+
 function forEachStdMaterial(o: THREE.Object3D, fn: (m: THREE.MeshStandardMaterial) => void) {
-  o.traverse((c) => {
-    const mesh = c as THREE.Mesh;
-    if (!mesh.isMesh) return;
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    for (const mat of mats) if ((mat as THREE.MeshStandardMaterial).emissive) fn(mat as THREE.MeshStandardMaterial);
-  });
+  o.traverse((c) => stdMaterialsOf(c, fn));
 }
 
 export interface ShipModelProps {
@@ -121,6 +178,9 @@ function ShipModel(p: ShipModelProps) {
   const [hover, setHover] = useState<string | null>(null);
   const onBounds = p.onBounds;
   useEffect(() => { onBounds?.(boundsOf(root)); }, [root, onBounds]);
+  const partsKey = p.partPaths.join('\n'); // some screens pass a fresh array every render
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const footprint = useMemo(() => hullFootprint(root, p.partPaths), [root, partsKey]);
 
   // Highlight: selected part strongly, hovered part (while placing a comment) lightly.
   useEffect(() => {
@@ -132,13 +192,15 @@ function ShipModel(p: ShipModelProps) {
       m.emissive.setHex(m.userData.baseEmissive);
       m.emissiveIntensity = m.userData.baseIntensity;
     });
+    // Only the part's own meshes: the parts attached under it (the hull carries the whole ship) stay unlit.
     const tint = (name: string | null | undefined, k: number) => {
       const o = name ? root.getObjectByName(name) : null;
-      if (o) forEachStdMaterial(o, (m) => { m.emissive.set('#5B9BFF'); m.emissiveIntensity = k; });
+      if (!o) return;
+      for (const n of ownNodes(o, p.partPaths)) stdMaterialsOf(n, (m) => { m.emissive.set('#5B9BFF'); m.emissiveIntensity = k; });
     };
     tint(p.pickMode ? hover : null, 0.25);
     tint(p.selectedPart, 0.55);
-  }, [root, p.selectedPart, hover, p.pickMode]);
+  }, [root, p.selectedPart, hover, p.pickMode, p.partPaths]);
 
   // Joint preview: rotate each articulated node about its joint axis from its rest pose.
   useEffect(() => {
@@ -179,6 +241,7 @@ function ShipModel(p: ShipModelProps) {
   return (
     <>
       <primitive object={root} onClick={onClick} onPointerMove={onMove} onPointerOut={onOut} />
+      <WaterMask outline={footprint} />
       {p.pins?.map((pin, i) => (
         <PinMarker key={pin.id} root={root} pin={pin} n={i + 1} selected={pin.id === p.selectedPinId} onClick={p.onPinClick} />
       ))}
@@ -239,7 +302,7 @@ export function ShipViewer(props: Omit<ShipModelProps, 'url' | 'onBounds'> & {
   const { url, view, viewNonce = 0, overlay, emptyText, containerRef, ...model } = props;
   return (
     <div className={`viewer ${props.pickMode ? 'picking' : ''}`} ref={containerRef}>
-      <Canvas camera={{ fov: 40, position: [30, 15, -30] }} dpr={[1, 2]} style={{ position: 'absolute', inset: 0 }}>
+      <Canvas camera={{ fov: 40, position: [30, 15, -30] }} dpr={[1, 2]} gl={{ stencil: true }} style={{ position: 'absolute', inset: 0 }}>
         <color attach="background" args={['#0E1013']} />
         <Lights />
         <Water bounds={bounds} />
