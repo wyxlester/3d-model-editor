@@ -21,6 +21,7 @@ import bpy
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from crew import animations as crew_anims  # noqa: E402
+from crew import custom as crew_custom  # noqa: E402
 from crew import equipment as crew_equipment  # noqa: E402
 from crew import spec as crew_spec  # noqa: E402
 
@@ -164,6 +165,54 @@ def check_feet(armature, action_names, errors, warnings):
     return stats
 
 
+def run_custom_items(items, armature, objects, errors, log):
+    """Run the AI's custom_items in order with bpy, mathutils and the crew helpers in scope (same
+    rules as ship custom ops: a failing item is a build error naming its id and line, and the
+    remaining items still run). Returns {name: object} of the Clothes__/Equipment__ meshes made.
+    Runs before animations bake, so anything skinned or bone-parented here is animated too."""
+    import math as _math
+    import mathutils
+    from mathutils import Matrix, Vector
+    crew_custom._setup(armature, objects.get("Body__Skin"))
+    made = {}
+    try:
+        for item in items:
+            iid = item["id"]
+            before = set(bpy.data.objects.keys())
+            ns = {"bpy": bpy, "mathutils": mathutils, "crew": crew_custom, "math": _math,
+                  "Vector": Vector, "Matrix": Matrix, "__name__": "custom_item_%s" % iid}
+            try:
+                exec(compile(item["code"], "<custom_item %s>" % iid, "exec"), ns)
+            except Exception as e:  # noqa: BLE001 - reported, the build is then not ok
+                tb = traceback.extract_tb(e.__traceback__)
+                line = next((f.lineno for f in reversed(tb) if f.filename.startswith("<custom_item")), "?")
+                errors.append("custom item %s (%s) failed at line %s: %s: %s"
+                              % (iid, item.get("description", ""), line, type(e).__name__, e))
+                continue
+            for name in sorted(set(bpy.data.objects.keys()) - before):
+                ob = bpy.data.objects[name]
+                problem = None
+                if ob.type != "MESH":
+                    problem = "is not a mesh"
+                elif not crew_custom._NAME.match(name) or not name.startswith(("Clothes__", "Equipment__")):
+                    problem = "is not a legal crew part name (Clothes__<Name> or Equipment__<Name>, [A-Za-z0-9_])"
+                elif name.startswith("Equipment__") and not (ob.parent is armature and ob.parent_type == "BONE"):
+                    problem = "is not parented to a bone (use crew.hold or crew.attach), so it would not move"
+                elif name.startswith("Clothes__") and not any(
+                        m.type == "ARMATURE" and m.object is armature for m in ob.modifiers):
+                    problem = "is not skinned to the crew armature (use crew.garment)"
+                if problem:
+                    errors.append("custom item %s created %r, which %s" % (iid, name, problem))
+                    bpy.data.objects.remove(ob, do_unlink=True)
+                    continue
+                made[name] = ob
+                log("custom item %s made %s (%d triangles)" % (
+                    iid, name, sum(len(p.vertices) - 2 for p in ob.data.polygons)))
+    finally:
+        crew_custom._finish()
+    return made
+
+
 def main():
     t0 = time.time()
     args = parse_args()
@@ -193,6 +242,12 @@ def main():
         report["mpfb_pack_installed"] = mpfb_human.pack_installed()
         armature, objects, barefoot_h, height_macro = mpfb_human.build_human(spec, warnings, log)
         equipment = crew_equipment.add_equipment(spec["equipment"], armature, list(objects.values()), log)
+        if spec["custom_items"]:
+            for name, ob in run_custom_items(spec["custom_items"], armature, objects, errors, log).items():
+                if name.startswith("Equipment__"):
+                    equipment[name] = ob
+                else:
+                    objects[name] = ob
 
         actions = crew_anims.bake_all(armature, spec["animations"], log)
         report["feet"] = check_feet(armature, [a.name for a in actions], errors, warnings)
