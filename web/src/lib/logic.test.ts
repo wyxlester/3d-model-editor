@@ -6,6 +6,11 @@ import { blenderToGltf, cameraFor, gltfToBlender, jointAxisGltf } from './frames
 import { assetLabel, clothesSlot, mergePatch, toggleIn } from './spec';
 import { targetFor } from './routing';
 import { fileType, refuse, sizeText } from './attachments';
+import {
+  boxText, boxToPercent, clampPan, countLine, coverageSummary, filterPhotos, fitSize, hostOf, photoIdsIn, photoStatus, provenanceRows,
+  safeHref, shortHash, sizeText as photoSize, statusOptions, viewOptions, zoomAt,
+} from './photos';
+import type { ResearchPhoto } from '../types';
 
 const part = (path: string, parent: string | null, extra: Partial<Part> = {}): Part => ({
   path, label: '', parent, joint: null, station: null,
@@ -672,5 +677,134 @@ describe('finding ships and crew', () => {
     expect(isFiltered(DEFAULT_FILTER)).toBe(false);
     expect(isFiltered({ ...DEFAULT_FILTER, sort: 'name', group: true })).toBe(false); // sorting and grouping hide nothing
     expect(isFiltered(f)).toBe(true);
+  });
+});
+
+describe('research photographs (CONTRACT §12)', () => {
+  const ph = (id: string, views: string[], status?: string, extra: Partial<ResearchPhoto> = {}): ResearchPhoto => ({ id, title: id, views, status, ...extra });
+  const photos = [
+    ph('P01', ['port', 'bow', 'details'], 'baseline'),
+    ph('P02', ['Starboard'], 'comparison'),
+    ph('P03', ['top'], 'excluded'),
+    ph('P04', ['interior', 'helm'], undefined),
+  ];
+
+  it('reads photo ids out of free coverage text, once each, in order', () => {
+    expect(photoIdsIn('P04 / P05 elevated; P04 again, not P1x or XP06')).toEqual(['P04', 'P05']);
+    expect(photoIdsIn(null)).toEqual([]);
+  });
+  it('uses the stated coverage: null, empty and "none" are missing; ids link only to photos that exist', () => {
+    const { cells, note, stated } = coverageSummary({ port: 'P01, P09', starboard: null, bow: 'None found', stern: '  ', top: 'P03 elevated only', note: ' No true overhead. ' }, photos);
+    const by = Object.fromEntries(cells.map((c) => [c.view, c]));
+    expect(stated).toBe(true);
+    expect(cells.map((c) => c.view)).toEqual(['port', 'starboard', 'bow', 'stern', 'top', 'details']);
+    expect(by.port).toMatchObject({ ids: ['P01'], text: 'P01, P09', missing: false });
+    expect(by.starboard).toMatchObject({ missing: true, text: 'missing' });
+    expect(by.bow.missing).toBe(true);
+    expect(by.stern.missing).toBe(true);
+    expect(by.details.missing).toBe(true); // absent key
+    expect(by.top).toMatchObject({ ids: ['P03'], missing: false });
+    expect(note).toBe('No true overhead.');
+  });
+  it('works coverage out from the photos when the research states none, ignoring excluded photos', () => {
+    const { cells, stated, note } = coverageSummary(undefined, photos);
+    const by = Object.fromEntries(cells.map((c) => [c.view, c]));
+    expect(stated).toBe(false);
+    expect(note).toBeNull();
+    expect(by.port.ids).toEqual(['P01']);
+    expect(by.starboard.ids).toEqual(['P02']); // case-insensitive
+    expect(by.top).toMatchObject({ ids: [], missing: true }); // P03 is excluded
+    expect(by.stern.missing).toBe(true);
+  });
+  it('filters by view and by status, keeping each photo\'s index in the research', () => {
+    expect(filterPhotos(photos, 'all', 'all').map((x) => x.index)).toEqual([0, 1, 2, 3]);
+    expect(filterPhotos(photos, 'starboard', 'all').map((x) => x.photo.id)).toEqual(['P02']);
+    expect(filterPhotos(photos, 'all', 'excluded').map((x) => x.index)).toEqual([2]);
+    expect(filterPhotos(photos, 'port', 'comparison')).toEqual([]);
+    expect(photoStatus({ status: ' Baseline ' })).toBe('baseline');
+    expect(photoStatus({ status: 'maybe' })).toBe('unstated');
+  });
+  it('offers every coverage view and interior, then extra views the photos use, with counts', () => {
+    const v = viewOptions(photos);
+    expect(v.map((o) => o.key)).toEqual(['all', 'port', 'starboard', 'bow', 'stern', 'top', 'details', 'interior', 'helm']);
+    expect(v.find((o) => o.key === 'all')!.count).toBe(4);
+    expect(v.find((o) => o.key === 'stern')!.count).toBe(0);
+    expect(v.find((o) => o.key === 'helm')!.label).toBe('Helm');
+    expect(statusOptions(photos).map((o) => o.count)).toEqual([4, 1, 1, 1]);
+  });
+  it('states the distinct-exposure count, and says so when the research did not count', () => {
+    expect(countLine(21, 'SHA-256 plus visual comparison.', 21).count).toBe('21 distinct photographs');
+    expect(countLine(2, '', 3)).toEqual({ count: '2 distinct photographs · 3 records listed', method: 'The research does not say how the photographs were counted.' });
+    expect(countLine(1, 'x', 1).count).toBe('1 distinct photograph');
+    expect(countLine(undefined, undefined, 3).count).toBe('3 photographs listed · not counted for distinct exposures');
+  });
+});
+
+describe('photo provenance wording', () => {
+  it('links only http(s) URLs, because an AI wrote them', () => {
+    expect(safeHref('https://example.org/a')).toBe('https://example.org/a');
+    expect(safeHref('javascript:alert(1)')).toBeNull();
+    expect(safeHref('data:image/png;base64,xx')).toBeNull();
+    expect(safeHref('//evil.example/x')).toBeNull();
+    expect(hostOf('https://www.police.gov.sg/x?y')).toBe('police.gov.sg');
+    expect(hostOf('ftp://x')).toBe('');
+  });
+  it('shortens a SHA-256 and sizes, or says not recorded', () => {
+    expect(shortHash('4AA712403560CF7C70F4757F88337B48')).toBe('4aa712403560…');
+    expect(shortHash('')).toBe('not recorded');
+    expect(shortHash('not-a-hash')).toBe('not recorded');
+    expect(photoSize(1920, 1280)).toBe('1920 × 1280 px');
+    expect(photoSize(0, 1280)).toBe('not recorded');
+  });
+  it('lists the provenance in order, flags what is missing, and never links a non-web source', () => {
+    const rows = provenanceRows({ id: 'P01', title: 't', vessel: 'PC 303', views: ['port', 'bow'], status: 'comparison', source: 'https://www.defencepioneer.sg/a', image_url: 'javascript:x', sha256: 'ab'.repeat(32), width: 10, height: 20 });
+    expect(rows.map((r) => r.label)).toEqual(['Status', 'Vessel', 'Views', 'Credit', 'Date', 'Source', 'Image link', 'Size', 'SHA-256', 'Accessed', 'Rights', 'Modelling use', 'Observation']);
+    const by = Object.fromEntries(rows.map((r) => [r.label, r]));
+    expect(by.Status.value).toBe('Comparison');
+    expect(by.Views.value).toBe('Port, Bow');
+    expect(by.Credit).toMatchObject({ value: 'not recorded', missing: true });
+    expect(by.Source).toMatchObject({ value: 'defencepioneer.sg', href: 'https://www.defencepioneer.sg/a', missing: false });
+    expect(by['Image link'].href).toBeUndefined();
+    expect(by['SHA-256'].value).toBe('abababababab…');
+    expect(by.Size.value).toBe('10 × 20 px');
+    expect(by.Accessed.missing).toBe(true);
+  });
+});
+
+describe('close-up outline and inspector zoom', () => {
+  it('turns a pixel box into percentages of the photo', () => {
+    expect(boxToPercent([480, 320, 960, 640], 1920, 1280)).toEqual({ left: 25, top: 25, width: 50, height: 50 });
+    expect(boxToPercent([0, 0, 1, 3], 3, 9)).toEqual({ left: 0, top: 0, width: 33.33, height: 33.33 });
+  });
+  it('clips a box that runs off the photo, and refuses one that is unusable', () => {
+    expect(boxToPercent([1800, -100, 400, 300], 2000, 1000)).toEqual({ left: 90, top: 0, width: 10, height: 20 });
+    expect(boxToPercent([-200, 500, 400, 600], 2000, 1000)).toEqual({ left: 0, top: 50, width: 10, height: 50 });
+    expect(boxToPercent([3000, 0, 10, 10], 2000, 1000)).toBeNull();
+    expect(boxToPercent([0, 0, 0, 10], 2000, 1000)).toBeNull();
+    expect(boxToPercent([0, 0, 10], 2000, 1000)).toBeNull();
+    expect(boxToPercent([0, 0, 10, 10], undefined, 1000)).toBeNull();
+    expect(boxText([10.4, 20, 300, 200])).toBe('300 × 200 px at (10, 20)');
+  });
+  it('fits an image to the viewport keeping its proportions', () => {
+    expect(fitSize({ w: 2000, h: 1000 }, { w: 1000, h: 1000 })).toEqual({ w: 1000, h: 500 });
+    expect(fitSize({ w: 0, h: 1 }, { w: 10, h: 10 })).toEqual({ w: 0, h: 0 });
+  });
+  it('zooms about the pointer: the image point under it stays put', () => {
+    const base = { w: 1000, h: 500 }, view = { w: 1000, h: 500 };
+    const r = zoomAt(1, { x: 0, y: 0 }, 2, { x: 250, y: 0 }, base, view);
+    expect(r.zoom).toBe(2);
+    // the point 250 px right of centre was image x = 250; at 2x it must still be under the pointer
+    expect((250 - r.pan.x) / r.zoom).toBe(250 / 1);
+    // from an already-zoomed state too: at 2x, pan 100, zoom 2x again about a point 300 px right
+    const r2 = zoomAt(2, { x: 100, y: 0 }, 2, { x: 300, y: 0 }, { w: 4000, h: 500 }, view);
+    expect(r2.zoom).toBe(4);
+    expect((300 - r2.pan.x) / 4).toBe((300 - 100) / 2);
+    expect(zoomAt(8, { x: 0, y: 0 }, 2, { x: 0, y: 0 }, base, view).zoom).toBe(8);
+    expect(zoomAt(1, { x: 0, y: 0 }, 0.5, { x: 0, y: 0 }, base, view)).toEqual({ zoom: 1, pan: { x: 0, y: 0 } });
+  });
+  it('never drags the image off the viewport, and keeps a fitted image centred', () => {
+    const base = { w: 1000, h: 500 }, view = { w: 1000, h: 600 };
+    expect(clampPan({ x: 900, y: -900 }, 2, base, view)).toEqual({ x: 500, y: -200 });
+    expect(clampPan({ x: 40, y: 40 }, 1, base, view)).toEqual({ x: 0, y: 0 });
   });
 });

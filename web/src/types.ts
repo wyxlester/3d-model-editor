@@ -364,6 +364,13 @@ export type EvidenceStatus =
   | 'Unverified'
   | string;
 
+/** §12 "Photographs and close-ups": how a photo may be used. */
+export type PhotoStatus = 'baseline' | 'comparison' | 'excluded';
+
+/**
+ * §12 `photos[]`. The AI writes the provenance; the server writes `width`, `height`, `sha256`,
+ * `accessed` and `file` when it downloads the image. `file` is the stored copy, served by the app.
+ */
 export interface ResearchPhoto {
   id: string;
   title: string;
@@ -372,18 +379,36 @@ export interface ResearchPhoto {
   credit?: string;
   date?: string;
   observation?: string;
+  /** The page the photo was published on. */
   source?: string;
+  /** The image itself, as published. Never shown directly: only the server's stored `file` is. */
   image_url?: string;
+  status?: PhotoStatus | string;
+  rights?: string;
+  modelling_use?: string;
   width?: number;
   height?: number;
   sha256?: string;
   accessed?: string;
-  rights?: string;
-  parts?: string;
+  file?: string;
 }
 
-/** §12 `me3d.research/1`. Photos, close-ups, coverage and the build plan are canvas sections the
- * contract does not define yet; they render only if the server ever sends them. */
+/** §12 `closeups[]`: a crop the server cut from a stored photo. `box` is [x, y, w, h] in the photo's original pixels. */
+export interface ResearchCloseup {
+  id: string;
+  photo: string;
+  box?: [number, number, number, number];
+  title: string;
+  what_it_shows?: string;
+  claims?: string[];
+  file?: string;
+}
+
+/** §12 `coverage`: which photo ids show each view (free text such as "P01, P03"), null when none does. */
+export type CoverageView = 'port' | 'starboard' | 'bow' | 'stern' | 'top' | 'details';
+export type Coverage = Partial<Record<CoverageView, string | null>> & { note?: string | null };
+
+/** §12 `me3d.research/1`. The build plan is a canvas section the contract does not define yet. */
 export interface Research {
   schema?: 'me3d.research/1' | string;
   subject?: string;
@@ -392,10 +417,13 @@ export interface Research {
   claims?: { claim: string; sources?: string[] | string; status: EvidenceStatus; consequence_for_model?: string }[];
   open_questions?: { question: string; meanwhile?: string }[];
   articulation?: { part: string; motion: string; priority: string }[];
-  // Not in the contract (canvas-only sections):
+  /** Distinct exposures only (crops and republished copies do not count), and how they were counted. */
+  photo_count?: number;
+  count_method?: string;
+  coverage?: Coverage;
   photos?: ResearchPhoto[];
-  coverage?: { view: string; ok: boolean | 'partial'; note: string }[];
-  closeups?: { title: string; photo: string; hull?: string; text: string; image_url?: string }[];
+  closeups?: ResearchCloseup[];
+  // Not in the contract (canvas-only section):
   plan?: { n: string; title: string; what: string; accept: string }[];
   [key: string]: unknown;
 }

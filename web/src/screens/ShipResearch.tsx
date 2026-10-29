@@ -1,6 +1,6 @@
 // Ship workshop, Research mode (canvas: Research.dc.html). Renders project.research in the
-// CONTRACT §12 shape (me3d.research/1). Canvas sections the contract has no field for
-// (photographs, close-ups, build plan) say so instead of showing invented data.
+// CONTRACT §12 shape (me3d.research/1), photographs and close-ups included (ResearchPhotos.tsx).
+// The build plan is a canvas section the contract has no field for; it says so instead of showing invented data.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api, errorText } from '../api';
@@ -10,11 +10,14 @@ import { remember, useJobs, useProject } from '../hooks';
 import { awaitingApproval, buildTabLabel, canApprove, isCustomShip, planNotice, planState, planStatusLabel, summaryLine } from '../lib/designPlan';
 import { partLabel } from '../lib/parts';
 import { paths } from '../lib/routing';
+import { boxText, photoStatus, provenanceRows } from '../lib/photos';
+import { PhotoInspector, type InspectTarget } from '../components/PhotoInspector';
+import { CloseupsTab, PhotosTab } from './ResearchPhotos';
 import type { Attachment, Project, Research } from '../types';
 import type { ResearchStart } from './ProjectPicker';
 
 type Sec = 'summary' | 'photos' | 'platform' | 'closeups' | 'articulation' | 'plan' | 'questions' | 'sources';
-type Sel = { kind: 'claim'; i: number } | { kind: 'source'; i: number } | { kind: 'photo'; i: number } | { kind: 'question'; i: number } | null;
+type Sel = { kind: 'claim'; i: number } | { kind: 'source'; i: number } | { kind: 'photo'; i: number } | { kind: 'closeup'; i: number } | { kind: 'question'; i: number } | null;
 
 const LEGEND = ['Official', 'Photographed', 'Photo reading', 'Inference', 'Comparison only', 'Secondary lead', 'Unverified'];
 const WEAK = (s: string) => /Unverified|Secondary lead|Inference/.test(s);
@@ -37,6 +40,7 @@ export function ShipResearch() {
   const [sel, setSel] = useState<Sel>(null);
   const [excluded, setExcluded] = useState<Record<string, boolean>>({});
   const [planErr, setPlanErr] = useState<string | null>(null);
+  const [inspect, setInspect] = useState<{ target: InspectTarget; order: string[] } | null>(null);
   useEffect(() => { if (id) remember('ship', id); }, [id]);
 
   // A research turn's job: reload when it ends (its result says plan_saved when the plan was redrafted;
@@ -81,6 +85,16 @@ export function ShipResearch() {
 
   const r = project?.research ?? null;
   const custom = isCustomShip(project);
+  const subject = r?.subject || project?.name || 'this vessel';
+  const selPhoto = (pid: string) => { const i = (r?.photos ?? []).findIndex((p) => p.id === pid); if (i >= 0) setSel({ kind: 'photo', i }); };
+  const selCrop = (cid: string) => { const i = (r?.closeups ?? []).findIndex((c) => c.id === cid); if (i >= 0) setSel({ kind: 'closeup', i }); };
+  const selectedId = sel?.kind === 'photo' ? r?.photos?.[sel.i]?.id ?? null : sel?.kind === 'closeup' ? r?.closeups?.[sel.i]?.id ?? null : null;
+  // Moving around inside the inspector moves the right-hand panel with it.
+  const openInspect = (target: InspectTarget, order: string[]) => {
+    if (target.kind === 'photo') selPhoto(target.id); else selCrop(target.id);
+    setInspect({ target, order });
+  };
+  const inspectFromPanel = (target: InspectTarget) => openInspect(target, target.kind === 'photo' ? (r?.photos ?? []).map((p) => p.id) : (r?.closeups ?? []).map((c) => c.id));
   return (
     <>
       <TopBar title={project?.name} back="ship">
@@ -124,17 +138,9 @@ export function ShipResearch() {
             <>
               <SectionNav r={r} sec={sec} setSec={(s) => { setSec(s); setSel(null); }} />
               {sec === 'summary' && <Summary r={r} />}
-              {sec === 'photos' && <Photos r={r} sel={sel} setSel={setSel} />}
+              {sec === 'photos' && <PhotosTab r={r} subject={subject} selected={sel?.kind === 'photo' ? selectedId : null} onSelect={selPhoto} onInspect={openInspect} onAsk={(m) => void ask(m)} busy={busy} />}
               {sec === 'platform' && <Claims r={r} sel={sel} setSel={setSel} />}
-              {sec === 'closeups' && <NotInContract what="Close-ups (crops of the recorded photographs)" have={(r.closeups ?? []).length > 0}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
-                  {(r.closeups ?? []).map((c, i) => (
-                    <div key={i} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <span style={{ fontWeight: 500 }}>{c.title}</span><span className="muted">{c.text}</span><span className="faint" style={{ fontSize: 12 }}>{c.photo}{c.hull ? ` · ${c.hull}` : ''}</span>
-                    </div>
-                  ))}
-                </div>
-              </NotInContract>}
+              {sec === 'closeups' && <CloseupsTab r={r} subject={subject} selected={sel?.kind === 'closeup' ? selectedId : null} onSelect={selCrop} onInspect={openInspect} onAsk={(m) => void ask(m)} busy={busy} />}
               {sec === 'articulation' && <Articulation r={r} id={id!} />}
               {sec === 'plan' && <NotInContract what="The build plan with acceptance checks" have={(r.plan ?? []).length > 0}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
@@ -155,16 +161,19 @@ export function ShipResearch() {
               }} />}
             </>
           )}
+          {r && inspect && <PhotoInspector r={r} target={inspect.target} order={inspect.order}
+            onOpen={(t) => openInspect(t, t.kind === inspect.target.kind ? inspect.order : t.kind === 'photo' ? (r.photos ?? []).map((p) => p.id) : (r.closeups ?? []).map((c) => c.id))}
+            onClose={() => setInspect(null)} />}
         </main>
 
         {custom && project ? (
           <aside className="side right scroll" style={{ width: 400, padding: 16, gap: 12 }}>
             <PlanPanel project={project} busy={anyWork} error={planErr} onApprove={() => void approve()} onAsk={(m) => void ask(m)}
-              detail={r && sel ? <DetailPanel r={r} sel={sel} onAsk={ask} busy={busy} /> : null} />
+              detail={r && sel ? <DetailPanel r={r} sel={sel} onAsk={ask} busy={busy} onInspect={inspectFromPanel} /> : null} />
           </aside>
         ) : (
           <aside className="side right scroll" style={{ width: 300, padding: 16, gap: 14 }}>
-            {r ? <DetailPanel r={r} sel={sel} onAsk={ask} busy={busy} /> : <span className="faint">Details of a selected claim, source or question show here.</span>}
+            {r ? <DetailPanel r={r} sel={sel} onAsk={ask} busy={busy} onInspect={inspectFromPanel} /> : <span className="faint">Details of a selected claim, photograph, close-up or question show here.</span>}
           </aside>
         )}
       </div>
@@ -269,7 +278,7 @@ function SectionNav({ r, sec, setSec }: { r: Research; sec: Sec; setSec: (s: Sec
   const weak = (r.claims ?? []).filter((c) => WEAK(c.status)).length;
   const secs: [Sec, string, string, string, string][] = [
     ['summary', '00', 'Summary', '', ''],
-    ['photos', '01', 'Photographs', r.photos?.length ? String(r.photos.length) : '', 'var(--text-2)'],
+    ['photos', '01', 'Photographs', r.photos?.length ? String(r.photo_count ?? r.photos.length) : '', 'var(--text-2)'],
     ['platform', '02', 'Platform evidence', weak ? `${weak} open` : String(r.claims?.length ?? 0), weak ? 'var(--red-text)' : 'var(--text-2)'],
     ['closeups', '03', 'Close-ups', r.closeups?.length ? String(r.closeups.length) : '', 'var(--text-2)'],
     ['articulation', '04', 'Articulation', String(r.articulation?.length ?? 0), 'var(--text-2)'],
@@ -336,32 +345,6 @@ function NotInContract({ what, have, children }: { what: string; have: boolean; 
   return (
     <div className="card" style={{ marginTop: 16, color: 'var(--text-2)', lineHeight: 1.6 }}>
       {what}: the research format (me3d.research/1) has no place for this yet, so there is nothing to show. The canvas has this section; it needs a contract change first.
-    </div>
-  );
-}
-
-function Photos({ r, sel, setSel }: { r: Research; sel: Sel; setSel: (s: Sel) => void }) {
-  const [filter, setFilter] = useState('All');
-  const photos = r.photos ?? [];
-  if (!photos.length) return <NotInContract what="Photographs with provenance" have={false}>{null}</NotInContract>;
-  const views = ['All', 'Bow', 'Stern', 'Port', 'Starboard', 'Top', 'Interior', 'Details'];
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <Head n="01" eyebrow="Reference atlas" title="Photographs you can inspect" sub="Each entry records the original source, credit, date, hull number and what it is useful for. Click one to see its record." />
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {views.map((v) => <button key={v} className={`btn pill ${filter === v ? 'selected' : 'muted'}`} onClick={() => setFilter(v)}>{v}</button>)}
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 10 }}>
-        {photos.map((p, i) => ({ p, i })).filter(({ p }) => filter === 'All' || (p.views ?? []).some((v) => v.toLowerCase() === filter.toLowerCase())).map(({ p, i }) => {
-          const on = sel?.kind === 'photo' && sel.i === i;
-          return (
-            <button key={p.id} onClick={() => setSel({ kind: 'photo', i })} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 8, borderRadius: 8, color: 'var(--text)', border: on ? '2px solid var(--accent)' : '1px solid var(--border)', background: on ? 'var(--accent-bg)' : 'var(--panel-2)' }}>
-              <span className="mono faint" style={{ height: 74, borderRadius: 6, background: 'var(--bubble)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, backgroundImage: p.image_url ? `url(${p.image_url})` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }}>{p.image_url ? '' : p.id}</span>
-              <span style={{ fontSize: 12, lineHeight: 1.35, textAlign: 'left' }}>{p.title}</span>
-            </button>
-          );
-        })}
-      </div>
     </div>
   );
 }
@@ -451,10 +434,11 @@ function Sources({ r, excluded, onExclude }: { r: Research; excluded: Record<str
   );
 }
 
-function DetailPanel({ r, sel, onAsk, busy }: { r: Research; sel: Sel; onAsk: (m: string) => void; busy: boolean }) {
+function DetailPanel({ r, sel, onAsk, busy, onInspect }: { r: Research; sel: Sel; onAsk: (m: string) => void; busy: boolean; onInspect: (t: InspectTarget) => void }) {
   const [value, setValue] = useState('');
-  let kind = 'Selected finding', title = 'Pick a claim, source or question', rows: [string, string][] = [], actions: [string, string][] = [];
+  let kind = 'Selected finding', title = 'Pick a claim, photograph, close-up or question', rows: [string, string][] = [], actions: [string, string][] = [];
   let answerFor: string | null = null;
+  let inspect: { label: string; t: InspectTarget }[] = [];
   if (sel?.kind === 'claim') {
     const c = r.claims?.[sel.i];
     if (c) {
@@ -466,11 +450,23 @@ function DetailPanel({ r, sel, onAsk, busy }: { r: Research; sel: Sel; onAsk: (m
   } else if (sel?.kind === 'photo') {
     const p = r.photos?.[sel.i];
     if (p) {
-      kind = 'Photo record';
+      kind = 'Photograph';
       title = `${p.id} · ${p.title}`;
-      rows = [['Hull', p.vessel ?? ''], ['Views', (p.views ?? []).join(', ')], ['Credit', p.credit ?? ''], ['Date', p.date ?? ''],
-        ['Resolution', p.width ? `${p.width} × ${p.height} px` : ''], ['Useful for', p.observation ?? ''], ['Accessed', p.accessed ?? ''], ['SHA-256', p.sha256 ?? 'not recorded'], ['Rights', p.rights ?? '']];
-      actions = [['Mark as misleading', `Photo ${p.id} is misleading for this hull: recheck what depends on it.`], ['Find a better photo', `Find a better photo than ${p.id} for: ${p.observation ?? p.title}`]];
+      rows = provenanceRows(p).filter((row) => !['Source', 'Image link', 'Observation'].includes(row.label)).map((row) => [row.label, row.value]);
+      if (p.observation) rows.push(['Observation', p.observation]);
+      inspect = [{ label: 'Inspect', t: { kind: 'photo', id: p.id } }];
+      actions = photoStatus(p) === 'excluded'
+        ? [['Use it again', `Use photo ${p.id} (${p.title}) again, and tell me what it changes.`]]
+        : [['Mark as misleading', `Photo ${p.id} is misleading for this vessel: mark it excluded and recheck what depends on it.`], ['Find a better photo', `Find a better photo than ${p.id} for: ${p.modelling_use || p.observation || p.title}`]];
+    }
+  } else if (sel?.kind === 'closeup') {
+    const c = r.closeups?.[sel.i];
+    if (c) {
+      kind = 'Close-up';
+      title = `${c.id} · ${c.title}`;
+      rows = [['From', c.photo], ['Shows', c.what_it_shows ?? ''], ['Supports', (c.claims ?? []).join('; ')], ['Crop', boxText(c.box)]];
+      inspect = [{ label: 'Inspect', t: { kind: 'closeup', id: c.id } }, { label: `Show on ${c.photo}`, t: { kind: 'photo', id: c.photo, focus: c.id } }];
+      actions = [['Recrop', `Recrop close-up ${c.id} (${c.title}) from ${c.photo}: the box misses part of it.`], ['Find a sharper view', `Find a sharper photo of: ${c.title}`]];
     }
   } else if (sel?.kind === 'question') {
     const q = r.open_questions?.[sel.i];
@@ -480,6 +476,7 @@ function DetailPanel({ r, sel, onAsk, busy }: { r: Research; sel: Sel; onAsk: (m
     <>
       <span className="faint" style={{ fontSize: 12 }}>{kind}</span>
       <span style={{ fontSize: 16, fontWeight: 500, lineHeight: 1.4 }}>{title}</span>
+      {inspect.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>{inspect.map((x) => <button key={x.label} className="btn sm" onClick={() => onInspect(x.t)}>{x.label}</button>)}</div>}
       {rows.length > 0 && <div className="kv" style={{ gridTemplateColumns: '96px minmax(0, 1fr)', lineHeight: 1.45 }}>{rows.flatMap(([k, v]) => [<span key={k}>{k}</span>, <span key={k + 'v'}>{v || '—'}</span>])}</div>}
       {answerFor && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
