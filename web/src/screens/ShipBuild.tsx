@@ -7,6 +7,8 @@ import { api, errorText, modelUrl } from '../api';
 import { AiWorking, ChatPanel, ErrorNote, JobLines, PRIORITY, TopBar, useCarried } from '../components/common';
 import { DerivedFromLink, useVariantDialog } from '../components/VariantDialog';
 import { OtherWork, useProjectWork } from '../components/JobCenter';
+import { useWatchedJobs } from '../components/ActivityFeed';
+import { BuildLive } from '../components/BuildLive';
 import { remember, useJobs, useLoad, useProject } from '../hooks';
 import { awaitingApproval, buildTabLabel } from '../lib/designPlan';
 import { blenderToGltf, type ViewName } from '../lib/frames';
@@ -93,6 +95,19 @@ export function ShipBuild() {
   const afterJob = async () => { const p = await reload(); if (p) setProject(p); };
   // Work on this ship carries on while the user is on another model; when it finishes, show the result.
   const work = useProjectWork(id, () => void afterJob(), jobs);
+  // The approved design plan being built: followed step by step over the model, which is re-read every
+  // few seconds while it runs so each version shows as it lands (unless an older one is picked).
+  const live = useWatchedJobs(reload);
+  const planJobs = work.active.filter((j) => j.kind === 'build' && j.label.endsWith('from the approved plan'));
+  const planKey = planJobs.map((j) => j.id).join(',');
+  useEffect(() => {
+    planJobs.forEach((j) => live.watch(j.id, j.label));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planKey, live.watch]);
+  const [closedLive, setClosedLive] = useState<string[]>([]);
+  const liveSection = [...live.sections].reverse().find((s) => !closedLive.includes(s.jobId)) ?? null;
+  const liveSince = Date.parse(work.active.find((j) => j.id === liveSection?.jobId)?.created ?? '');
+  const otherWork = work.others.filter((j) => !live.sections.some((s) => s.jobId === j.id));
 
   const closeThread = () => { setSelPin(null); setShownPart(null); };
   /** Open an issue's thread because the user clicked it: its part lights up. */
@@ -245,6 +260,11 @@ export function ShipBuild() {
             selectedPinId={selPin?.id ?? null}
             onPinClick={(p, x, y) => { const l = local(x, y); openPin(p, l.x, l.y); }}
             overlay={<>
+              {liveSection && (
+                <BuildLive section={liveSection} since={Number.isNaN(liveSince) ? undefined : liveSince} shown={shownVersion}
+                  onShow={(n) => { setViewing(n === current ? null : n); setDraft(null); }}
+                  onClose={() => setClosedLive((c) => [...c, liveSection.jobId])} />
+              )}
               {pin && project && selPin && (
                 <Thread project={project} pin={pin} n={pins.indexOf(pin) + 1} at={selPin} stage={stageRef.current} shown={shownVersion}
                   busy={busy} error={actionErr} working={aiWorking(pin)} since={aiPins[pin.id]}
@@ -265,10 +285,10 @@ export function ShipBuild() {
               )}
             </>}
           />
-          <div style={{ padding: jobs.length || work.others.length || error ? '8px 16px 0' : 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ padding: jobs.length || otherWork.length || error ? '8px 16px 0' : 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
             <ErrorNote error={error} retry={reload} />
             <JobLines jobs={jobs} dismiss={dismiss} />
-            <OtherWork jobs={work.others} />
+            <OtherWork jobs={otherWork} />
           </div>
           <div className="statusbar">
             {project && !project.model_url && <span className="faint">No build yet</span>}

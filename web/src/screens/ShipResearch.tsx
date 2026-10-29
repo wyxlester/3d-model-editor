@@ -92,17 +92,16 @@ export function ShipResearch() {
   const approve = async () => {
     if (!id) return;
     setPlanErr(null);
-    let job: { job_id: string };
     try {
-      job = await api.approvePlan(id);
+      await api.approvePlan(id);
     } catch (e) {
       setPlanErr(errorText(e)); // a 409 is the server's sentence, verbatim
       void reload();
       return;
     }
-    void reload();
-    await run('Building the approved design plan', () => Promise.resolve(job),
-      () => { nav(paths.shipBuild(id)); }, () => void reload());
+    // Watch it being built: Build follows the job, showing each version as it lands (CONTRACT §12).
+    work.refresh();
+    nav(paths.shipBuild(id));
   };
 
   const r = project?.research ?? null;

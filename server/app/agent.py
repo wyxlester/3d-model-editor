@@ -1260,9 +1260,13 @@ def research_media_context(project: dict) -> str:
 def plan_build_prompt(plan: dict) -> str:
     """The build-mode turn after an approved plan has been built: add its details."""
     summary = "\n".join(f"- {s}" for s in plan.get("summary") or [])
+    # The user watches this build on the Build screen, each version appearing as it lands, so the details
+    # go on a group at a time rather than all at once at the end.
     return ("The user approved this design plan and the hull and superstructure from it are now built and on "
             f"screen:\n{summary}\n\nAdd every detail the plan lists that the build does not have yet (fly-bridge "
-            "furniture, rails, davits, antennas and so on) as custom ops, then rebuild and fix any errors. Do not "
+            "furniture, rails, davits, antennas and so on) as custom ops. The user is watching the model take shape, "
+            "so work in small groups of related details (the deck fittings, then the rails, then the masts and "
+            "antennas, and so on) and rebuild after each group, fixing any errors before the next. Do not "
             "change the size, hull form or tiers: they are what the user approved. Reply with what you added.")
 
 

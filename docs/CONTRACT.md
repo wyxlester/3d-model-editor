@@ -320,7 +320,8 @@ Every body is JSON. Long work returns `{"job_id"}`; poll `GET /api/jobs/{id}`, w
 red", "Comment on Roof › Searchlight").
 Log lines that start with `• ` are milestones written for people ("• Building version 2 in
 Blender: …", "• AI: …", "• Changing hull color"); the web app shows them as the progress feed.
-Every other line is raw detail.
+Every other line is raw detail. A job keeps its last 400 lines; past that the oldest raw lines go
+first, so the `• ` lines of a long job (a plan build's versions) stay.
 
 **Several models at once.** Jobs on different projects run side by side (Blender itself still
 builds one model at a time). Jobs on the same project run one after another, in the order sent,
@@ -581,3 +582,13 @@ values, the research photographs (not those marked excluded), every source with 
 ones marked "Excluded by you"), every claim (those resting only on crossed-out sources marked "Not
 used"), the open questions, what moves, and the record: the research's versions and every search
 and page. `export.json` is the research record itself.
+
+### Watching the build
+
+Research shows what the AI is doing while a research turn runs: the step under way, a tally of
+searches, pages read and photographs kept, and every step so far, read from the job's `• ` lines.
+Approving the design plan opens Build at once. The approved plan's hull and superstructure are built
+first; then the AI adds the plan's details in small groups of related details, rebuilding after
+each, so every group is its own version. Build shows the job over the model: the step under way,
+every version built so far (any of them can be looked at), and every step, and the model follows
+the newest version as it lands.

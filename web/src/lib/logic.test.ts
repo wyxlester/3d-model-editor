@@ -944,3 +944,36 @@ describe('research progress', () => {
     expect(tally(p)).toBe('2 searches · 1 page read');
   });
 });
+
+import { buildHeadline, buildProgress, shortStep, versionText } from './buildProgress';
+
+describe('build progress', () => {
+  const log = [
+    '• Building the approved design plan', '• Building version 2 in Blender: Built from the approved design plan',
+    'blender: ok', '• Version 2 built', "• Adding the plan's details", '• AI: Rails first.', '• Adding port rail',
+    '• Adding starboard rail', '• Building version 3 in Blender: Added port rail, starboard rail',
+    '• Version 3 failed to build: rail clips the deck', '• Adjusting Rail Port', '• Building version 4 in Blender: Moved the port rail',
+  ];
+  it('lists every version built, with its summary and whether it built', () => {
+    const p = buildProgress(log);
+    expect(p.versions).toEqual([
+      { n: 2, ok: true, summary: 'Built from the approved design plan', added: [] },
+      { n: 3, ok: false, summary: 'Added port rail, starboard rail', added: ['Adding port rail', 'Adding starboard rail'] },
+    ]);
+    expect(p.details).toBe(3);
+    expect(p.versions.map(versionText)).toEqual(['Built from the approved design plan', 'Adding port rail; Adding starboard rail']);
+    const done = buildProgress([...log, '• Version 4 built']);
+    expect(done.versions[2].added).toEqual(['Adjusting Rail Port']);
+  });
+  it('cuts a page-long failure down for the list', () => {
+    expect(shortStep('x'.repeat(500)).length).toBe(160);
+    expect(shortStep('Version 3 built')).toBe('Version 3 built');
+  });
+  it('says what is under way, and what came of it when done', () => {
+    expect(buildHeadline(buildProgress(log), true)).toBe('Building version 4 in Blender');
+    expect(buildHeadline(buildProgress(log.slice(0, 4)), true)).toBe('Version 2 built; the AI is choosing what to add next');
+    expect(buildHeadline(buildProgress(log.slice(0, 10)), true)).toBe('Version 3 did not build; the AI is fixing it');
+    expect(buildHeadline(buildProgress([...log, '• Version 4 built']), false)).toBe('Finished: version 4 is the ship as planned');
+    expect(buildHeadline(buildProgress([]), true)).toBe('Starting the build');
+  });
+});
