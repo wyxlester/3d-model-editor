@@ -349,6 +349,7 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | POST `/api/projects/{id}/design-plan/approve` | | `{"job_id"}`: builds a `custom` ship from its draft plan; 409 with a sentence when there is no current draft |
 | PATCH `/api/projects/{id}/design-plan` | `{"params":{param: value or null}}` | `{"project"}`: the user's own plan values (§12, Review); 409 unless the plan is a draft |
 | PATCH `/api/projects/{id}/research/excluded` | `{"excluded_sources":[source id]}` | `{"project"}`: sources the user crossed out (§12, Review) |
+| POST `/api/projects/{id}/research/apply` | | `{"job_id"}`: the AI brings a catalog ship's model in line with its research (§12, Updating the model from the research); 409 with a sentence for a custom ship, a ship with no research or no model yet |
 | GET `/api/projects/{id}/research/history` | | `[{"n","at","subject","verdict","sources","claims"}]` |
 | GET `/api/projects/{id}/research/history/{n}` | | `{"n","at","research"}` |
 | GET `/api/projects/{id}/materials` | | `[{"id","kind":"search\|page","title","at","chars","source"}]` |
@@ -604,3 +605,18 @@ first; then the AI adds the plan's details in small groups of related details, r
 each, so every group is its own version. Build shows the job over the model: the step under way,
 every version built so far (any of them can be looked at), and every step, and the model follows
 the newest version as it lands.
+
+### Updating the model from the research
+
+Lester, 29 Oct, on Harmony of the Seas: "do a photo research ... and update the model accordingly".
+Build's AI reads the research itself: `get_research` gives the verdict, every claim with what it
+changes in the model (`not_used` when it rests only on crossed-out sources), every photograph's
+observation and modelling use, every close-up and the open questions; `view_photo` shows it a stored
+photograph or close-up. Photographs are the source of truth. `get_project` is an overview small enough
+to read (custom ops without their code, one line per part); `get_custom_op` and `get_parts` give the
+detail. A tool's answer is kept under about 24,000 characters, cutting the longest list and saying how
+to read the rest. On a built catalog ship with research, Research offers "Update the model from the
+research" (`POST .../research/apply`): the AI compares the model with the research and changes what
+differs a group at a time, a version per group, watched on Build as above. When it finishes,
+`research_applied_rev` is the research revision it read; until the research changes again the button
+is no longer the main action. A custom ship follows its design plan instead.

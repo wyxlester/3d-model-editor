@@ -12,7 +12,7 @@ import { useWatchedJobs } from '../components/ActivityFeed';
 import { hexToLinear } from '../lib/describe';
 import { claimUsed, linearToHex, planRows, type PlanRow } from '../lib/planValues';
 import { remember, useJobs, useProject } from '../hooks';
-import { awaitingApproval, buildTabLabel, canApprove, isCustomShip, planNotice, planState, planStatusLabel, summaryLine } from '../lib/designPlan';
+import { awaitingApproval, buildTabLabel, canApprove, isCustomShip, planNotice, planState, planStatusLabel, researchUpdate, summaryLine } from '../lib/designPlan';
 import { partLabel } from '../lib/parts';
 import { paths } from '../lib/routing';
 import { boxText, photoStatus, provenanceRows } from '../lib/photos';
@@ -104,6 +104,22 @@ export function ShipResearch() {
     nav(paths.shipBuild(id));
   };
 
+  // A catalog ship: bring its model in line with the research, watched on Build like a plan build.
+  const [applyErr, setApplyErr] = useState<string | null>(null);
+  const applyResearch = async () => {
+    if (!id) return;
+    setApplyErr(null);
+    try {
+      await api.applyResearch(id);
+    } catch (e) {
+      setApplyErr(errorText(e));
+      return;
+    }
+    work.refresh();
+    nav(paths.shipBuild(id));
+  };
+  const update = researchUpdate(project);
+
   const r = project?.research ?? null;
   const custom = isCustomShip(project);
   const subject = r?.subject || project?.name || 'this vessel';
@@ -127,12 +143,18 @@ export function ShipResearch() {
             <span className="chip amber" style={{ fontSize: 12, padding: '4px 10px' }}>{(r.claims ?? []).filter((c) => /Unverified/.test(c.status)).length} unverified claims</span>
           )}
           {r && id && <>
-            <span className="faint" style={{ fontSize: 12 }}>Report:</span>
-            <a className="btn sm" href={researchExportUrl(id, 'pdf')} download>PDF</a>
-            <a className="btn sm" href={researchExportUrl(id, 'pptx')} download>PowerPoint</a>
-            <a className="btn sm" href={researchExportUrl(id, 'json')} download>JSON</a>
+            <a className="btn sm" href={researchExportUrl(id, 'pdf')} download title="Download the research report as a PDF">PDF</a>
+            <a className="btn sm" href={researchExportUrl(id, 'pptx')} download title="Download the research report as a PowerPoint deck">PowerPoint</a>
+            <a className="btn sm" href={researchExportUrl(id, 'json')} download title="Download the research record as JSON">JSON</a>
           </>}
-          {!awaitingApproval(project) && <Link to={paths.shipBuild(id)} className="btn primary" style={{ height: 34, borderRadius: 8 }}>{custom ? 'Open Build' : 'Start building'}</Link>}
+          {update !== 'none' && (
+            <button className={`btn ${update === 'behind' ? 'primary' : ''}`} style={{ height: 34, borderRadius: 8 }} disabled={anyWork}
+              title={update === 'behind' ? 'Update the model from the research: it has changed since the model was last updated from it. The AI reads it, looks at the photographs and changes the model; you watch it on Build.'
+                : 'Update the model from the research again: the model was last updated from this research, so the AI checks it against the research once more.'}
+              onClick={() => void applyResearch()}>Update the model</button>
+          )}
+          {/* With the update offered, Build is reached from the Research | Build switch: the bar has no room for both. */}
+          {!awaitingApproval(project) && update === 'none' && <Link to={paths.shipBuild(id)} className="btn primary" style={{ height: 34, borderRadius: 8 }}>{custom ? 'Open Build' : 'Start building'}</Link>}
         </div>
       </TopBar>
       <div className="workspace">
@@ -151,6 +173,7 @@ export function ShipResearch() {
             footer={<>
               {start?.note && <span className="warn" style={{ fontSize: 12 }}>{start.note}</span>}
               <ErrorNote error={start?.startError ?? null} />
+              <ErrorNote error={applyErr} />
               <JobLines jobs={jobs} dismiss={dismiss} />
               <OtherWork jobs={work.others} />
             </>}

@@ -526,7 +526,7 @@ describe('crew modules', () => {
   });
 });
 
-import { awaitingApproval, briefFromCarried, buildTabLabel, canApprove, httpErrorText, planNotice, planState, planStatusLabel, summaryLine } from './designPlan';
+import { awaitingApproval, briefFromCarried, buildTabLabel, canApprove, httpErrorText, planNotice, planState, planStatusLabel, researchUpdate, summaryLine } from './designPlan';
 import type { Attachment, DesignPlan, Message } from '../types';
 
 describe('design plan (ships of any type)', () => {
@@ -997,7 +997,7 @@ describe('research progress', () => {
   });
 });
 
-import { buildHeadline, buildProgress, shortStep, versionText } from './buildProgress';
+import { buildHeadline, buildProgress, liveBuildKind, shortStep, versionText } from './buildProgress';
 
 describe('build progress', () => {
   const log = [
@@ -1017,6 +1017,12 @@ describe('build progress', () => {
     const done = buildProgress([...log, '• Version 4 built']);
     expect(done.versions[2].added).toEqual(['Adjusting Rail Port']);
   });
+  it('follows the plan build and the update from the research, nothing else', () => {
+    expect(liveBuildKind({ kind: 'build', label: 'Building Bumboat from the approved plan' })).toBe('plan');
+    expect(liveBuildKind({ kind: 'build', label: 'Updating Harmony of the Seas from the research' })).toBe('research');
+    expect(liveBuildKind({ kind: 'chat', label: 'Chat: update the model from the research' })).toBeNull();
+    expect(liveBuildKind({ kind: 'build', label: 'First build of Bumboat' })).toBeNull();
+  });
   it('cuts a page-long failure down for the list', () => {
     expect(shortStep('x'.repeat(500)).length).toBe(160);
     expect(shortStep('Version 3 built')).toBe('Version 3 built');
@@ -1025,7 +1031,24 @@ describe('build progress', () => {
     expect(buildHeadline(buildProgress(log), true)).toBe('Building version 4 in Blender');
     expect(buildHeadline(buildProgress(log.slice(0, 4)), true)).toBe('Version 2 built; the AI is choosing what to add next');
     expect(buildHeadline(buildProgress(log.slice(0, 10)), true)).toBe('Version 3 did not build; the AI is fixing it');
-    expect(buildHeadline(buildProgress([...log, '• Version 4 built']), false)).toBe('Finished: version 4 is the ship as planned');
+    expect(buildHeadline(buildProgress([...log, '• Version 4 built']), false)).toBe('Finished: version 4 is on screen');
+    expect(buildHeadline(buildProgress(['• Reading the research to update the model']), false)).toBe('Finished without a new version');
     expect(buildHeadline(buildProgress([]), true)).toBe('Starting the build');
+  });
+});
+
+describe('updating the model from the research', () => {
+  const ship = { kind: 'ship', base: 'container', version: 8, research: { subject: 'x' }, research_rev: 3 };
+  it('is offered on a built catalog ship with research, behind until it has read this revision', () => {
+    expect(researchUpdate(ship)).toBe('behind');
+    expect(researchUpdate({ ...ship, research_applied_rev: 2 })).toBe('behind');
+    expect(researchUpdate({ ...ship, research_applied_rev: 3 })).toBe('current');
+  });
+  it('is not offered without research or a model, nor on a custom ship (its plan does that)', () => {
+    expect(researchUpdate({ ...ship, research: null })).toBe('none');
+    expect(researchUpdate({ ...ship, version: 0 })).toBe('none');
+    expect(researchUpdate({ ...ship, base: 'custom' })).toBe('none');
+    expect(researchUpdate({ ...ship, kind: 'crew' })).toBe('none');
+    expect(researchUpdate(null)).toBe('none');
   });
 });

@@ -23,7 +23,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from . import crew_modules
 from .agent import (AgentRunner, AgentSession, ClaudeAgentRunner, custom_research_context, module_prompt,
-                    plan_build_prompt, research_media_context, variant_prompt, variant_research_prompt)
+                    plan_build_prompt, research_apply_prompt, research_media_context, variant_prompt,
+                    variant_research_prompt)
 from .builder import BlenderRunner, BuilderRunner
 from .builds import Builds, built_line, summarise_change
 from .catalog import Catalog, CatalogError
@@ -461,6 +462,33 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
 
         return {"job_id": jobs.submit("build", project=pid, label=f"Building {project['name']} from the approved plan",
                                       fn=work)}
+
+    @app.post("/api/projects/{pid}/research/apply")
+    def apply_research(pid: str):
+        """Lester, 29 Oct ("do a photo research ... and update the model accordingly"): bring a ship's
+        model in line with its research, watched on Build a version per group of changes (contract §12).
+        A custom ship is shaped by its design plan instead, which is redrafted and approved in Research."""
+        project = need_project(pid)
+        if project.get("kind") != "ship":
+            raise HTTPException(400, "Only ships have research.")
+        if project.get("base") == "custom":
+            raise HTTPException(409, "This ship is built from its design plan: redraft the plan from the research and approve it.")
+        not_a_draft(project, "changed")
+        if not project.get("research"):
+            raise HTTPException(409, "This ship has no research yet. Research it first, then update the model from it.")
+        if not project.get("version"):
+            raise HTTPException(409, "The first build has not finished yet.")
+        rev = project.get("research_rev", 0)
+        store.add_message(pid, "You", "Update the model from the research.")
+
+        def work(log):
+            log("• Reading the research to update the model")
+            session, reply = run_agent(pid, research_apply_prompt(), "build", log)
+            store.add_message(pid, "AI", reply)
+            store.set_research_applied(pid, rev)
+            return {"version": store.load(pid)["version"], "reply": reply, "built_versions": session.built_versions}
+
+        return {"job_id": jobs.submit("build", project=pid, label=f"Updating {project['name']} from the research", fn=work)}
 
     def reference_pictures(pid: str, exclude: set[str], limit: int = 4) -> list[tuple[dict, bytes]]:
         """The latest pictures attached earlier in this project's chat. The AI has no memory between

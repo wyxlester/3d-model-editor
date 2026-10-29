@@ -29,6 +29,7 @@ from .catalog import Catalog, CatalogError
 from . import crew_modules as cm
 from . import design_plan as dp
 from . import research_media as rm
+from .review import claim_rests_only_on, excluded_note
 from .specmerge import deep_merge, label_for
 from .store import NotFound, ProjectStore
 
@@ -66,6 +67,77 @@ def _obj(props: dict, required: list[str]) -> dict:
 
 
 VEC3 = {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+
+# A tool's answer goes back through the agent SDK, which will not hand the AI one much over 25k tokens.
+# Harmony of the Seas (Lester, 29 Oct): get_project was 47k characters, 77 parts and seven custom ops'
+# code, and the AI could only answer that the project was "too large for me to open". So get_project is
+# an overview, and the details come on request: get_parts, get_custom_op, get_research, view_photo.
+TOOL_TEXT_LIMIT = 24_000
+
+
+def _rounded(v: Any, places: int = 2) -> Any:
+    if isinstance(v, float):
+        return round(v, places)
+    if isinstance(v, list):
+        return [_rounded(x, places) for x in v]
+    if isinstance(v, dict):
+        return {k: _rounded(x, places) for k, x in v.items()}
+    return v
+
+
+def spec_outline(spec: dict) -> dict:
+    """The spec with each entry that carries code (custom ops, custom items) as its fields and the
+    length of its code: get_custom_op reads one in full."""
+    out = {}
+    for key, value in spec.items():
+        if isinstance(value, list) and value and all(isinstance(e, dict) and "code" in e for e in value):
+            value = [{**{k: v for k, v in e.items() if k != "code"},
+                      "code_lines": str(e.get("code") or "").count("\n") + 1} for e in value]
+        out[key] = value
+    return out
+
+
+def part_row(p: dict) -> str:
+    """One part on one line: path | label | bounds in metres (ship frame) | parent, joint, station."""
+    lo, hi = p.get("bounds_min"), p.get("bounds_max")
+    box = (" ".join(f"{a} {_rounded(lo[i])}..{_rounded(hi[i])}" for i, a in enumerate("xyz"))
+           if isinstance(lo, list) and isinstance(hi, list) and len(lo) == len(hi) == 3 else "no bounds")
+    bits = [str(p.get("path", "")), str(p.get("label") or ""), box]
+    if p.get("parent"):
+        bits.append(f"in {p['parent']}")
+    if p.get("joint"):
+        bits.append(f"joint {json.dumps(_rounded(p['joint']))}")
+    if p.get("station"):
+        bits.append(f"station {p['station']}")
+    return " | ".join(bits)
+
+
+def research_pointer(project: dict) -> dict | None:
+    """What research there is, and how Build's AI reads it (the research itself is too big to paste)."""
+    r = project.get("research") or {}
+    if not r:
+        return None
+    return {"verdict": (r.get("summary") or {}).get("verdict"), "claims": len(r.get("claims") or []),
+            "photos": len(r.get("photos") or []), "closeups": len(r.get("closeups") or []),
+            "open_questions": len(r.get("open_questions") or []),
+            "read_with": "get_research for every claim, photograph observation and close-up; view_photo to "
+                         "look at a photograph or close-up (P01, C01). Photographs are the source of truth."}
+
+
+def fit_rows(out: dict, key: str, note: str, limit: int = TOOL_TEXT_LIMIT) -> str:
+    """out as JSON within limit, cutting rows off the end of out[key] and saying how many were cut."""
+    text = json.dumps(out, indent=1)
+    rows = list(out.get(key) or [])
+    if len(text) <= limit or not rows:
+        return text
+    keep = len(rows)
+    while keep > 0:
+        keep = max(0, keep - max(1, keep // 8))
+        trial = {**out, key: rows[:keep] + [f"… {len(rows) - keep} {note}"]}
+        text = json.dumps(trial, indent=1)
+        if len(text) <= limit:
+            break
+    return text
 
 
 # Lester, 29 Oct: "when user describe a equipment, user will also need to describe how the human
@@ -233,8 +305,13 @@ class AgentSession:
                               "filed it.", _obj({"category": {"type": "string"}}, ["category"])))
             return tools
         common = [
-            ("get_project", "Read the project: spec, parts (path, label, joint, station, bounds), the last "
-             "build report, research summary and open pins. Call this first.", _obj({}, [])),
+            ("get_project", "Read an overview of the project: the spec (custom ops and items listed without "
+             "their code), every part on one line (path | label | bounds in metres | parent, joint, station), "
+             "the last build report, what research there is, and open pins. Call this first.", _obj({}, [])),
+            ("get_parts", "List the parts whose name or label contains match (a long part list in get_project "
+             "is cut short).", _obj({"match": {"type": "string"}}, ["match"])),
+            ("get_custom_op", "Read one custom op or custom item in full, with its code, by id.",
+             _obj({"id": {"type": "string"}}, ["id"])),
             ("rebuild", "Run Blender on the current spec. Returns ok, errors, warnings, triangles. Call it "
              "after your last change and fix any errors before finishing.", _obj({}, [])),
             ("reply_to_pin", "Answer a pinned comment. status: 'waiting' (you changed something and the "
@@ -259,6 +336,13 @@ class AgentSession:
                 ("add_custom_op", self._custom_op_doc(),
                  _obj({"description": {"type": "string"}, "code": {"type": "string"}}, ["description", "code"])),
                 ("remove_custom_op", "Remove a custom op by id.", _obj({"id": {"type": "string"}}, ["id"])),
+                ("get_research", "Read the ship's research: the verdict, every claim with what it changes in the "
+                 "model (not_used: rests only on sources the user crossed out), every photograph's observation "
+                 "and modelling use, every close-up, the open questions. section (claims, photos, closeups, "
+                 "open_questions, sources) reads one in full when the whole is cut short.",
+                 _obj({"section": {"type": "string"}}, [])),
+                ("view_photo", "Look at one stored research photograph (P01) or close-up (C01).",
+                 _obj({"id": {"type": "string"}}, ["id"])),
             ] + common[1:]
         rgb_or_name = {"oneOf": [{"type": "string"}, VEC3]}
         place = {"type": "string", "enum": list(cm.PLACES)}
@@ -421,25 +505,86 @@ class AgentSession:
         return notes
 
     # ---- shared tools -----------------------------------------------------------------
-    def t_get_project(self) -> dict:
+    def t_get_project(self) -> str:
         project = self.store.load(self.pid)
-        parts = [{k: p.get(k) for k in ("path", "label", "parent", "joint", "station", "origin_m",
-                                        "bounds_min", "bounds_max")} for p in self.parts]
-        research = project.get("research") or {}
-        return {
-            "kind": self.kind, "version": self.version, "spec": self.spec,
+        out = {
+            "kind": self.kind, "version": self.version, "spec": spec_outline(self.spec),
             "unbuilt_changes": self.dirty,
-            "parts": parts,
+            "parts": [part_row(p) for p in self.parts],
             "build_report": {k: self.report.get(k) for k in ("ok", "errors", "warnings", "triangles",
                                                               "bounds_min", "bounds_max")},
-            "research_summary": research.get("summary") if research else None,
-            "research_open_questions": research.get("open_questions") if research else None,
+            "research": research_pointer(project),
             "open_pins": [{"id": p["id"], "part": p["part"], "status": p["status"],
                            "thread": [f"{m['who']}: {m['text']}" for m in p["messages"]]}
                           for p in project["pins"] if p["status"] != "resolved"],
             "catalog_docs": {k: self.cat_entry.get(k) for k in ("param_docs", "options") if k in self.cat_entry},
             **({"modules": cm.MODULE_DOCS, "editing_only_module": self.module} if self.kind == "crew" else {}),
         }
+        return fit_rows(out, "parts", "more parts not listed: get_parts with part of a name lists them")
+
+    def t_get_parts(self, match: str = "") -> str:
+        rows = [part_row(p) for p in self.parts if match.lower() in f"{p.get('path', '')} {p.get('label', '')}".lower()]
+        if not rows:
+            raise ToolError(f"No part's name or label contains {match!r}.")
+        return fit_rows({"parts": rows}, "parts", "more parts not listed: narrow the match")
+
+    def t_get_custom_op(self, id: str) -> dict:
+        for key, entries in self.spec.items():
+            if isinstance(entries, list):
+                for e in entries:
+                    if isinstance(e, dict) and e.get("id") == id and "code" in e:
+                        return {"in": key, **e}
+        raise ToolError(f"No custom op or item {id}. get_project lists them with their ids.")
+
+    # ---- the research, read from Build (contract §12, Updating the model from the research) ------
+    def t_get_research(self, section: str | None = None) -> str:
+        project = self.store.load(self.pid)
+        r = project.get("research") or {}
+        if not r:
+            raise ToolError("This ship has no research yet; research is done on the Research screen.")
+        excluded = list(project.get("excluded_sources") or [])
+        sections = {
+            "claims": [{**{k: c.get(k) for k in ("claim", "value", "unit", "status", "sources", "consequence_for_model")
+                           if c.get(k) not in (None, "", [])},
+                        **({"not_used": True} if claim_rests_only_on(c, excluded) else {})}
+                       for c in r.get("claims") or []],
+            "photos": [{k: p.get(k) for k in ("id", "title", "views", "status", "date", "observation",
+                                              "modelling_use", "width", "height") if p.get(k) not in (None, "")}
+                       for p in r.get("photos") or []],
+            "closeups": [{k: c.get(k) for k in ("id", "photo", "title", "what_it_shows", "claims") if c.get(k) not in (None, "", [])}
+                         for c in r.get("closeups") or []],
+            "open_questions": list(r.get("open_questions") or []),
+            "sources": [{k: s.get(k) for k in ("id", "title", "status") if s.get(k)} for s in r.get("sources") or []],
+        }
+        if section is not None:
+            if section not in sections:
+                raise ToolError(f"section must be one of {', '.join(sections)}.")
+            return fit_rows({section: sections[section]}, section, "more not listed; ask about them by id")
+        out = {"subject": r.get("subject"), "verdict": (r.get("summary") or {}).get("verdict"),
+               "coverage": (r.get("coverage") or {}).get("note"), "excluded": excluded_note(project) or None,
+               **sections}
+        for key in ("sources", "open_questions", "claims", "closeups", "photos"):  # cut the least needed first
+            if len(json.dumps(out, indent=1)) <= TOOL_TEXT_LIMIT:
+                break
+            out = json.loads(fit_rows(out, key, f"more not listed: get_research with section={key} lists them all"))
+        return json.dumps(out, indent=1)
+
+    def t_view_photo(self, id: str) -> ToolOutput:
+        r = self.store.load(self.pid).get("research") or {}
+        for sub, items in (("photos", r.get("photos") or []), ("closeups", r.get("closeups") or [])):
+            rec = next((x for x in items if x.get("id") == id), None)
+            if rec:
+                break
+        else:
+            raise ToolError(f"No photograph or close-up {id}. get_research lists them.")
+        try:
+            raw = (self.store.research_dir(self.pid) / sub / Path(str(rec.get("file"))).name).read_bytes()
+        except OSError:
+            raise ToolError(f"{id}'s file is missing; it cannot be shown.")
+        look, mime, _scale = rm.preview(raw)
+        said = rec.get("observation") or rec.get("what_it_shows") or ""
+        warn = " The user marked it excluded: do not model from it." if rec.get("status") == "excluded" else ""
+        return ToolOutput(f"{id}: {rec.get('title')}. {said}{warn}".strip(), [(mime, look)])
 
     def t_rebuild(self) -> dict:
         before = self.built_spec
@@ -1169,6 +1314,8 @@ The user is Lester: ex-navy, the product owner, not an engineer.
 - Reply in one to three short plain-English sentences: what changed, with numbers, and anything assumed. No code, no jargon, no tool names."""
 
 SHIP_PROMPT = """You edit one ship model for a maritime simulator. Blender builds the model from a JSON spec (me3d.ship_spec/1); you change the spec only through your tools: params (the builder's own knobs), per-part overrides, joint limits, and custom ops (Blender Python, for geometry no knob covers).
+- get_project is an overview: read a custom op's code with get_custom_op and look up parts with get_parts when you need them.
+- Asked to match the research or its photographs: read it with get_research and look at the photographs and close-ups with view_photo. Photographs are the source of truth; a claim marked not_used rests only on sources the user crossed out. Never say the research is out of reach: these tools read all of it.
 """ + COMMON_RULES
 
 CREW_PROMPT = """You edit one human crew member for a maritime simulator. Blender (MPFB2) builds the person from a JSON spec (me3d.crew_spec/1): body sliders, clothes, equipment and animations, plus custom items (Blender Python, for anything the catalog lacks).
@@ -1267,6 +1414,19 @@ def research_media_context(project: dict) -> str:
     return "\n".join(lines) + "\n\n"
 
 
+def research_apply_prompt() -> str:
+    """The build-mode turn that brings a model up to date with its research (Research's "Update the
+    model from the research"). The user watches it on Build, a version per group of changes."""
+    return ("The research on this ship has been updated. Bring the model in line with it. Read it with "
+            "get_research, and look with view_photo at the photographs and close-ups that bear on the model: "
+            "photographs are the source of truth, and claims marked not_used rest only on sources the user "
+            "crossed out, so do not rely on them. Compare with the model (get_project; get_custom_op and "
+            "get_parts for detail) and change what the research shows differently: sizes, colours, missing or "
+            "wrong parts. The user is watching the model change, so work in small groups of related changes "
+            "and rebuild after each group, fixing any errors before the next. Reply with what you changed, "
+            "which photo or claim each change rests on, and what you could not change and why.")
+
+
 def plan_build_prompt(plan: dict) -> str:
     """The build-mode turn after an approved plan has been built: add its details."""
     summary = "\n".join(f"- {s}" for s in plan.get("summary") or [])
@@ -1319,6 +1479,10 @@ def describe_tool(name: str, args: dict | None) -> str | None:
         return f"Hiding {part}" if isinstance(override, dict) and override.get("hidden") else f"Adjusting {part}"
     simple = {
         "get_project": "Looking at the current model",
+        "get_parts": f"Looking up parts: {a.get('match', '')}",
+        "get_custom_op": f"Reading added piece {a.get('id', '')}".rstrip(),
+        "get_research": "Reading the research",
+        "view_photo": f"Looking at {a.get('id', 'a photograph')}",
         "rebuild": None,
         "reply_to_pin": "Answering the comment",
         "save_research": "Saving the research",

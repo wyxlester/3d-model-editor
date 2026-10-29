@@ -2,14 +2,15 @@
 // every version so far (click one to look at it), and every step. The model behind it follows the
 // newest version as each one lands (CONTRACT §12, Watching the build).
 import { useEffect, useRef, useState } from 'react';
-import { buildHeadline, buildProgress, shortStep, versionText, type BuildStepKind } from '../lib/buildProgress';
+import { LIVE_TITLE, buildHeadline, buildProgress, shortStep, versionText, type BuildStepKind, type LiveBuild } from '../lib/buildProgress';
 import type { FeedSection } from './ActivityFeed';
 
 const MARK: Record<BuildStepKind, string> = { building: 'Build', built: 'Built', failed: 'Failed', detail: 'Detail', ai: 'AI', other: 'Step' };
 const CHIP: Record<BuildStepKind, string> = { building: 'blue', built: 'green', failed: 'red', detail: 'violet', ai: '', other: '' };
 
-export function BuildLive({ section, since, shown, onShow, onClose }: {
+export function BuildLive({ section, kind, since, shown, onShow, onClose }: {
   section: FeedSection;
+  kind: LiveBuild;
   /** When the job was created, if known (it may have started before this screen opened). */
   since?: number;
   /** The version on screen. */
@@ -33,7 +34,7 @@ export function BuildLive({ section, since, shown, onShow, onClose }: {
     <div className="card build-live" role="status" aria-live="polite"
       onPointerDown={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span className="eyebrow">{running ? 'Building the approved plan' : section.phase === 'error' ? 'The build stopped' : 'Built from the approved plan'} · {elapsed}</span>
+        <span className="eyebrow">{running ? LIVE_TITLE[kind].running : section.phase === 'error' ? 'The build stopped' : LIVE_TITLE[kind].done} · {elapsed}</span>
         {!running && <button className="btn sm muted" style={{ marginLeft: 'auto' }} onClick={onClose}>Close</button>}
       </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', fontSize: 15, fontWeight: 500 }}>
@@ -52,7 +53,7 @@ export function BuildLive({ section, since, shown, onShow, onClose }: {
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'center', fontSize: 12 }}>
-        <span className="faint">{counts || 'The hull and superstructure come first, then the details a group at a time.'}</span>
+        <span className="faint">{counts || (kind === 'plan' ? 'The hull and superstructure come first, then the details a group at a time.' : 'The AI reads the research and photographs, then changes the model a group at a time.')}</span>
         {p.steps.length > 0 && <button className="btn sm muted" style={{ marginLeft: 'auto', height: 24 }} onClick={() => setOpen(!open)}>{open ? 'Hide steps' : 'Show steps'}</button>}
       </div>
       {open && p.steps.length > 0 && (

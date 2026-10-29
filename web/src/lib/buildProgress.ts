@@ -80,11 +80,27 @@ export function buildProgress(log: string[]): BuildProgress {
   return { steps, versions, now: acts[acts.length - 1] ?? null, details: steps.filter((s) => s.kind === 'detail').length };
 }
 
+/** The AI jobs Build follows over the model: building an approved plan, and updating from the research. */
+export type LiveBuild = 'plan' | 'research';
+
+export function liveBuildKind(job: { kind: string; label: string }): LiveBuild | null {
+  if (job.kind !== 'build') return null;
+  if (job.label.endsWith('from the approved plan')) return 'plan';
+  if (job.label.startsWith('Updating ') && job.label.endsWith('from the research')) return 'research';
+  return null;
+}
+
+/** The panel's heading for each kind of job: while running, and once finished. */
+export const LIVE_TITLE: Record<LiveBuild, { running: string; done: string }> = {
+  plan: { running: 'Building the approved plan', done: 'Built from the approved plan' },
+  research: { running: 'Updating the model from the research', done: 'Updated from the research' },
+};
+
 /** The headline for the step under way. */
 export function buildHeadline(p: BuildProgress, running: boolean): string {
   if (!running) {
     const last = [...p.versions].reverse().find((v) => v.ok);
-    return last ? `Finished: version ${last.n} is the ship as planned` : 'The build finished';
+    return last ? `Finished: version ${last.n} is on screen` : 'Finished without a new version';
   }
   const s = p.now;
   if (!s) return 'Starting the build';
