@@ -6,6 +6,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, errorText, modelUrl } from '../api';
 import { AiWorking, ChatPanel, ErrorNote, JobLines, PRIORITY, TopBar, useCarried } from '../components/common';
 import { remember, useJobs, useLoad, useProject } from '../hooks';
+import { awaitingApproval, buildTabLabel } from '../lib/designPlan';
 import { blenderToGltf, type ViewName } from '../lib/frames';
 import { hiddenParts, isStationName, jointsOf, levelsFor, partLabel } from '../lib/parts';
 import { groupPins, pinSummary, shortTime } from '../lib/pins';
@@ -122,10 +123,22 @@ export function ShipBuild() {
     try { await fn(); await afterJob(); } catch (e) { setActionErr(errorText(e)); }
   };
 
+  // A refused send (409: a custom ship whose design plan is not approved yet) shows the server's
+  // sentence in the chat and gives the typed text back, rather than failing out of sight.
+  const [chatErr, setChatErr] = useState<string | null>(null);
   const chat = async (message: string, atts: Attachment[] = []) => {
     if (!id) return;
-    await run('Working on the ship', async () => { const r = await api.chat(id, message, 'build', atts.map((a) => a.id)); void afterJob(); return r; }, afterJob, afterJob);
+    setChatErr(null);
+    let job: { job_id: string };
+    try {
+      job = await api.chat(id, message, 'build', atts.map((a) => a.id));
+    } catch (e) {
+      setChatErr(errorText(e));
+      return false;
+    }
+    await run('Working on the ship', async () => { void afterJob(); return job; }, afterJob, afterJob);
   };
+  const waiting = awaitingApproval(project);
 
   const undo = () => pinAction(async () => { if (id) { const r = await api.undo(id); setProject(r.project); } });
 
@@ -135,11 +148,11 @@ export function ShipBuild() {
   return (
     <>
       <TopBar title={project?.name}>
-        {id && <ModeSwitch id={id} mode="build" />}
+        {id && <ModeSwitch id={id} mode="build" buildLabel={buildTabLabel(project)} />}
         <div className="topbar-right">
           <span>{project ? `${project.name} · ${current ? `v${current}` : 'not built yet'} · ${busy ? 'working…' : 'saved'}` : ''}</span>
           {project && project.versions.length > 0 && (
-            <select className="field" aria-label="Version shown" value={shownVersion} onChange={(e) => { const n = Number(e.target.value); setViewing(n === current ? null : n); setDraft(null); }}>
+            <select className="field" aria-label="Version shown" style={{ maxWidth: 300 }} value={shownVersion} onChange={(e) => { const n = Number(e.target.value); setViewing(n === current ? null : n); setDraft(null); }}>
               {[...project.versions].reverse().map((v) => (
                 <option key={v.n} value={v.n}>v{v.n}{v.n === current ? ' (current)' : ''}{v.ok === false ? ' · failed' : ''} · {v.summary}</option>
               ))}
@@ -158,7 +171,11 @@ export function ShipBuild() {
           {tab === 'chat' ? (
             <ChatPanel messages={project?.messages ?? []} carried={carried} onSend={chat} busy={busy} projectId={id}
               label="Ask about the whole ship" placeholder="What's still unverified?"
-              empty="For a change to one part, pin a comment on it: the AI will know exactly which part you mean. Use this chat for the whole ship." />
+              empty="For a change to one part, pin a comment on it: the AI will know exactly which part you mean. Use this chat for the whole ship."
+              footer={chatErr ? <div className="jobline error" role="alert" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
+                <span>{chatErr}</span>
+                {waiting && id && <Link to={paths.shipResearch(id)}>Open the design plan</Link>}
+              </div> : null} />
           ) : (
             <CommentsTab pins={pins} parts={parts} selected={selPin?.id ?? null} viewingOld={!!viewing} working={aiWorking}
               onPick={(p) => { setSelPin({ id: p.id, x: 40, y: 40 }); setSelPart(p.part); setDraft(null); }}
@@ -168,15 +185,19 @@ export function ShipBuild() {
 
         <section className="stage">
           <div className="toolbar">
-            <button className={`btn ${pinMode ? 'primary' : 'selected'}`} style={{ padding: '0 14px' }} disabled={!url}
+            <button className={`btn ${pinMode ? 'primary' : 'selected'}`} style={{ padding: '0 14px' }} disabled={!url || waiting}
               onClick={() => { if (viewing) { setViewing(null); setPinMode(true); } else setPinMode(!pinMode); setSelPin(null); setDraft(null); }}>
               {pinMode ? 'Placing a comment…' : 'Comment on a part'}
             </button>
-            <span className="faint" style={{ fontSize: 12 }}>
+            {waiting && id ? (
+              <span className="warn" style={{ fontSize: 12 }}>
+                A placeholder: this ship is built from its design plan, which is waiting for your approval. <Link to={paths.shipResearch(id)}>Open the design plan</Link>
+              </span>
+            ) : <span className="faint" style={{ fontSize: 12 }}>
               {viewing ? `Viewing older v${viewing}, read-only. Commenting takes you back to the current version.`
                 : pinMode ? (hover ? `Pointing at ${partLabel(hover)}. Click to comment. Esc to cancel.` : 'Click any part of the model. Esc to cancel.')
                   : 'Or click a pin to open its thread.'}
-            </span>
+            </span>}
             {viewing && <button className="btn primary sm" onClick={() => setViewing(null)}>Back to current v{current}</button>}
             <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
               <ViewButtons view={view} onView={(v) => { setView(v); setViewNonce((n) => n + 1); }} />
@@ -186,7 +207,7 @@ export function ShipBuild() {
           <ShipViewer
             containerRef={stageRef}
             url={url}
-            emptyText={building ? 'Building the first version… the model appears here when the build finishes.' : error ? 'Could not load the project.' : 'Loading…'}
+            emptyText={waiting && building ? 'No model yet: this ship is built from its design plan when you approve it in Research.' : building ? 'Building the first version… the model appears here when the build finishes.' : error ? 'Could not load the project.' : 'Loading…'}
             view={view} viewNonce={viewNonce}
             partPaths={partPaths}
             pickMode={pinMode}
@@ -234,7 +255,7 @@ export function ShipBuild() {
         </section>
 
         {inspect && project && (
-          <Inspect project={project} parts={parts} part={selPart} joints={joints} setJoints={setJoints} busy={busy}
+          <Inspect project={project} parts={parts} part={selPart} joints={joints} setJoints={setJoints} busy={busy || waiting}
             onClose={() => setInspect(false)}
             onPatch={(label, patch) => void run(label, () => api.patchSpec(project.id, patch), afterJob, afterJob)} />
         )}

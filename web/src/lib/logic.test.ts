@@ -404,3 +404,73 @@ describe('crew modules', () => {
     expect(changedModules(null)).toEqual([]);
   });
 });
+
+import { awaitingApproval, briefFromCarried, buildTabLabel, canApprove, httpErrorText, planNotice, planState, planStatusLabel, summaryLine } from './designPlan';
+import type { Attachment, DesignPlan, Message } from '../types';
+
+describe('design plan (ships of any type)', () => {
+  const plan = (x: Partial<DesignPlan> = {}): DesignPlan => ({ status: 'draft', summary: ['Size · 38 m'], research_rev: 2, at: '2026-10-29T10:00:00Z', ...x });
+  const ship = (x: Record<string, unknown> = {}) => ({ kind: 'ship', base: 'custom', research_rev: 2, design_plan: plan(), plan_built: false, ...x });
+
+  it('reads the plan state, treating a draft against older research as needing a redraft', () => {
+    expect(planState(ship({ design_plan: null }))).toBe('none');
+    expect(planState(ship())).toBe('draft');
+    expect(planState(ship({ research_rev: 3 }))).toBe('redraft');
+    expect(planState(ship({ design_plan: plan({ status: 'stale' }) }))).toBe('stale');
+    expect(planState(ship({ research_rev: 9, design_plan: plan({ status: 'approved' }) }))).toBe('approved');
+  });
+  it('labels each state, amber only while it waits for the user', () => {
+    expect(planStatusLabel('draft')).toEqual({ text: 'Draft · waiting for you', tone: 'amber' });
+    expect(planStatusLabel('redraft').text).toBe('Out of date');
+    expect(planStatusLabel('stale').tone).toBe('red');
+    expect(planStatusLabel('approved').tone).toBe('green');
+    expect(planNotice('draft')).toBeNull();
+    expect(planNotice('none')).toMatch(/ask the AI to draft one/);
+    expect(planNotice('redraft')).toMatch(/Research changed since this plan/);
+    expect(planNotice('stale')).toMatch(/since this plan was built/);
+  });
+  it('offers Approve only on a current draft of a custom ship, and not while a job runs', () => {
+    expect(canApprove(ship(), false)).toBe(true);
+    expect(canApprove(ship(), true)).toBe(false);
+    expect(canApprove(ship({ research_rev: 3 }), false)).toBe(false);
+    expect(canApprove(ship({ design_plan: plan({ status: 'stale' }) }), false)).toBe(false);
+    expect(canApprove(ship({ design_plan: plan({ status: 'approved' }) }), false)).toBe(false);
+    expect(canApprove(ship({ design_plan: null }), false)).toBe(false);
+    expect(canApprove(ship({ base: 'sampan' }), false)).toBe(false);
+  });
+  it('keeps Build waiting only until the first approved plan is built, even if the plan later goes stale', () => {
+    expect(buildTabLabel(ship())).toBe('Build · waiting for your approval');
+    expect(awaitingApproval(ship({ design_plan: null }))).toBe(true);
+    expect(awaitingApproval(ship({ plan_built: true, design_plan: plan({ status: 'stale' }) }))).toBe(false);
+    expect(awaitingApproval(ship({ plan_built: true, research_rev: 7 }))).toBe(false);
+    expect(buildTabLabel({ kind: 'ship', base: 'container' })).toBe('Build');
+    expect(buildTabLabel(null)).toBe('Build');
+  });
+  it('splits a summary line into a bold label and text, and flags assumptions', () => {
+    expect(summaryLine('Size · 38 m long, 7.6 m beam')).toEqual({ label: 'Size', text: '38 m long, 7.6 m beam', assumed: false });
+    expect(summaryLine('Main deck: 24 m long')).toEqual({ label: 'Main deck', text: '24 m long', assumed: false });
+    expect(summaryLine('Assumed · beam 7.6 m (typical)').assumed).toBe(true);
+    expect(summaryLine('Assumptions: fly-bridge open').assumed).toBe(true);
+    // A long sentence with a colon in it is not a label.
+    const long = 'The hull is modelled as a planing monohull with a swim platform: see the photo';
+    expect(summaryLine(long)).toEqual({ label: null, text: long, assumed: false });
+    expect(summaryLine('Hull is a planing form: see the photo').label).toBeNull();
+  });
+  it('pre-fills the Describe card from what Home carried: the last request and every file, once', () => {
+    const att = (id: string): Attachment => ({ id, name: `${id}.jpg`, type: 'image/jpeg', size: 1, url: `/u/${id}` });
+    const carried: Message[] = [
+      { who: 'You', text: 'create a yacht ship model', at: '', attachments: [att('a'), att('b')] },
+      { who: 'AI', text: 'Which kind?', at: '', attachments: [att('z')] },
+      { who: 'You', text: 'A 38 m motor yacht', at: '', attachments: [att('b'), att('c')] },
+    ];
+    const b = briefFromCarried(carried);
+    expect(b.text).toBe('A 38 m motor yacht');
+    expect(b.attachments.map((a) => a.id)).toEqual(['a', 'b', 'c']);
+    expect(briefFromCarried(null)).toEqual({ text: '', attachments: [] });
+  });
+  it('shows a 409 refusal as the server sentence alone, other failures in full', () => {
+    expect(httpErrorText('POST', '/api/projects/p1/chat', 409, ' Go to Research and approve the plan first. ')).toBe('Go to Research and approve the plan first.');
+    expect(httpErrorText('POST', '/x', 500, 'boom')).toBe('POST /x failed (500): boom');
+    expect(httpErrorText('POST', '/x', 409, { why: 1 })).toBe('POST /x failed (409): {"why":1}');
+  });
+});

@@ -1,14 +1,16 @@
 // Ship workshop, Research mode (canvas: Research.dc.html). Renders project.research in the
 // CONTRACT §12 shape (me3d.research/1). Canvas sections the contract has no field for
 // (photographs, close-ups, build plan) say so instead of showing invented data.
-import { useEffect, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { api } from '../api';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { api, errorText } from '../api';
 import { ChatPanel, ErrorNote, EvidenceChip, JobLines, Loading, PRIORITY, TopBar, useCarried } from '../components/common';
 import { remember, useJobs, useProject } from '../hooks';
+import { awaitingApproval, buildTabLabel, canApprove, isCustomShip, planNotice, planState, planStatusLabel, summaryLine } from '../lib/designPlan';
 import { partLabel } from '../lib/parts';
 import { paths } from '../lib/routing';
 import type { Attachment, Project, Research } from '../types';
+import type { ResearchStart } from './ProjectPicker';
 
 type Sec = 'summary' | 'photos' | 'platform' | 'closeups' | 'articulation' | 'plan' | 'questions' | 'sources';
 type Sel = { kind: 'claim'; i: number } | { kind: 'source'; i: number } | { kind: 'photo'; i: number } | { kind: 'question'; i: number } | null;
@@ -21,32 +23,67 @@ export function ShipResearch() {
   const { data: project, error, reload, loading } = useProject(id);
   const { jobs, run, dismiss, busy } = useJobs();
   const carried = useCarried();
+  const nav = useNavigate();
+  const start = (useLocation().state ?? null) as ResearchStart | null;
   const [sec, setSec] = useState<Sec>('summary');
   const [sel, setSel] = useState<Sel>(null);
   const [excluded, setExcluded] = useState<Record<string, boolean>>({});
+  const [planErr, setPlanErr] = useState<string | null>(null);
   useEffect(() => { if (id) remember('ship', id); }, [id]);
+
+  // A research turn's job: reload when it ends (its result says plan_saved when the plan was redrafted;
+  // the research itself may have changed either way, so the project is reloaded regardless).
+  const watchResearch = (begin: () => Promise<{ job_id: string }>) => run<{ plan_saved?: boolean }>('Researching', async () => {
+    const j = await begin();
+    void reload();
+    return j;
+  }, () => void reload(), () => void reload());
 
   const ask = async (message: string, atts: Attachment[] = []) => {
     if (!id) return;
-    await run('Researching', async () => {
-      const r = await api.chat(id, message, 'research', atts.map((a) => a.id));
+    setPlanErr(null);
+    await watchResearch(() => api.chat(id, message, 'research', atts.map((a) => a.id)));
+  };
+
+  // The Ship page's "Research and build" already sent the first turn: watch that job here.
+  const watched = useRef<string | null>(null);
+  useEffect(() => {
+    const job = start?.researchJob;
+    if (!job || watched.current === job) return;
+    watched.current = job;
+    void watchResearch(() => Promise.resolve({ job_id: job }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [start?.researchJob]);
+
+  const approve = async () => {
+    if (!id) return;
+    setPlanErr(null);
+    let job: { job_id: string };
+    try {
+      job = await api.approvePlan(id);
+    } catch (e) {
+      setPlanErr(errorText(e)); // a 409 is the server's sentence, verbatim
       void reload();
-      return r;
-    }, () => void reload(), () => void reload());
+      return;
+    }
+    void reload();
+    await run('Building the approved design plan', () => Promise.resolve(job),
+      () => { nav(paths.shipBuild(id)); }, () => void reload());
   };
 
   const r = project?.research ?? null;
+  const custom = isCustomShip(project);
   return (
     <>
       <TopBar title={project?.name}>
-        <ModeSwitch id={id!} mode="research" />
+        <ModeSwitch id={id!} mode="research" buildLabel={buildTabLabel(project)} />
         <div className="topbar-right" style={{ gap: 8 }}>
           {r ? <span className="chip green" style={{ fontSize: 12, padding: '4px 10px' }}>Research assembled</span>
             : <span className="chip amber" style={{ fontSize: 12, padding: '4px 10px' }}>No research yet</span>}
           {r && (r.claims ?? []).some((c) => /Unverified/.test(c.status)) && (
             <span className="chip amber" style={{ fontSize: 12, padding: '4px 10px' }}>{(r.claims ?? []).filter((c) => /Unverified/.test(c.status)).length} unverified claims</span>
           )}
-          <Link to={paths.shipBuild(id)} className="btn primary" style={{ height: 34, borderRadius: 8 }}>Start building</Link>
+          {!awaitingApproval(project) && <Link to={paths.shipBuild(id)} className="btn primary" style={{ height: 34, borderRadius: 8 }}>{custom ? 'Open Build' : 'Start building'}</Link>}
         </div>
       </TopBar>
       <div className="workspace">
@@ -57,17 +94,22 @@ export function ShipResearch() {
             onSend={ask}
             projectId={id}
             busy={busy}
-            label="Ask or direct the research"
-            placeholder="Find a true overhead photo"
-            empty="Tell the AI which vessel to research, and as of when. It checks for existing work first, then gathers sources for you to verify before anything is modelled."
-            footer={<JobLines jobs={jobs} dismiss={dismiss} />}
+            label={custom ? 'Correct or add to the research' : 'Ask or direct the research'}
+            placeholder={custom ? 'Make it 38 m and give the hull a dark grey stripe' : 'Find a true overhead photo'}
+            empty={custom ? 'Describe the ship and attach photos. The AI researches it and drafts a design plan; nothing is built until you approve it.'
+              : 'Tell the AI which vessel to research, and as of when. It checks for existing work first, then gathers sources for you to verify before anything is modelled.'}
+            footer={<>
+              {start?.note && <span className="warn" style={{ fontSize: 12 }}>{start.note}</span>}
+              <ErrorNote error={start?.startError ?? null} />
+              <JobLines jobs={jobs} dismiss={dismiss} />
+            </>}
           />
         </aside>
 
         <main className="scroll" style={{ flex: 1, minWidth: 0, background: 'var(--stage)', padding: '0 24px 22px', display: 'flex', flexDirection: 'column', gap: 18 }}>
           {loading && !project && <Loading what="the research" />}
           <ErrorNote error={error} retry={reload} />
-          {project && !r && <EmptyResearch project={project} onRun={ask} busy={busy} />}
+          {project && !r && (custom ? <EmptyCustom researching={busy} /> : <EmptyResearch project={project} onRun={ask} busy={busy} />)}
           {project && r && (
             <>
               <SectionNav r={r} sec={sec} setSec={(s) => { setSec(s); setSel(null); }} />
@@ -105,19 +147,94 @@ export function ShipResearch() {
           )}
         </main>
 
-        <aside className="side right scroll" style={{ width: 300, padding: 16, gap: 14 }}>
-          {r ? <DetailPanel r={r} sel={sel} onAsk={ask} busy={busy} /> : <span className="faint">Details of a selected claim, source or question show here.</span>}
-        </aside>
+        {custom && project ? (
+          <aside className="side right scroll" style={{ width: 400, padding: 16, gap: 12 }}>
+            <PlanPanel project={project} busy={busy} error={planErr} onApprove={() => void approve()} onAsk={(m) => void ask(m)}
+              detail={r && sel ? <DetailPanel r={r} sel={sel} onAsk={ask} busy={busy} /> : null} />
+          </aside>
+        ) : (
+          <aside className="side right scroll" style={{ width: 300, padding: 16, gap: 14 }}>
+            {r ? <DetailPanel r={r} sel={sel} onAsk={ask} busy={busy} /> : <span className="faint">Details of a selected claim, source or question show here.</span>}
+          </aside>
+        )}
       </div>
     </>
   );
 }
 
-export function ModeSwitch({ id, mode }: { id: string; mode: 'research' | 'build' }) {
+/** `buildLabel` says "Build · waiting for your approval" on a custom ship before its first approved build. */
+export function ModeSwitch({ id, mode, buildLabel = 'Build' }: { id: string; mode: 'research' | 'build'; buildLabel?: string }) {
   return (
-    <div role="group" aria-label="Ship workshop mode" className="segmented">
+    <div role="group" aria-label="Ship workshop mode" className="segmented" style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
       <Link to={paths.shipResearch(id)} className={mode === 'research' ? 'on' : ''}>Research</Link>
-      <Link to={paths.shipBuild(id)} className={mode === 'build' ? 'on' : ''}>Build</Link>
+      <Link to={paths.shipBuild(id)} className={mode === 'build' ? 'on' : ''}
+        style={buildLabel !== 'Build' && mode !== 'build' ? { color: 'var(--text-3)' } : undefined}>{buildLabel}</Link>
+    </div>
+  );
+}
+
+/**
+ * The design plan (CONTRACT §5 `type: "custom"`): what will be built, in plain English, approved by
+ * the user before anything builds (Lester, 29 Oct). Changes are made by chatting; the plan follows.
+ */
+function PlanPanel({ project, busy, error, onApprove, onAsk, detail }: {
+  project: Project; busy: boolean; error: string | null; onApprove: () => void; onAsk: (m: string) => void; detail: ReactNode;
+}) {
+  const plan = project.design_plan ?? null;
+  const st = planState(project);
+  const chip = planStatusLabel(st);
+  const notice = planNotice(st);
+  const lines = (plan?.summary ?? []).map(summaryLine);
+  const redraft = st === 'none' ? 'Draft the design plan' : 'Redraft the design plan';
+  return (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontWeight: 500, fontSize: 15 }}>Design plan</span>
+        <span className={`chip ${chip.tone}`}>{chip.text}</span>
+      </div>
+      <span className="faint" style={{ fontSize: 12 }}>What will be built. Change anything by chatting; the plan updates with the research.</span>
+      {notice && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
+          <span className={st === 'none' ? 'muted' : 'warn'} style={{ lineHeight: 1.5 }}>{notice}</span>
+          <button className="btn" disabled={busy} onClick={() => onAsk(redraft)} title="Sends this to the AI in the research chat">{redraft}</button>
+        </div>
+      )}
+      {plan?.build_error && <span className="bad" style={{ lineHeight: 1.5 }}>The approved plan did not build: {plan.build_error}</span>}
+      {lines.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, lineHeight: 1.5, color: 'var(--text-soft)', opacity: st === 'redraft' || st === 'stale' ? 0.7 : 1 }}>
+          {lines.map((l, i) => (
+            <span key={i} style={l.assumed ? { color: 'var(--amber-text)' } : undefined}>
+              {l.label && <b style={l.assumed ? undefined : { color: 'var(--text)', fontWeight: 600 }}>{l.label}</b>}{l.label ? ' · ' : ''}{l.text}
+            </span>
+          ))}
+        </div>
+      )}
+      {detail && <div style={{ display: 'flex', flexDirection: 'column', gap: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}>{detail}</div>}
+      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 12 }}>
+        {error && <span className="bad" role="alert" style={{ fontSize: 12, lineHeight: 1.5 }}>{error}</span>}
+        {st === 'approved' && project.plan_built ? (
+          <Link to={paths.shipBuild(project.id)} className="btn lg" style={{ justifyContent: 'center' }}>Open Build</Link>
+        ) : (
+          <button className="btn primary lg" style={{ height: 44, justifyContent: 'center', fontSize: 14 }} disabled={!canApprove(project, busy)} onClick={onApprove}>
+            {st === 'approved' ? 'Approved · building' : 'Approve and build'}
+          </button>
+        )}
+        <span className="faint" style={{ fontSize: 12, textAlign: 'center' }}>Building starts only when you approve. A later change to the research needs approval again.</span>
+      </div>
+    </>
+  );
+}
+
+function EmptyCustom({ researching }: { researching: boolean }) {
+  return (
+    <div style={{ margin: 'auto', maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'flex-start' }}>
+      <span className="eyebrow">Research</span>
+      <h1 className="title">{researching ? 'Researching your ship…' : 'No research for this ship yet'}</h1>
+      <p className="muted" style={{ margin: 0, lineHeight: 1.6 }}>
+        {researching
+          ? 'The AI is reading your description and photos and searching for references. The findings show here, and a design plan appears on the right for you to check.'
+          : 'Describe the ship in the chat on the left, with photos if you have them. The AI researches it and drafts a design plan; nothing is built until you approve it.'}
+      </p>
     </div>
   );
 }

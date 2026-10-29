@@ -162,6 +162,7 @@ export const filesOnlyText = (n: number) => (n === 1 ? 'Please look at the attac
 /** The chat panel every screen carries (Lester, 29 Oct). With `projectId`, it also takes pictures and documents. */
 export function ChatPanel(props: {
   messages: Message[];
+  /** Resolve to false when the message was refused unsent: the typed text is put back. */
   onSend: (text: string, attachments: Attachment[]) => Promise<unknown> | void;
   label: string;
   placeholder: string;
@@ -192,7 +193,10 @@ export function ChatPanel(props: {
     setDraft('');
     files.clear();
     setWaiting({ text: t, atts, from: props.messages.length, since: Date.now() });
-    try { await props.onSend(t, atts); } finally { setWaiting(null); }
+    try {
+      // onSend resolving to false means it was refused before anything was sent: give the text back.
+      if ((await props.onSend(t, atts)) === false) setDraft(t);
+    } finally { setWaiting(null); }
   };
   const lastAi = [...props.messages].map((m, i) => [m, i] as const).reverse().find(([m]) => m.who === 'AI')?.[1];
   const echoed = !!waiting && props.messages.slice(waiting.from).some((m) => m.who === 'You' && m.text === waiting.text);

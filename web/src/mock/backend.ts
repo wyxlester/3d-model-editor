@@ -2,6 +2,7 @@
 // It returns contract-shaped data and fakes jobs that take a few seconds, so progress UI is
 // exercised. Nothing here is AI: replies are canned and say "(mock)".
 import { ApiError } from '../api';
+import { httpErrorText } from '../lib/designPlan';
 import { mergePatch } from '../lib/spec';
 import { MODULES, isModuleId, moduleOfItem } from '../lib/modules';
 import type {
@@ -9,6 +10,7 @@ import type {
 } from '../types';
 import shipPartsJson from '../../public/mock/ship_parts.json';
 import { mockResearch } from './research';
+import { planState } from '../lib/designPlan';
 
 const shipParts = shipPartsJson as unknown as Part[];
 const now = () => new Date().toISOString();
@@ -186,6 +188,114 @@ function mockDescribed(p: Store['projects'][string], message: string, module: un
   return (m === 'shirt' || m === 'pants') && hadSuit ? [m, 'outfit'] : [m];
 }
 
+// ---- Ships of any type (CONTRACT §5 `type: "custom"`) ---------------------------------------
+// Research first; every research turn amends the research (research_rev + 1) and the mock AI
+// redrafts the plan, except that an approved plan goes stale and waits to be asked for a redraft,
+// so every panel state can be seen. Approve builds; nothing else builds a custom ship.
+
+const VESSEL_WORDS = ['yacht', 'tug', 'tugboat', 'ferry', 'trawler', 'barge', 'frigate', 'corvette', 'catamaran', 'dhow', 'junk', 'tanker', 'dredger', 'lifeboat', 'pilot boat', 'patrol boat', 'speedboat'];
+function nameFromBrief(brief: string): string {
+  const t = brief.toLowerCase();
+  const hit = VESSEL_WORDS.map((w) => [t.indexOf(w), w] as const).filter(([i]) => i >= 0).sort((a, b) => a[0] - b[0])[0];
+  return hit ? hit[1][0].toUpperCase() + hit[1].slice(1) : 'Custom ship';
+}
+
+function createCustom(body: { name?: string; brief?: string }) {
+  const brief = String(body.brief ?? '').trim();
+  const id = `p_${++store.seq}`;
+  const name = (body.name || '').trim() || nameFromBrief(brief);
+  const p: Store['projects'][string] = {
+    id, kind: 'ship', name, base: 'custom', version: 0,
+    spec: { schema: 'me3d.ship_spec/1', type: 'custom', id, name, params: {}, overrides: {}, joint_limits: {}, custom_ops: [] },
+    versions: [], model_url: null, parts: shipParts, build_report: {}, pins: [], messages: [], research: null,
+    research_rev: 0, design_plan: null, brief: brief || null, plan_built: false, glbs: {},
+  };
+  store.projects[id] = p;
+  // The placeholder hull "builds" at once here: nobody polls this job, the Research screen opens first.
+  newVersion(p, 'Created as a plain placeholder hull; research and an approved design plan shape it');
+  p.build_report = { ok: true, errors: [], warnings: ['Placeholder hull: approve the design plan to build the real shape'], triangles: 900 };
+  const job = startJob(['Creating the project'], () => ({ version: p.version }));
+  save();
+  return { project: strip(p), ...job };
+}
+
+function customResearchTurn(p: Store['projects'][string], message: string) {
+  const big = message.match(/(\d{2,3})\s*m\b/);
+  const prev = p.research as { _loa?: number } | null;
+  const loa = big ? Number(big[1]) : prev?._loa ?? 36;
+  const beam = Math.round(loa * 0.2 * 10) / 10;
+  p.research = {
+    schema: 'me3d.research/1', _loa: loa,
+    subject: `${p.name}: from your description${p.brief ? ` (“${p.brief}”)` : ''} and photos (mock)`,
+    summary: { verdict: `(mock) Buildable at simulator distance: a ${loa} m tri-deck motor yacht.`, existing_work: 'No existing model of this vessel in the project (mock).' },
+    sources: [{ id: 'U1', title: 'Your photo', status: 'Photographed', what_it_proves: 'Overall form, deck count, colours' }],
+    claims: [
+      { claim: 'Length overall', sources: ['U1'], status: big ? 'Official' : 'Photo reading', consequence_for_model: `${loa} m${big ? ' (your correction)' : ''}` },
+      { claim: 'Superstructure tiers', sources: ['U1'], status: 'Photo reading', consequence_for_model: 'Three tiers' },
+      { claim: 'Beam', sources: [], status: 'Inference', consequence_for_model: `${beam} m, typical for ${loa} m` },
+    ],
+    open_questions: [
+      { question: 'Is the fly-bridge open or covered with a hard top?', meanwhile: 'Modelled open' },
+      { question: 'Should the tender garage in the stern open?', meanwhile: 'Closed, not articulated' },
+    ],
+    articulation: [],
+  };
+  p.research_rev = (p.research_rev ?? 0) + 1;
+  const plan = p.design_plan;
+  const asked = /plan/i.test(message);
+  let note = 'Updated the research and redrafted the design plan. Nothing is built until you approve it.';
+  if (plan?.status === 'approved' || (plan?.status === 'stale' && !asked)) {
+    p.design_plan = { ...plan, status: 'stale' };
+    note = 'Updated the research. The approved plan no longer matches it: ask me to redraft the plan, then approve it again.';
+  } else {
+    p.design_plan = {
+      status: 'draft', research_rev: p.research_rev, at: now(),
+      summary: [
+        `Size · ${loa} m long, ${beam} m beam, 2.1 m draught`,
+        `Hull · white, raked sharp bow, swim-platform stern${/stripe/i.test(message) ? ', dark grey sheer stripe' : ''}`,
+        `Main deck · ${Math.round(loa * 0.63)} m long, full width, black window band`,
+        `Upper deck · ${Math.round(loa * 0.45)} m, set back 2 m, raked front, window band`,
+        'Fly-bridge · 10 m, open, radar arch',
+        'Details · railings, tender garage door, sun loungers on the foredeck',
+        `Assumed · beam ${beam} m and draught 2.1 m (typical for ${loa} m); fly-bridge open`,
+      ],
+      spec: { schema: 'me3d.ship_spec/1', type: 'custom', params: { loa_m: loa, beam_m: beam, draught_m: 2.1 } },
+    };
+  }
+  const reply: Message = { who: 'AI', text: `(mock) ${note}`, at: now() };
+  p.messages = [...p.messages, reply];
+  return { message: reply, research_saved: true, plan_saved: p.design_plan?.status === 'draft' };
+}
+
+function approvePlan(p: Store['projects'][string]) {
+  if (p.base !== 'custom') throw new HttpErr(400, 'Only custom ships have a design plan.');
+  const plan = p.design_plan;
+  if (!plan) throw new HttpErr(409, 'There is no design plan yet. Ask the AI in Research to draft one.');
+  const st = planState(p);
+  if (st === 'approved') throw new HttpErr(409, 'This design plan is already approved.');
+  if (plan.status === 'stale') throw new HttpErr(409, 'The research changed after this plan was approved. Ask the AI in Research to redraft the plan.');
+  if (st === 'redraft') throw new HttpErr(409, 'The research changed after this plan was drafted. Ask the AI in Research to redraft the plan, then approve it.');
+  p.design_plan = { ...plan, status: 'approved', approved_at: now() };
+  save();
+  return startJob(['Building the approved design plan.', ...buildSteps, 'Adding the plan’s details.'], () => {
+    const n = newVersion(p, 'Built from the approved design plan');
+    p.build_report = { ok: true, errors: [], warnings: [], triangles: 5200 };
+    p.plan_built = true;
+    const reply: Message = { who: 'AI', text: '(mock) Built the approved design plan. Comment on any part to change it.', at: now() };
+    p.messages = [...p.messages, reply];
+    return { version: n, build_report: p.build_report, reply: reply.text, built_versions: [n] };
+  });
+}
+
+/** The server's refusal (409) of any build on a custom ship before its first approved plan is built. */
+function refuseUnplanned(p: Store['projects'][string]) {
+  if (p.kind !== 'ship' || p.base !== 'custom') return;
+  const plan = p.design_plan;
+  if (p.plan_built || plan?.status === 'approved') return; // as the server's needs_plan
+  if (!plan) throw new HttpErr(409, 'This ship is built from a design plan, and there is none yet. Go to Research and ask the AI to draft one; approving it builds the ship.');
+  throw new HttpErr(409, 'This ship is built from its design plan. Go to Research and approve the plan first; that builds the ship.');
+}
+
 const buildSteps = ['Merging the spec', 'Running the builder in Blender', 'Applying overrides', 'Exporting glTF', 'Checking the build report'];
 
 function route(message: string): RouteResult {
@@ -195,6 +305,7 @@ function route(message: string): RouteResult {
     [/\bput\b|place|on board|aboard|alongside|scenario|assembl|crew on/, 'assembly', 'That puts people on a ship and has them do something, so Assembly.', null],
     [/animat|\bmove\b|brace|walk|\brun\b|squat|pose|gesture|signal/, 'animation', 'That’s a movement, so the animation editor.', 'c_cox'],
     [/crew member|uniform|coxswain|female|\bmale\b|person|human|\bvest\b|helmet|clothes|outfit|\bhat\b/, 'crew', 'That’s a person or something they wear, so the Crew workshop.', 'c_cox'],
+    [/\b(create|new|make)\b.*\b(ship|yacht|tug|boat|vessel|ferry|trawler|barge|frigate)\b/, 'ship_research', 'A new vessel: describe it on the Ship page, and it starts with research.', null],
     [/door|searchlight|outboard|wiper|steer|hull|cabin|looks wrong|fix the/, 'ship_build', 'That changes a part of PC 303, so the ship in Build mode.', 'p_pc303'],
     [/research|build|model|ship|vessel|boat|class|pc ?3|frigate|patrol/, 'ship_research', 'A new vessel starts with research.', 'p_pc303'],
   ];
@@ -208,6 +319,8 @@ const catalog: Catalog = {
     { type: 'container', name: 'Container ship', description: 'Box-hulled cargo ship with cranes' },
     { type: 'sampan', name: 'Sampan', description: 'Small open boat with an outboard' },
     { type: 'tanker', name: 'Tanker', description: 'Crude oil tanker' },
+    // As the server lists it; the Ship page starts these from "Describe a new ship", not as a base.
+    { type: 'custom', name: 'Any ship', description: 'A general monohull shaped from research and an approved design plan' },
   ],
   crew: [{ id: 'male_default', name: 'Default male crew' }],
   // Mirrors catalog/crew/male_default.json options (suits, shoes, hats).
@@ -231,6 +344,7 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
   if (method === 'GET' && path === '/api/projects') {
     return Object.values(store.projects).map((p): ProjectSummary => ({ id: p.id, kind: p.kind, name: p.name, base: p.base, version: p.version, ok: p.build_report.ok, updated: p.versions[p.versions.length - 1]?.at, model_url: p.model_url, open_pins: p.pins.filter((x) => x.status !== 'resolved').length }));
   }
+  if (method === 'POST' && path === '/api/projects' && body.kind === 'ship' && body.base === 'custom') return createCustom(body);
   if (method === 'POST' && path === '/api/projects') {
     const id = `${body.kind === 'ship' ? 'p' : 'c'}_${++store.seq}`;
     const names: Record<string, string> = { container: 'Container ship', sampan: 'Sampan', tanker: 'Tanker', male_default: 'Default male crew' };
@@ -247,6 +361,7 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
   if ((r = m(/^\/api\/projects\/([^/]+)\/versions\/(\d+)\/parts\.json$/))) return proj(r[1]).parts;
   if ((r = m(/^\/api\/projects\/([^/]+)\/spec$/)) && method === 'POST') {
     const p = proj(r[1]);
+    refuseUnplanned(p);
     return startJob(buildSteps, () => {
       p.spec = mergePatch(p.spec as Record<string, unknown>, body.patch ?? {}) as Project['spec'];
       const n = newVersion(p, `Edited ${Object.keys(body.patch ?? {}).join(', ')}`);
@@ -263,10 +378,12 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
   }
   if ((r = m(/^\/api\/projects\/([^/]+)\/chat$/)) && method === 'POST') {
     const p = proj(r[1]);
+    if (body.mode !== 'research') refuseUnplanned(p);
     const attachments = ((body.attachments ?? []) as string[]).map((id) => mockUploads[id]).filter(Boolean);
     p.messages = [...p.messages, { who: 'You', text: String(body.message), at: now(), ...(attachments.length ? { attachments } : {}) }];
     save();
     const research = body.mode === 'research';
+    if (research && p.base === 'custom') return startJob(['Reading your description and photos', 'Searching sources', 'Updating the research', 'Drafting the design plan'], () => customResearchTurn(p, String(body.message)));
     return startJob(research ? ['Reading the research', 'Searching sources', 'Updating the research'] : ['Reading the request', ...buildSteps], () => {
       const reply: Message = { who: 'AI', text: research ? `(mock) Noted for the research: “${body.message}”. No real search runs in mock mode.` : `(mock) Done: “${body.message}”. Rebuilt as a new version.`, at: now() };
       p.messages = [...p.messages, reply];
@@ -275,8 +392,10 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
       return { message: reply, ...(p.kind === 'crew' && !research ? { changed_modules: changed } : {}) };
     });
   }
+  if ((r = m(/^\/api\/projects\/([^/]+)\/design-plan\/approve$/)) && method === 'POST') return approvePlan(proj(r[1]));
   if ((r = m(/^\/api\/projects\/([^/]+)\/pins$/)) && method === 'POST') {
     const p = proj(r[1]);
+    refuseUnplanned(p);
     const pin: Pin = { id: `pin_${++store.seq}`, part: body.part, point: body.point, status: 'working', author: body.author || 'You', messages: [{ who: body.author || 'You', text: body.text, at: now() }] };
     p.pins = [...p.pins, pin];
     save();
@@ -290,6 +409,7 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
   }
   if ((r = m(/^\/api\/projects\/([^/]+)\/pins\/([^/]+)\/reply$/)) && method === 'POST') {
     const p = proj(r[1]); const pid = r[2];
+    refuseUnplanned(p);
     p.pins = p.pins.map((x) => x.id === pid ? { ...x, status: 'working', messages: [...x.messages, { who: 'You', text: body.text, at: now() }] } : x);
     save();
     return startJob(['Reading the reply', ...buildSteps], () => {
@@ -355,7 +475,7 @@ export async function mockTransport(method: string, path: string, body?: unknown
     return JSON.parse(JSON.stringify(await handle(method, path, body ?? null)));
   } catch (e) {
     if (e instanceof HttpErr) {
-      throw new ApiError(e.status, `${method} ${path} failed (${e.status}): ${e.message}`);
+      throw new ApiError(e.status, httpErrorText(method, path, e.status, e.message), { detail: e.message });
     }
     throw e;
   }
