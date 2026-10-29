@@ -72,7 +72,8 @@ def build(p, me3d):
         if cm.faces:
             cm.to_object(f"Cargo__Bay_{i:02d}", pivot=(xc, 0, zd + HATCH_H), parent=hatch)
 
-    stack_top = (layout and form.deck_at(layout[0])) + HATCH_H + tiers * FEU[2]
+    # With no bays (a cleared deck) the cranes stand on the deck amidships instead of the first hatch.
+    stack_top = form.deck_at(layout[0] if layout else 0.0) + HATCH_H + tiers * FEU[2]
     for k, xcr in enumerate(cranes_x, start=1):
         y = B / 2 - 3.5
         zd = form.deck_at(xcr)

@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from . import crew_modules
 from .agent import (AgentRunner, AgentSession, ClaudeAgentRunner, custom_research_context, module_prompt,
@@ -29,7 +29,9 @@ from .builds import Builds, built_line, summarise_change
 from .catalog import Catalog, CatalogError
 from .config import Settings, find_claude_cli
 from .jobs import JobError, JobManager
-from .design_plan import name_from_brief, needs_plan
+from .design_plan import name_from_brief, needs_plan, validate_custom_params
+from .report import filename as report_filename, research_pdf, research_pptx
+from .review import check_param, excluded_note
 from .packaging import export_scene, safe_id, stations_of
 from .router import LLM, claude_llm, route
 from .specmerge import deep_merge, gltf_to_blender, keep_crew_nulls, label_for, variant_id
@@ -85,7 +87,9 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
     agent = agent or ClaudeAgentRunner(model=settings.agent_model)
     llm = llm or claude_llm(settings.route_model)
     unreal = unreal or make_unreal_runner(settings)
-    jobs = JobManager(workers=workers)
+    # Every project job's log is kept with the project, so its work can be reviewed later.
+    jobs = JobManager(workers=workers, on_finish=lambda job: store.save_job_log(job["project"], job)
+                      if job.get("project") else None)
 
     app = FastAPI(title="3D model editor server")
     app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -376,10 +380,15 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         except PlanRefused as e:
             raise HTTPException(409, str(e))
 
+        mine = dict(plan.get("user_params") or {})
+        spec = deep_merge(plan["spec"], {"params": mine}) if mine else plan["spec"]
+
         def work(log):
             log("• Building the approved design plan")
+            if mine:
+                log(f"• With your values: {', '.join(sorted(mine))}")
             try:
-                built = build_or_fail(pid, plan["spec"], "Built from the approved design plan", log)
+                built = build_or_fail(pid, spec, "Built from the approved design plan", log)
             except JobError as e:
                 store.unapprove_design_plan(pid, str(e))
                 store.add_message(pid, "AI", "The approved plan did not build, so the plan is back to draft: "
@@ -389,6 +398,9 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             log("• Adding the plan's details")
             pics = reference_pictures(pid, set())
             text = plan_build_prompt(plan)
+            if mine:
+                text += ("\n\nThe user set these values in the plan; they are already built in. Keep them exactly:\n"
+                         + json.dumps(mine, indent=1))
             prompt: str | list[dict] = content_blocks(text, pics) if pics else text
             try:
                 session, reply = run_agent(pid, prompt, "build", log)
@@ -420,6 +432,100 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             except (NotFound, OSError):
                 continue
         return list(reversed(out))
+
+    # ---- research the user reviews: crossed-out sources, their own plan values -------------
+    @app.patch("/api/projects/{pid}/research/excluded")
+    def set_excluded(pid: str, body: dict = Body(...)):
+        """Cross sources out: the AI is told not to rely on them, and the plan must be redrafted."""
+        p = need_project(pid)
+        ids = body.get("excluded_sources")
+        known = {s.get("id") for s in (p.get("research") or {}).get("sources") or []}
+        if not isinstance(ids, list) or not all(isinstance(i, str) and i in known for i in ids):
+            raise HTTPException(400, f"excluded_sources must be source ids from the research: {sorted(i for i in known if i)}")
+        store.set_excluded_sources(pid, sorted(set(ids), key=ids.index))
+        return {"project": with_category(store.api_project(pid))}
+
+    @app.patch("/api/projects/{pid}/design-plan")
+    def set_plan_values(pid: str, body: dict = Body(...)):
+        """The user's own values for the draft plan's params (null = the plan's again). They outlive a
+        redraft, are built in on approval, and the build AI is told to keep them."""
+        p = need_project(pid)
+        plan = p.get("design_plan")
+        if not isinstance(plan, dict):
+            raise HTTPException(409, "There is no design plan yet.")
+        change = body.get("params")
+        if not isinstance(change, dict) or set(body) - {"params"}:
+            raise HTTPException(400, "Send params: {param: value or null}")
+        planned = (plan.get("spec") or {}).get("params") or {}
+        try:
+            docs = catalog.entry("ship", "custom").get("param_docs") or {}
+        except CatalogError:
+            docs = {}
+        mine = dict(plan.get("user_params") or {})
+        for name, value in change.items():
+            if value is None:
+                mine.pop(name, None)
+                continue
+            why = check_param(name, value, planned, docs)
+            if why:
+                raise HTTPException(400, why)
+            mine[name] = value
+        errors = validate_custom_params({**planned, **mine}, docs, None)
+        if errors:
+            raise HTTPException(400, "; ".join(errors))
+        try:
+            store.set_plan_params(pid, mine)
+        except PlanRefused as e:
+            raise HTTPException(409, str(e))
+        return {"project": with_category(store.api_project(pid))}
+
+    # ---- kept for review: research versions, what was read, job logs, exports -----------
+    @app.get("/api/projects/{pid}/research/history")
+    def research_history(pid: str):
+        need_project(pid)
+        return store.research_history(pid)
+
+    @app.get("/api/projects/{pid}/research/history/{n}")
+    def research_version(pid: str, n: int):
+        need_project(pid)
+        return store.research_version(pid, n)
+
+    @app.get("/api/projects/{pid}/materials")
+    def list_materials(pid: str):
+        need_project(pid)
+        return store.materials(pid)
+
+    @app.get("/api/projects/{pid}/materials/{mid}")
+    def get_material(pid: str, mid: str):
+        need_project(pid)
+        return store.material(pid, mid)
+
+    @app.get("/api/projects/{pid}/logs")
+    def project_logs(pid: str):
+        need_project(pid)
+        return store.job_logs(pid)
+
+    @app.get("/api/projects/{pid}/research/export.{fmt}")
+    def export_research(pid: str, fmt: str):
+        p = need_project(pid)
+        research = p.get("research")
+        if fmt not in ("pdf", "pptx", "json"):
+            raise HTTPException(404, "Export as pdf, pptx or json")
+        if not research:
+            raise HTTPException(404, f"{p['name']} has no research to export yet")
+        headers = {"Content-Disposition": f'attachment; filename="{report_filename(p["name"], fmt)}"'}
+        if fmt == "json":
+            return Response(json.dumps(research, indent=2, ensure_ascii=False), media_type="application/json", headers=headers)
+        photos = []
+        for ph in research.get("photos") or []:
+            f = safe_data_path(settings.data_dir, str(ph.get("file") or "").removeprefix("/api/files/"))
+            if f and ph.get("status") != "excluded":
+                photos.append((ph, f.read_bytes()))
+        args = (p, research, store.materials(pid), store.research_history(pid), photos)
+        if fmt == "pdf":
+            return Response(research_pdf(*args), media_type="application/pdf", headers=headers)
+        return Response(research_pptx(*args), headers=headers,
+                        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
 
     @app.get("/api/projects/{pid}")
     def get_project(pid: str):
@@ -566,6 +672,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             if module:
                 text = module_prompt(module) + text
             sent = list(files)
+            if mode == "research":
+                text = excluded_note(store.load(pid)) + text
             if mode == "research" and not custom:  # a custom ship's context below carries the whole record
                 text = research_media_context(store.load(pid)) + text
             if custom:

@@ -2,8 +2,8 @@
 // VITE_MOCK=1 routes every call to an in-browser mock (src/mock) for development before the
 // server exists. The default build always talks to the real /api.
 import type {
-  ApproveResult, Attachment, Catalog, ExportResult, Health, Job, JobSummary, ModuleId, Part, Pin, Project, ProjectBase,
-  ProjectKind, ProjectSummary, RouteResult, Scene, SceneSpec, UnrealReport, VariantRequest, Vec3,
+  ApproveResult, Attachment, Catalog, ExportResult, Health, Job, JobLogRecord, JobSummary, Material, ModuleId, Part, Pin, Project, ProjectBase,
+  ProjectKind, ProjectSummary, Research, ResearchVersion, RouteResult, Scene, SceneSpec, UnrealReport, VariantRequest, Vec3,
 } from './types';
 import { httpErrorText } from './lib/designPlan';
 
@@ -67,6 +67,16 @@ export const api = {
     call<{ project: Project; job_id: string }>('POST', '/api/projects', { kind, base, ...(name ? { name } : {}), ...(brief ? { brief } : {}) }),
   /** Approve a custom ship's current draft plan and build it (§5). 409 with a sentence when it can't be. */
   approvePlan: (id: string) => call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/design-plan/approve`),
+  /** The user's own values for the draft plan's params; null takes one back to the plan's. */
+  setPlanValues: (id: string, params: Record<string, unknown>) =>
+    call<{ project: Project }>('PATCH', `/api/projects/${enc(id)}/design-plan`, { params }),
+  setExcludedSources: (id: string, ids: string[]) =>
+    call<{ project: Project }>('PATCH', `/api/projects/${enc(id)}/research/excluded`, { excluded_sources: ids }),
+  researchHistory: (id: string) => call<ResearchVersion[]>('GET', `/api/projects/${enc(id)}/research/history`),
+  researchVersion: (id: string, n: number) => call<{ n: number; at: string; research: Research }>('GET', `/api/projects/${enc(id)}/research/history/${n}`),
+  materials: (id: string) => call<Material[]>('GET', `/api/projects/${enc(id)}/materials`),
+  material: (id: string, mid: string) => call<Material>('GET', `/api/projects/${enc(id)}/materials/${enc(mid)}`),
+  projectLogs: (id: string) => call<JobLogRecord[]>('GET', `/api/projects/${enc(id)}/logs`),
   project: (id: string) => call<Project>('GET', `/api/projects/${enc(id)}`),
   parts: (id: string, n: number) => call<Part[]>('GET', `/api/projects/${enc(id)}/versions/${n}/parts.json`),
   patchSpec: (id: string, patch: Record<string, unknown>) => call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/spec`, { patch }),
@@ -112,6 +122,11 @@ export type UnrealJobResult = UnrealReport;
 export function modelUrl(projectId: string, n: number): string {
   if (mockModelUrl) return mockModelUrl(projectId, n);
   return `/api/projects/${enc(projectId)}/versions/${n}/model.glb`;
+}
+
+/** The research report as a download: PDF, PowerPoint or the raw JSON (CONTRACT §12). */
+export function researchExportUrl(projectId: string, format: 'pdf' | 'pptx' | 'json'): string {
+  return `/api/projects/${enc(projectId)}/research/export.${format}`;
 }
 
 /** A file under the server's data folder (zips, packages), e.g. an export's `zip_url`. */

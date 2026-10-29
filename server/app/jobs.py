@@ -49,7 +49,8 @@ class JobManager:
     another, in the order sent: each AI turn reads the project's spec when it starts, so two at
     once would each build from the old spec and the later version would drop the earlier change."""
 
-    def __init__(self, workers: int = 6):
+    def __init__(self, workers: int = 6, on_finish: Callable[[dict], None] | None = None):
+        self._on_finish = on_finish  # called with the finished job (as get() returns it), e.g. to keep its log
         self._jobs: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="me3d-job")
@@ -108,6 +109,11 @@ class JobManager:
             with self._lock:
                 job["finished"] = now_iso()
                 job["finished_at"] = time.time()
+            if self._on_finish:
+                try:
+                    self._on_finish(self.get(job["id"]))
+                except Exception:  # keeping a log must never stop the next job
+                    traceback.print_exc()
             self._start_next(job["project"])
 
     def get(self, job_id: str) -> dict | None:

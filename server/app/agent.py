@@ -774,6 +774,18 @@ class AgentSession:
         return f"Removed {id}. Call rebuild."
 
     # ---- research ---------------------------------------------------------------------
+    def record_material(self, tool: str, args: dict | None, result: Any) -> None:
+        """Keep what a web search returned or a page said, as the AI saw it, for review afterwards."""
+        a = args if isinstance(args, dict) else {}
+        if isinstance(result, list):
+            text = "\n".join(str(b.get("text", "")) for b in result if isinstance(b, dict))
+        else:
+            text = "" if result is None else str(result)
+        if tool == "WebSearch":
+            self.store.add_material(self.pid, "search", str(a.get("query", "")), text, a)
+        elif tool == "WebFetch":
+            self.store.add_material(self.pid, "page", str(a.get("url", "")), text, a)
+
     def t_save_research(self, research: dict) -> str:
         stored = self.store.load(self.pid).get("research") or {}
         media_ids = [m.get("id") for k in ("photos", "closeups") for m in stored.get(k) or []]
@@ -1338,7 +1350,8 @@ class ClaudeAgentRunner:
 
     async def _run(self, session: AgentSession, prompt: str | list[dict], mode: str, log: Log) -> str:
         from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock,
-                                      ToolUseBlock, create_sdk_mcp_server, query, tool)
+                                      ToolResultBlock, ToolUseBlock, UserMessage, create_sdk_mcp_server,
+                                      query, tool)
 
         def make(name: str, desc: str, schema: dict):
             @tool(name, desc, schema)
@@ -1363,6 +1376,7 @@ class ClaudeAgentRunner:
             # turn on a large photo (live sampan run, 29 Oct). Previews are capped too (research_media).
             max_buffer_size=20 * 1024 * 1024)
         texts: list[str] = []
+        uses: dict[str, tuple[str, Any]] = {}  # tool-use id -> (tool name, input), to keep what web tools return
         final: str | None = None
         async def turn():
             # Content blocks (attached pictures and PDFs) go as one streamed user message.
@@ -1378,10 +1392,18 @@ class ClaudeAgentRunner:
                         log(f"• AI: {said[:240]}{'…' if len(said) > 240 else ''}")
                     elif isinstance(b, ToolUseBlock):
                         name = b.name.removeprefix('mcp__editor__')
+                        uses[b.id] = (name, b.input)
                         log(f"AI → {name}")
                         doing = describe_tool(name, b.input)
                         if doing:
                             log(f"• {doing}")
+            elif isinstance(m, UserMessage) and isinstance(m.content, list):
+                # Results of the built-in web tools: keep what the AI read (contract §12, materials).
+                for b in m.content:
+                    if isinstance(b, ToolResultBlock) and not b.is_error and b.tool_use_id in uses:
+                        name, args = uses[b.tool_use_id]
+                        if name in ("WebSearch", "WebFetch"):
+                            await asyncio.to_thread(session.record_material, name, args, b.content)
             elif isinstance(m, ResultMessage):
                 if m.is_error and m.subtype == "error_max_turns":
                     # Out of steps is not a failure: everything the tools saved stays saved.

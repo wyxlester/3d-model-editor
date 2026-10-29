@@ -1,24 +1,20 @@
 // Variant review (CONTRACT §10): watch a variant being made, the original on the left and the
 // variant on the right, updating as each version builds; ask for more changes; then approve it
 // (it becomes an ordinary project) or discard it. Nothing about the original changes either way.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, errorText, modelUrl } from '../api';
 import { ChatPanel, ErrorNote, Loading, TopBar } from '../components/common';
 import { useProjectWork } from '../components/JobCenter';
-import { remember, useLoad, useProject, useTicker } from '../hooks';
+import { ActivityFeed, StepList, useWatchedJobs } from '../components/ActivityFeed';
+import { remember, useLoad, useProject } from '../hooks';
 import type { ViewName } from '../lib/frames';
-import { pollJob } from '../lib/poll';
 import { paths, projectPath } from '../lib/routing';
-import { activityLines, variantSteps, type StepState } from '../lib/variant';
+import { variantSteps } from '../lib/variant';
 import type { Part, Project } from '../types';
 import { CrewViewer, ShipViewer, ViewButtons } from '../viewer/Viewer';
 
-interface Section { jobId: string; label: string; log: string[]; phase: 'running' | 'done' | 'error'; error?: string; startedAt: number; endedAt?: number }
-
 const RUNNING = ['copying', 'researching', 'changing'];
-const STEP_MARK: Record<StepState, string> = { done: '✓', active: '', failed: '✗', todo: '' };
-const STEP_COLOR: Record<StepState, string> = { done: 'var(--green-text)', active: 'var(--accent-link)', failed: 'var(--red-text)', todo: 'var(--text-3)' };
 
 export function VariantReview() {
   const { id } = useParams();
@@ -28,54 +24,20 @@ export function VariantReview() {
   const src = v?.derived_from ?? null;
   const srcParts = useLoad<Part[]>(() => (src ? api.parts(src.project, src.version) : Promise.resolve([])), [src?.project, src?.version]);
 
-  const [sections, setSections] = useState<Section[]>([]);
-  const [showRaw, setShowRaw] = useState(false);
   const [view, setView] = useState<ViewName>('port');
   const [viewNonce, setViewNonce] = useState(0); // re-applies a view even when it is already selected
   const [err, setErr] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [acting, setActing] = useState(false);
-  const feedRef = useRef<HTMLDivElement>(null);
-  const aborts = useRef<AbortController[]>([]);
-  const watched = useRef(new Set<string>());
-  useEffect(() => () => {
-    // Stop polling on unmount. Reset too, so StrictMode's second mount watches again from scratch.
-    aborts.current.forEach((a) => a.abort());
-    aborts.current = [];
-    watched.current.clear();
-    setSections([]);
-  }, []);
 
   const reload = project.reload;
   useProjectWork(id, () => void reload()); // a change sent from another page lands here too
-  /** Follow a job: its log feeds the progress list; the model is re-read when it ends. */
-  const watch = useCallback((jobId: string, label: string) => {
-    if (watched.current.has(jobId)) return;
-    watched.current.add(jobId);
-    setSections((ss) => [...ss, { jobId, label, log: [], phase: 'running', startedAt: Date.now() }]);
-    const ac = new AbortController();
-    aborts.current.push(ac);
-    const set = (patch: Partial<Section>) => setSections((ss) => ss.map((s) => (s.jobId === jobId ? { ...s, ...patch } : s)));
-    pollJob(jobId, { signal: ac.signal, onUpdate: (s) => { if ('log' in s) set({ log: s.log }); } })
-      .then(() => set({ phase: 'done', endedAt: Date.now() }), (e) => { if (!ac.signal.aborted) set({ phase: 'error', error: errorText(e), endedAt: Date.now() }); })
-      .finally(() => { if (!ac.signal.aborted) void reload(); });
-  }, [reload]);
+  const { sections, watch, watching } = useWatchedJobs(reload);
 
   // The variant's own job: watch it from the start (a finished job replays its whole log).
   const draftJob = v?.draft?.job_id ?? null;
   useEffect(() => { if (draftJob) watch(draftJob, 'Making the variant'); }, [draftJob, watch]);
 
-  const watching = sections.some((s) => s.phase === 'running');
-  useTicker(watching);
-  // While anything runs, re-read the project so each version appears on the right as soon as it builds.
-  useEffect(() => {
-    if (!watching) return;
-    const t = setInterval(() => void reload(), 2500);
-    return () => clearInterval(t);
-  }, [watching, reload]);
-
-  const lineCount = sections.reduce((n, s) => n + s.log.length, 0);
-  useEffect(() => { feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight }); }, [lineCount, showRaw]);
 
   if (project.error) return <><TopBar /><div style={{ padding: 24 }}><ErrorNote error={project.error} retry={reload} /></div></>;
   if (!v) return <><TopBar /><div className="viewer"><Loading what="the variant" /></div></>;
@@ -123,9 +85,6 @@ export function VariantReview() {
         : making || watching ? <span className="chip blue">Working…</span>
           : <span className="chip amber">Waiting for your approval</span>;
 
-  const now = Date.now();
-  const secs = (s: Section) => Math.round(((s.endedAt ?? now) - s.startedAt) / 1000);
-
   const pane = (side: 'original' | 'variant') => {
     const original = side === 'original';
     const url = original ? modelUrl(src.project, src.version) : v.model_url;
@@ -171,46 +130,11 @@ export function VariantReview() {
         <aside className="side left" style={{ width: 340, minHeight: 0, overflow: 'hidden' }}>
           <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8, borderBottom: '1px solid var(--border)', fontSize: 13 }}>
             {v.brief && <div className="muted" style={{ lineHeight: 1.45 }}>“{v.brief}”</div>}
-            <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6 }} aria-label="Progress">
-              {steps.map((s) => (
-                <li key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 8, color: STEP_COLOR[s.state] }}>
-                  <span style={{ width: 16, display: 'inline-flex', justifyContent: 'center' }}>
-                    {s.state === 'active' && (s.key !== 'review' || busy) ? <span className="spinner" /> : STEP_MARK[s.state] || '○'}
-                  </span>
-                  <span style={{ color: s.state === 'todo' ? 'var(--text-3)' : 'var(--text)' }}>{s.label}</span>
-                </li>
-              ))}
-            </ol>
+            <StepList steps={steps} busy={busy} />
             {draft?.error && <span className="bad" style={{ fontSize: 12, lineHeight: 1.45 }}>{draft.error}</span>}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', padding: '10px 16px 0', fontSize: 12 }}>
-            <span className="faint">What's happening</span>
-            <button className="btn sm muted" style={{ marginLeft: 'auto', height: 24 }} onClick={() => setShowRaw(!showRaw)}>{showRaw ? 'Show summary' : 'Show full log'}</button>
-          </div>
-          <div ref={feedRef} className="scroll" style={{ flex: 1, minHeight: 80, padding: '8px 16px 12px', display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12, lineHeight: 1.5 }}>
-            {!sections.length && <span className="faint">{draft ? 'Connecting…' : 'Nothing running.'}</span>}
-            {sections.map((s) => {
-              const lines = showRaw ? s.log : activityLines(s.log);
-              return (
-                <div key={s.jobId} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <span style={{ display: 'flex', gap: 8, color: 'var(--text-2)', fontWeight: 500 }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.label}</span>
-                    {s.phase === 'running' && <span className="faint" style={{ marginLeft: 'auto', fontWeight: 400 }}>{secs(s)} s</span>}
-                  </span>
-                  {lines.map((l, i) => (
-                    <span key={i} className={showRaw ? 'mono' : undefined}
-                      style={{ display: 'flex', gap: 8, color: l.startsWith('AI:') ? 'var(--text)' : 'var(--text-2)', overflowWrap: 'anywhere', fontSize: showRaw ? 11 : 12 }}>
-                      {!showRaw && (i === lines.length - 1 && s.phase === 'running' ? <span className="spinner" style={{ marginTop: 3 }} /> : <span className="faint">·</span>)}
-                      <span style={{ minWidth: 0 }}>{l}</span>
-                    </span>
-                  ))}
-                  {s.phase === 'running' && !lines.length && <span className="faint" style={{ display: 'flex', gap: 8 }}><span className="spinner" style={{ marginTop: 3 }} />Starting…</span>}
-                  {s.phase === 'error' && <span className="bad">{s.error}</span>}
-                </div>
-              );
-            })}
-          </div>
+          <ActivityFeed sections={sections} empty={draft ? 'Connecting…' : 'Nothing running.'} />
 
           {draft && !v.discarded && (
             <div style={{ height: 'clamp(200px, 34%, 300px)', flexShrink: 0, display: 'flex', flexDirection: 'column', borderTop: '1px solid var(--border)' }}>

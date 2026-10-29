@@ -3,9 +3,12 @@
 // The build plan is a canvas section the contract has no field for; it says so instead of showing invented data.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { api, errorText } from '../api';
+import { api, errorText, researchExportUrl } from '../api';
 import { ChatPanel, ErrorNote, EvidenceChip, JobLines, Loading, PRIORITY, TopBar, useCarried } from '../components/common';
 import { OtherWork, useProjectWork } from '../components/JobCenter';
+import { ResearchMaterials, ResearchVersions } from '../components/ResearchRecord';
+import { hexToLinear } from '../lib/describe';
+import { claimUsed, linearToHex, planRows, type PlanRow } from '../lib/planValues';
 import { remember, useJobs, useProject } from '../hooks';
 import { awaitingApproval, buildTabLabel, canApprove, isCustomShip, planNotice, planState, planStatusLabel, summaryLine } from '../lib/designPlan';
 import { partLabel } from '../lib/parts';
@@ -16,7 +19,7 @@ import { CloseupsTab, PhotosTab } from './ResearchPhotos';
 import type { Attachment, Project, Research } from '../types';
 import type { ResearchStart } from './ProjectPicker';
 
-type Sec = 'summary' | 'photos' | 'platform' | 'closeups' | 'articulation' | 'plan' | 'questions' | 'sources';
+type Sec = 'summary' | 'photos' | 'platform' | 'closeups' | 'articulation' | 'plan' | 'questions' | 'sources' | 'read' | 'versions';
 type Sel = { kind: 'claim'; i: number } | { kind: 'source'; i: number } | { kind: 'photo'; i: number } | { kind: 'closeup'; i: number } | { kind: 'question'; i: number } | null;
 
 const LEGEND = ['Official', 'Photographed', 'Photo reading', 'Inference', 'Comparison only', 'Secondary lead', 'Unverified'];
@@ -24,7 +27,7 @@ const WEAK = (s: string) => /Unverified|Secondary lead|Inference/.test(s);
 
 export function ShipResearch() {
   const { id } = useParams();
-  const { data: project, error, reload, loading } = useProject(id);
+  const { data: project, setData: setProject, error, reload, loading } = useProject(id);
   const { jobs, run, dismiss, busy } = useJobs();
   const carried = useCarried();
   const nav = useNavigate();
@@ -38,7 +41,14 @@ export function ShipResearch() {
   const anyWork = busy || work.others.length > 0;
   const [sec, setSec] = useState<Sec>('summary');
   const [sel, setSel] = useState<Sel>(null);
-  const [excluded, setExcluded] = useState<Record<string, boolean>>({});
+  const excludedIds = project?.excluded_sources ?? [];
+  const excluded: Record<string, boolean> = Object.fromEntries(excludedIds.map((s) => [s, true]));
+  const [excludeErr, setExcludeErr] = useState<string | null>(null);
+  const toggleSource = async (sid: string) => {
+    setExcludeErr(null);
+    const next = excludedIds.includes(sid) ? excludedIds.filter((x) => x !== sid) : [...excludedIds, sid];
+    try { setProject((await api.setExcludedSources(id!, next)).project); } catch (e) { setExcludeErr(errorText(e)); }
+  };
   const [planErr, setPlanErr] = useState<string | null>(null);
   const [inspect, setInspect] = useState<{ target: InspectTarget; order: string[] } | null>(null);
   useEffect(() => { if (id) remember('ship', id); }, [id]);
@@ -105,6 +115,12 @@ export function ShipResearch() {
           {r && (r.claims ?? []).some((c) => /Unverified/.test(c.status)) && (
             <span className="chip amber" style={{ fontSize: 12, padding: '4px 10px' }}>{(r.claims ?? []).filter((c) => /Unverified/.test(c.status)).length} unverified claims</span>
           )}
+          {r && id && <>
+            <span className="faint" style={{ fontSize: 12 }}>Report:</span>
+            <a className="btn sm" href={researchExportUrl(id, 'pdf')} download>PDF</a>
+            <a className="btn sm" href={researchExportUrl(id, 'pptx')} download>PowerPoint</a>
+            <a className="btn sm" href={researchExportUrl(id, 'json')} download>JSON</a>
+          </>}
           {!awaitingApproval(project) && <Link to={paths.shipBuild(id)} className="btn primary" style={{ height: 34, borderRadius: 8 }}>{custom ? 'Open Build' : 'Start building'}</Link>}
         </div>
       </TopBar>
@@ -139,7 +155,7 @@ export function ShipResearch() {
               <SectionNav r={r} sec={sec} setSec={(s) => { setSec(s); setSel(null); }} />
               {sec === 'summary' && <Summary r={r} />}
               {sec === 'photos' && <PhotosTab r={r} subject={subject} selected={sel?.kind === 'photo' ? selectedId : null} onSelect={selPhoto} onInspect={openInspect} onAsk={(m) => void ask(m)} busy={anyWork} />}
-              {sec === 'platform' && <Claims r={r} sel={sel} setSel={setSel} />}
+              {sec === 'platform' && <Claims r={r} sel={sel} setSel={setSel} excluded={excludedIds} />}
               {sec === 'closeups' && <CloseupsTab r={r} subject={subject} selected={sel?.kind === 'closeup' ? selectedId : null} onSelect={selCrop} onInspect={openInspect} onAsk={(m) => void ask(m)} busy={anyWork} />}
               {sec === 'articulation' && <Articulation r={r} id={id!} />}
               {sec === 'plan' && <NotInContract what="The build plan with acceptance checks" have={(r.plan ?? []).length > 0}>
@@ -154,11 +170,12 @@ export function ShipResearch() {
                 </div>
               </NotInContract>}
               {sec === 'questions' && <Questions r={r} onAsk={ask} sel={sel} setSel={setSel} />}
-              {sec === 'sources' && <Sources r={r} excluded={excluded} onExclude={(sid, title) => {
-                const on = !excluded[sid];
-                setExcluded({ ...excluded, [sid]: on });
-                void ask(on ? `Exclude source ${sid} (${title}) from the research, and tell me which claims and parts that affects.` : `Use source ${sid} (${title}) again.`);
-              }} />}
+              {sec === 'sources' && <>
+                <ErrorNote error={excludeErr} />
+                <Sources r={r} excluded={excluded} onExclude={(sid) => void toggleSource(sid)} />
+              </>}
+              {sec === 'read' && <ResearchMaterials pid={id!} />}
+              {sec === 'versions' && <ResearchVersions pid={id!} />}
             </>
           )}
           {r && inspect && <PhotoInspector r={r} target={inspect.target} order={inspect.order}
@@ -169,6 +186,7 @@ export function ShipResearch() {
         {custom && project ? (
           <aside className="side right scroll" style={{ width: 400, padding: 16, gap: 12 }}>
             <PlanPanel project={project} busy={anyWork} error={planErr} onApprove={() => void approve()} onAsk={(m) => void ask(m)}
+              onChange={setProject}
               detail={r && sel ? <DetailPanel r={r} sel={sel} onAsk={ask} busy={busy} onInspect={inspectFromPanel} /> : null} />
           </aside>
         ) : (
@@ -196,8 +214,9 @@ export function ModeSwitch({ id, mode, buildLabel = 'Build' }: { id: string; mod
  * The design plan (CONTRACT §5 `type: "custom"`): what will be built, in plain English, approved by
  * the user before anything builds (Lester, 29 Oct). Changes are made by chatting; the plan follows.
  */
-function PlanPanel({ project, busy, error, onApprove, onAsk, detail }: {
-  project: Project; busy: boolean; error: string | null; onApprove: () => void; onAsk: (m: string) => void; detail: ReactNode;
+function PlanPanel({ project, busy, error, onApprove, onAsk, onChange, detail }: {
+  project: Project; busy: boolean; error: string | null; onApprove: () => void; onAsk: (m: string) => void;
+  onChange: (p: Project) => void; detail: ReactNode;
 }) {
   const plan = project.design_plan ?? null;
   const st = planState(project);
@@ -228,6 +247,7 @@ function PlanPanel({ project, busy, error, onApprove, onAsk, detail }: {
           ))}
         </div>
       )}
+      {plan?.spec && <PlanValues project={project} editable={st === 'draft' && !busy} onChange={onChange} />}
       {detail && <div style={{ display: 'flex', flexDirection: 'column', gap: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}>{detail}</div>}
       <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 12 }}>
         {error && <span className="bad" role="alert" style={{ fontSize: 12, lineHeight: 1.5 }}>{error}</span>}
@@ -285,6 +305,8 @@ function SectionNav({ r, sec, setSec }: { r: Research; sec: Sec; setSec: (s: Sec
     ['plan', '05', 'Build plan', r.plan?.length ? String(r.plan.length) : '', 'var(--text-2)'],
     ['questions', '06', 'Open questions', String(r.open_questions?.length ?? 0), 'var(--amber-text)'],
     ['sources', '07', 'Sources', String(r.sources?.length ?? 0), 'var(--text-2)'],
+    ['read', '08', 'What the AI read', '', ''],
+    ['versions', '09', 'Versions', '', ''],
   ];
   return (
     <nav aria-label="Research sections" style={{ position: 'sticky', top: 0, zIndex: 1, display: 'flex', flexWrap: 'wrap', gap: 2, padding: '10px 0', background: 'var(--stage)', borderBottom: '1px solid var(--border)' }}>
@@ -351,7 +373,7 @@ function NotInContract({ what, have, children }: { what: string; have: boolean; 
 
 const sourcesText = (s: string[] | string | undefined) => (Array.isArray(s) ? s.join(', ') : s ?? '');
 
-function Claims({ r, sel, setSel }: { r: Research; sel: Sel; setSel: (s: Sel) => void }) {
+function Claims({ r, sel, setSel, excluded = [] }: { r: Research; sel: Sel; setSel: (s: Sel) => void; excluded?: string[] }) {
   const cols = 'minmax(0, 1.1fr) 130px 120px minmax(0, 1.2fr)';
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -363,7 +385,9 @@ function Claims({ r, sel, setSel }: { r: Research; sel: Sel; setSel: (s: Sel) =>
         const on = sel?.kind === 'claim' && sel.i === i;
         return (
           <button key={i} onClick={() => setSel({ kind: 'claim', i })} style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: 12, border: 0, borderBottom: '1px solid var(--bubble)', fontSize: 13, lineHeight: 1.5, textAlign: 'left', color: 'var(--text)', background: on ? 'var(--accent-bg)' : 'transparent' }}>
-            <span style={{ fontWeight: 500 }}>{c.claim}</span>
+            <span style={{ fontWeight: 500 }} className={claimUsed(c, excluded) ? undefined : 'struck'}
+              title={claimUsed(c, excluded) ? undefined : 'Not used: every source it cites is crossed out'}>
+              {c.claim}{c.value != null && c.value !== '' ? `: ${String(c.value)}${c.unit ? ` ${c.unit}` : ''}` : ''}</span>
             <span style={{ justifySelf: 'start' }}><EvidenceChip status={c.status} /></span>
             <span className="mono muted" style={{ fontSize: 12 }}>{sourcesText(c.sources) || '—'}</span>
             <span className="muted">{c.consequence_for_model}</span>
@@ -422,12 +446,13 @@ function Sources({ r, excluded, onExclude }: { r: Research; excluded: Record<str
       {(r.sources ?? []).map((s) => (
         <div key={s.id} style={{ display: 'grid', gridTemplateColumns: '44px minmax(0, 1fr) 150px auto', gap: 12, alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--bubble)' }}>
           <span className="mono faint">{s.id}</span>
-          <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }} className={excluded[s.id] ? 'struck' : undefined}>
             {s.url ? <a href={s.url} target="_blank" rel="noreferrer">{s.title}</a> : <span>{s.title}</span>}
             <span className="muted" style={{ fontSize: 12 }}>{s.what_it_proves}</span>
           </span>
           <span><EvidenceChip status={excluded[s.id] ? 'Excluded' : s.status} /></span>
-          <button className="btn sm" onClick={() => onExclude(s.id, s.title)} title="Sends the request to the AI in the research chat">{excluded[s.id] ? 'Use again' : 'Exclude'}</button>
+          <button className="btn sm" onClick={() => onExclude(s.id, s.title)}
+            title={excluded[s.id] ? 'Use this source again' : 'Cross it out: the AI rests nothing on it, and the design plan must be redrafted'}>{excluded[s.id] ? 'Use again' : 'Cross out'}</button>
         </div>
       ))}
     </div>
@@ -494,5 +519,73 @@ function DetailPanel({ r, sel, onAsk, busy, onInspect }: { r: Research; sel: Sel
         </div>
       )}
     </>
+  );
+}
+
+/** The draft plan's key settings, which the user may set before approving: their values win, survive
+ * a redraft, and the build AI keeps them (CONTRACT §12, Review). Shapes and lists are changed by chatting. */
+function PlanValues({ project, editable, onChange }: { project: Project; editable: boolean; onChange: (p: Project) => void }) {
+  const plan = project.design_plan!;
+  const planned = ((plan.spec ?? {}) as { params?: Record<string, unknown> }).params ?? {};
+  const mine = plan.user_params ?? {};
+  const [err, setErr] = useState<string | null>(null);
+  const [more, setMore] = useState(false);
+  const { key, more: rest } = planRows(planned, mine);
+  if (!key.length && !rest.length) return null;
+  const set = async (name: string, value: unknown) => {
+    setErr(null);
+    try { onChange((await api.setPlanValues(project.id, { [name]: value })).project); } catch (e) { setErr(errorText(e)); }
+  };
+  const field = (r: PlanRow) => <PlanField key={r.name} row={r} editable={editable} onSet={(v) => void set(r.name, v)} />;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+      <span style={{ fontWeight: 500 }}>Key settings</span>
+      <span className="faint" style={{ fontSize: 12 }}>{editable ? 'Change a value to override the plan. Yours win, survive a redraft, and the AI keeps them.' : 'What this plan builds with.'}</span>
+      {key.map(field)}
+      {rest.length > 0 && <button className="btn sm muted" style={{ alignSelf: 'flex-start' }} onClick={() => setMore(!more)}>{more ? 'Fewer settings' : `More settings (${rest.length})`}</button>}
+      {more && rest.map(field)}
+      {err && <span className="bad" role="alert" style={{ fontSize: 12 }}>{err}</span>}
+    </div>
+  );
+}
+
+/** One plan setting: a length, number or colour, whose value it is, and a way back to the plan's. */
+function PlanField({ row, editable, onSet }: { row: PlanRow; editable: boolean; onSet: (v: unknown) => void }) {
+  const [text, setText] = useState(String(row.value ?? ''));
+  useEffect(() => { setText(String(row.value ?? '')); }, [row.value]);
+  const commit = () => {
+    const n = Number(text);
+    if (!text.trim() || Number.isNaN(n)) { setText(String(row.value ?? '')); return; }
+    if (n !== row.value) onSet(n);
+  };
+  return (
+    <div className="plan-field" title={row.doc}>
+      <span className="plan-label">{row.label}{row.kind === 'length' ? ' (m)' : ''}</span>
+      {row.kind === 'colour'
+        ? <ColourInput value={Array.isArray(row.value) ? (row.value as number[]) : [0.5, 0.5, 0.5]} disabled={!editable} onSet={onSet} label={row.label} />
+        : <input className="field" type="number" step="any" value={text} disabled={!editable} aria-label={row.label}
+            onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') commit(); }} />}
+      <span className={`chip ${row.from === 'yours' ? 'blue' : 'grey'}`}>{row.from === 'yours' ? 'Yours' : 'Plan'}</span>
+      {editable && row.from === 'yours'
+        ? <button className="btn sm muted" title="Back to the plan's value" aria-label={`Reset ${row.label}`} onClick={() => onSet(null)}>↺</button>
+        : <span />}
+    </div>
+  );
+}
+
+/** A colour picker over a Blender (linear) colour; saved a moment after the user stops moving it. */
+function ColourInput({ value, disabled, onSet, label }: { value: number[]; disabled: boolean; onSet: (v: unknown) => void; label: string }) {
+  const [hex, setHex] = useState(linearToHex(value));
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => { setHex(linearToHex(value)); }, [value]);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  return (
+    <input type="color" className="colour-input" value={hex} disabled={disabled} aria-label={label}
+      onChange={(e) => {
+        const h = e.target.value;
+        setHex(h);
+        window.clearTimeout(timer.current);
+        timer.current = window.setTimeout(() => onSet(hexToLinear(h)), 450);
+      }} />
   );
 }
