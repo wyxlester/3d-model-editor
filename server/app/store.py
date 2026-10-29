@@ -206,11 +206,34 @@ class ProjectStore:
         atomic_write_json(d / f"{uid}.json", meta)
         return meta
 
+    @property
+    def inbox(self) -> Path:
+        """Files attached on Home, before there is a project: data/uploads/."""
+        return self.root.parent / "uploads"
+
+    def add_inbox_upload(self, name: str, mime: str, ext: str, raw: bytes) -> dict:
+        uid = "u_" + uuid.uuid4().hex[:8]
+        self.inbox.mkdir(parents=True, exist_ok=True)
+        (self.inbox / f"{uid}{ext}").write_bytes(raw)
+        meta = {"id": uid, "name": name, "type": mime, "size": len(raw), "url": f"/api/files/uploads/{uid}{ext}"}
+        atomic_write_json(self.inbox / f"{uid}.json", meta)
+        return meta
+
     def get_upload(self, pid: str, uid: str) -> tuple[dict, bytes]:
-        d = self._dir(pid) / "uploads"
-        meta = read_json(d / f"{uid}.json") if UPLOAD_ID_RE.match(uid) else None
-        if meta is None:
+        """An upload of this project; one attached on Home is copied in on first use."""
+        if not UPLOAD_ID_RE.match(uid):
             raise NotFound(uid)
+        d = self._dir(pid) / "uploads"
+        meta = read_json(d / f"{uid}.json")
+        if meta is None:
+            held = read_json(self.inbox / f"{uid}.json")
+            if held is None:
+                raise NotFound(uid)
+            fname = Path(held["url"]).name
+            d.mkdir(parents=True, exist_ok=True)
+            (d / fname).write_bytes((self.inbox / fname).read_bytes())
+            meta = dict(held, url=f"/api/files/projects/{pid}/uploads/{fname}")
+            atomic_write_json(d / f"{uid}.json", meta)
         return meta, (d / Path(meta["url"]).name).read_bytes()
 
     def add_pin(self, pid: str, part: str, point: list, text: str, author: str) -> dict:

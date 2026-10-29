@@ -93,3 +93,19 @@ def test_bad_uploads_are_refused_with_400(make_client):
     assert r.status_code == 400 and "attach it again" in r.json()["detail"]
     r = c.post(f"/api/projects/{p['id']}/chat", json={"message": "hi", "attachments": ["../../etc/passwd"]})
     assert r.status_code == 400
+
+
+def test_file_attached_on_home_reaches_the_ai_in_the_project_it_is_carried_into(make_client):
+    agent = ScriptedAgent(reply="Seen it.")
+    c = make_client(agent=agent)
+    p = create_ready(c)
+    a = c.post("/api/uploads", json={"name": "bow.png", "type": "image/png", "data": b64(PNG)}).json()["attachment"]
+    assert c.get(a["url"]).content == PNG
+    job = wait_job(c, c.post(f"/api/projects/{p['id']}/chat", json={"message": "Match this", "attachments": [a["id"]]}).json()["job_id"])
+    assert job["status"] == "done", job
+    assert agent.prompts[0][1]["source"]["data"] == b64(PNG)
+    stored = c.get(f"/api/projects/{p['id']}").json()["messages"][-2]["attachments"][0]
+    assert stored["url"].startswith(f"/api/files/projects/{p['id']}/uploads/")  # copied into the project
+    assert c.get(stored["url"]).content == PNG
+    r = c.post("/api/uploads", json={"name": "x.docx", "type": "application/msword", "data": b64(b"x")})
+    assert r.status_code == 400

@@ -227,6 +227,7 @@ Every body is JSON. Long work returns `{"job_id"}`; poll `GET /api/jobs/{id}`, w
 | GET `/api/projects/{id}/versions/{n}/model.glb` | | the GLB |
 | GET `/api/projects/{id}/versions/{n}/parts.json` | | the parts list |
 | POST `/api/projects/{id}/spec` | `{"patch": {...}}` (deep-merged into the spec; Inspect drawer edits) | `{"job_id"}` → new version |
+| POST `/api/uploads` | same as below, before there is a project (Home) | `{"attachment"}`; copied into the project when a chat there names it |
 | POST `/api/projects/{id}/uploads` | `{"name","type","data"}` (`data` is base64; see Attachments) | `{"attachment"}` |
 | POST `/api/projects/{id}/chat` | `{"message","mode":"build|research","attachments"?:[upload id]}` | `{"job_id"}` |
 | POST `/api/projects/{id}/pins` | `{"part","point":[x,y,z],"text","author"}` | `{"pin","job_id"}` |
@@ -281,6 +282,7 @@ happened; `part` is the clicked mesh's node name.
 data/projects/<id>/project.json
 data/projects/<id>/v<n>/{spec.json, model.glb, model.blend, parts.json, build_report.json}
 data/projects/<id>/uploads/<upload id>.<ext>   and <upload id>.json (name, type, size)
+data/uploads/<upload id>.<ext>                 attached on Home, before a project exists
 data/scenes/<id>.json
 data/packages/<package_id>/...  and <package_id>.zip
 ```

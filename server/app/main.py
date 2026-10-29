@@ -219,9 +219,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         names = [a.get("name", "") for a in m.get("attachments") or []]
         return f" [attached: {', '.join(names)}]" if names else ""
 
-    @app.post("/api/projects/{pid}/uploads")
-    def upload(pid: str, body: dict = Body(...)):
-        need_project(pid)
+    def checked_upload(body: dict) -> tuple[str, str, bytes]:
         name, mime, data = body.get("name"), body.get("type"), body.get("data")
         if not isinstance(name, str) or not name.strip() or not isinstance(data, str):
             raise HTTPException(400, "name and data are required")
@@ -232,7 +230,19 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             check_size(name, mime, len(raw))
         except UploadRejected as e:
             raise HTTPException(400, str(e))
+        return name, mime, raw
+
+    @app.post("/api/projects/{pid}/uploads")
+    def upload(pid: str, body: dict = Body(...)):
+        need_project(pid)
+        name, mime, raw = checked_upload(body)
         return {"attachment": store.add_upload(pid, name, mime, UPLOAD_TYPES[mime][0], raw)}
+
+    @app.post("/api/uploads")
+    def upload_from_home(body: dict = Body(...)):
+        """Home has no project yet: hold the file until the chat it is carried into names it."""
+        name, mime, raw = checked_upload(body)
+        return {"attachment": store.add_inbox_upload(name, mime, UPLOAD_TYPES[mime][0], raw)}
 
     @app.post("/api/projects/{pid}/chat")
     def chat(pid: str, body: dict = Body(...)):

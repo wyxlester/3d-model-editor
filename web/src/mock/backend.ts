@@ -235,8 +235,8 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
       return { version: n };
     });
   }
-  if ((r = m(/^\/api\/projects\/([^/]+)\/uploads$/)) && method === 'POST') {
-    proj(r[1]);
+  if (((r = m(/^\/api\/projects\/([^/]+)\/uploads$/)) || (r = m(/^\/api\/uploads$/))) && method === 'POST') {
+    if (r[1]) proj(r[1]);
     const raw = atob(String(body.data).replace(/^data:[^,]*,/, ''));
     const blob = new Blob([Uint8Array.from(raw, (c) => c.charCodeAt(0))], { type: body.type || 'application/octet-stream' });
     const a: Attachment = { id: `u_${(++store.seq).toString(16).padStart(8, '0')}`, name: String(body.name), type: body.type || 'text/plain', size: blob.size, url: URL.createObjectURL(blob) };

@@ -1,5 +1,5 @@
 // /ship and /crew without a project: pick one or start a new one.
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { ErrorNote, JobLines, TopBar } from '../components/common';
 import { remember, useCatalog, useJobs, useProjects } from '../hooks';
@@ -8,6 +8,8 @@ import type { ProjectBase, ProjectKind } from '../types';
 
 export function ProjectPicker({ kind }: { kind: ProjectKind }) {
   const nav = useNavigate();
+  // Home's conversation (and files) passes through this picker to the project chosen.
+  const carried = useLocation().state;
   const projects = useProjects();
   const catalog = useCatalog();
   const { jobs, run, dismiss, busy } = useJobs();
@@ -23,7 +25,7 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
       const r = await api.createProject(kind, base);
       id = r.project.id;
       return { job_id: r.job_id };
-    }, () => { remember(kind, id); nav(open(id)); });
+    }, () => { remember(kind, id); nav(open(id), { state: carried }); });
   };
 
   return (
@@ -35,7 +37,7 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
           <p className="muted" style={{ margin: 0 }}>Open one you have, or start a new one from a base.</p>
           <ErrorNote error={projects.error} retry={projects.reload} />
           {mine.map((p) => (
-            <Link key={p.id} to={open(p.id)} onClick={() => remember(kind, p.id)} className="card" style={{ color: 'var(--text)', display: 'flex', justifyContent: 'space-between' }}>
+            <Link key={p.id} to={open(p.id)} state={carried} onClick={() => remember(kind, p.id)} className="card" style={{ color: 'var(--text)', display: 'flex', justifyContent: 'space-between' }}>
               <span style={{ fontWeight: 500 }}>{p.name}</span>
               <span className="muted">{p.version ? `v${p.version}` : 'not built yet'}</span>
             </Link>

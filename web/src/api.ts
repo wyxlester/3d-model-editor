@@ -67,6 +67,8 @@ export const api = {
   patchSpec: (id: string, patch: Record<string, unknown>) => call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/spec`, { patch }),
   chat: (id: string, message: string, mode: 'build' | 'research', attachments: string[] = []) =>
     call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/chat`, attachments.length ? { message, mode, attachments } : { message, mode }),
+  uploadHome: (file: { name: string; type: string; data: string }) =>
+    call<{ attachment: Attachment }>('POST', '/api/uploads', file),
   upload: (id: string, file: { name: string; type: string; data: string }) =>
     call<{ attachment: Attachment }>('POST', `/api/projects/${enc(id)}/uploads`, file),
   addPin: (id: string, pin: { part: string; point: Vec3; text: string; author: string }) =>
