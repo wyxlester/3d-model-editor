@@ -5,11 +5,11 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, errorText } from '../api';
 import { AttachmentList, Dot, ErrorNote, TopBar, filesOnlyText, useAttachPicker } from '../components/common';
-import { recall, remember, useCatalog, useHealth, useJobs, useProjects } from '../hooks';
+import { remember, useHealth, useJobs, useProjects } from '../hooks';
 import { briefFromCarried } from '../lib/designPlan';
 import { clarifyOptions, paths, projectPath, startsNewResearch, targetFor } from '../lib/routing';
 import { startDescribedShip } from './ProjectPicker';
-import type { Attachment, Message, ProjectBase, ProjectKind } from '../types';
+import type { Attachment, Message } from '../types';
 import { JobLines } from '../components/common';
 
 interface Turn {
@@ -21,24 +21,6 @@ interface Turn {
   pending?: boolean;
 }
 
-const EXAMPLES = [
-  'Research and build PCG 3-Series PC 303 as photographed in 2025',
-  'The cabin door on PC 303 looks wrong',
-  'A variant of PC 303 with a 25 mm gun on the foredeck',
-  'A female coxswain in patrol working dress',
-  'Animation: hand signal to the coxswain, slow ahead',
-  'Put four crew on PC 303 coming alongside a suspect boat',
-  'Get v4 ready for tomorrow’s customer meeting',
-];
-
-const NEW: { kind: ProjectKind; base: ProjectBase; label: string }[] = [
-  { kind: 'ship', base: 'container', label: 'Container ship' },
-  { kind: 'ship', base: 'sampan', label: 'Sampan' },
-  { kind: 'ship', base: 'tanker', label: 'Tanker' },
-  { kind: 'crew', base: 'male_default', label: 'Default male crew' },
-  { kind: 'crew', base: 'female_default', label: 'Default female crew' },
-];
-
 const toCarried = (turns: Turn[]): Message[] => turns.filter((t) => !t.pending).map((t) => ({
   who: t.who === 'me' ? 'You' : 'AI', text: t.text, at: new Date().toISOString(),
   ...(t.attachments?.length ? { attachments: t.attachments } : {}),
@@ -48,8 +30,7 @@ export function Home() {
   const nav = useNavigate();
   const { health, error: healthErr } = useHealth();
   const projects = useProjects();
-  const catalog = useCatalog();
-  const { jobs, run, dismiss } = useJobs();
+  const { jobs, dismiss } = useJobs();
   const [draft, setDraft] = useState('');
   const [thread, setThread] = useState<Turn[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -92,18 +73,6 @@ export function Home() {
 
   const carried = (): Message[] => toCarried(thread);
 
-  const create = (kind: ProjectKind, base: ProjectBase, label: string) => {
-    let id = '';
-    void run(`Building a new ${label.toLowerCase()}`, async () => {
-      const r = await api.createProject(kind, base);
-      id = r.project.id;
-      return { job_id: r.job_id };
-    }, () => {
-      remember(kind, id);
-      nav(kind === 'ship' ? paths.shipBuild(id) : paths.crew(id));
-    });
-  };
-
   const h = health;
   const status = (on: boolean | undefined, label: string, off: string) => (
     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -111,8 +80,6 @@ export function Home() {
     </span>
   );
   const list = projects.data ?? [];
-  const ships = list.filter((p) => p.kind === 'ship');
-  const crew = list.filter((p) => p.kind === 'crew');
   const recent = [...list].sort((a, b) => String(b.updated ?? '').localeCompare(String(a.updated ?? ''))).slice(0, 4);
 
   return (
@@ -176,54 +143,22 @@ export function Home() {
           </div>
           <ErrorNote error={err} />
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <span className="faint" style={{ fontSize: 12 }}>Try one. Each goes to a different workshop.</span>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {EXAMPLES.map((t) => (
-                <button key={t} onClick={() => void send(t)} style={{ minHeight: 36, padding: '6px 12px', borderRadius: 18, border: '1px solid var(--border-2)', background: 'transparent', color: 'var(--text-soft)', fontSize: 13, textAlign: 'left' }}>{t}</button>
-              ))}
-            </div>
-          </div>
-
           <JobLines jobs={jobs} dismiss={dismiss} />
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16, marginTop: 12 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <span className="muted">Recent</span>
-              {projects.error && <ErrorNote error={projects.error} retry={projects.reload} />}
-              {!projects.error && recent.length === 0 && !projects.loading && <span className="faint">Nothing yet. Start one below or ask above.</span>}
-              {recent.map((p) => (
-                <Link key={p.id} to={projectPath(p)} onClick={() => remember(p.kind, p.id)}
-                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--panel-2)', color: 'var(--text)' }}>
-                  <span><span style={{ fontWeight: 500 }}>{p.name}</span> <span className="muted">{p.kind === 'ship' ? 'Ship' : 'Crew'}{p.version ? ` · v${p.version}` : ''}</span></span>
-                  {p.draft ? <span className="warn">Variant awaiting your approval</span>
-                    : p.ok === false ? <span className="warn">Last build failed</span> : p.ok ? <span className="ok">Checks pass</span> : null}
-                </Link>
-              ))}
-              <span className="muted" style={{ marginTop: 6 }}>Start new</span>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {NEW.map((n) => <button key={n.base} className="btn" onClick={() => create(n.kind, n.base, n.label)}>{n.label}</button>)}
-              </div>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <span className="muted">Catalogue</span>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, fontSize: 12 }}>
-                {[
-                  [catalog.data?.clothes.length, 'Clothes'],
-                  [catalog.data?.animations.length, 'Animations'],
-                  [catalog.data?.equipment.length, 'Equipment'],
-                  [catalog.data?.ships.length, 'Ship types'],
-                  [ships.length, 'Ships'],
-                  [crew.length, 'Crew'],
-                ].map(([n, l]) => (
-                  <div key={String(l)} className="card" style={{ padding: 10, borderRadius: 8 }}>
-                    <div style={{ fontSize: 18, fontWeight: 500 }}>{n ?? '–'}</div>
-                    <div className="muted">{l}</div>
-                  </div>
-                ))}
-              </div>
-              {recall('scene') && <Link to={paths.review(recall('scene'))} className="faint" style={{ fontSize: 12 }}>Last scene: open Review</Link>}
-            </div>
+          {/* Lester, 29 Oct: "home page should only have the chat box and recent sections" (no Try one,
+              Start new or Catalogue). New ships and crew start from the chat, or from their own pages. */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+            <span className="muted">Recent</span>
+            {projects.error && <ErrorNote error={projects.error} retry={projects.reload} />}
+            {!projects.error && recent.length === 0 && !projects.loading && <span className="faint">Nothing yet. Describe what you want to work on above.</span>}
+            {recent.map((p) => (
+              <Link key={p.id} to={projectPath(p)} onClick={() => remember(p.kind, p.id)}
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--panel-2)', color: 'var(--text)' }}>
+                <span><span style={{ fontWeight: 500 }}>{p.name}</span> <span className="muted">{p.kind === 'ship' ? 'Ship' : 'Crew'}{p.version ? ` · v${p.version}` : ''}</span></span>
+                {p.draft ? <span className="warn">Variant awaiting your approval</span>
+                  : p.ok === false ? <span className="warn">Last build failed</span> : p.ok ? <span className="ok">Checks pass</span> : null}
+              </Link>
+            ))}
           </div>
         </div>
       </main>
