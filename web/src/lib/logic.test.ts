@@ -353,3 +353,36 @@ describe('picker offer', () => {
     expect(madeSomethingNew([], undefined)).toBe(false);
   });
 });
+
+import { convexHull, waterlineCrossings } from './waterline';
+
+describe('hull footprint on the water (keeps water out of the boat)', () => {
+  // An open box "boat" 4 m long (x), 2 m wide (z), from 1 m below the waterline to 1 m above:
+  // its sides only, no deck, so the water plane would show inside it.
+  const corners = (y: number) => [[-2, y, -1], [2, y, -1], [2, y, 1], [-2, y, 1]];
+  const lo = corners(-1), hi = corners(1);
+  const pos = [...lo, ...hi].flat();
+  const index: number[] = [];
+  for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; index.push(i, j, 4 + j, i, 4 + j, 4 + i); }
+
+  it('finds where the sides cross the waterline, and nothing from parts clear of it', () => {
+    const pts = waterlineCrossings(pos, index);
+    expect(pts.length).toBeGreaterThan(0);
+    for (const [x, z] of pts) expect(Math.abs(x) === 2 || Math.abs(z) === 1).toBe(true);
+    expect(waterlineCrossings([0, 1, 0, 1, 2, 0, 0, 3, 1], null)).toEqual([]); // a mast above the water
+    expect(waterlineCrossings([0, -1, 0, 2, 1, 0, 0, 1, 2], null)).toEqual([[1, 0], [0, 1]]);
+  });
+  it('the footprint is the hull outline: the four corners, counter-clockwise', () => {
+    const hull = convexHull(waterlineCrossings(pos, index));
+    expect(hull).toHaveLength(4);
+    expect(new Set(hull.map((p) => p.join(',')))).toEqual(new Set(['-2,-1', '2,-1', '2,1', '-2,1']));
+    let area2 = 0;
+    for (let i = 0; i < hull.length; i++) { const [a, b] = [hull[i], hull[(i + 1) % hull.length]]; area2 += a[0] * b[1] - b[0] * a[1]; }
+    expect(area2).toBeCloseTo(16); // twice the 4 × 2 area, positive = counter-clockwise
+  });
+  it('drops interior and collinear points, and gives nothing for a line or a point', () => {
+    expect(convexHull([[0, 0], [1, 0], [2, 0], [2, 2], [0, 2], [1, 1]])).toHaveLength(4);
+    expect(convexHull([[0, 0], [1, 1], [2, 2]])).toEqual([]);
+    expect(convexHull([[0, 0]])).toEqual([]);
+  });
+});
