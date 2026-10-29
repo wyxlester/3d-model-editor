@@ -75,7 +75,7 @@ export interface VersionInfo {
 
 export type ProjectKind = 'ship' | 'crew';
 /** `custom` = a ship of any type, made from a brief (CONTRACT §5 `type: "custom"`). */
-export type ProjectBase = 'container' | 'sampan' | 'tanker' | 'male_default' | 'custom';
+export type ProjectBase = 'container' | 'sampan' | 'tanker' | 'male_default' | 'female_default' | 'custom';
 
 /** §5 `type: "custom"`: what will be built, approved by the user before anything builds. */
 export interface DesignPlan {

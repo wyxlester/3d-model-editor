@@ -86,3 +86,14 @@ def test_project_json_is_written_atomically(settings, make_client):
 def test_health_shape(make_client):
     h = make_client().get("/api/health").json()
     assert set(h) == {"blender", "mpfb", "ai", "unreal"} and all(isinstance(v, bool) for v in h.values())
+
+
+def test_the_real_catalog_offers_a_default_male_and_a_default_female():
+    # Lester, 29 Oct: "start new should have default male and default female".
+    from pathlib import Path
+    from app.catalog import Catalog
+    cat = Catalog(Path(__file__).resolve().parents[2] / "catalog")
+    crew = {c["id"]: c for c in cat.summary()["crew"]}
+    assert {"male_default", "female_default"} <= set(crew)
+    assert crew["female_default"]["name"] == "Default female crew"
+    assert cat.default_spec("crew", "female_default")["body"]["gender"] == "female"

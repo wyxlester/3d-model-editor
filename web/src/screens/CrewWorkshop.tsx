@@ -101,10 +101,11 @@ export function CrewWorkshop() {
   const name = p?.name ?? 'Crew member';
   const groups = groupClothes(catalog.data?.clothes ?? []);
 
-  const addPerson = () => {
+  // Lester, 29 Oct: "start new should have default male and default female".
+  const addPerson = (base: 'male_default' | 'female_default') => {
     let newId = '';
-    void run('Building a new crew member', async () => {
-      const r = await api.createProject('crew', 'male_default');
+    void run(base === 'female_default' ? 'Building a new woman' : 'Building a new man', async () => {
+      const r = await api.createProject('crew', base);
       newId = r.project.id;
       return { job_id: r.job_id };
     }, async () => { remember('crew', newId); await projects.reload(); nav(paths.crew(newId)); });
@@ -353,7 +354,8 @@ export function CrewWorkshop() {
               ref={x.id === id ? (el) => el?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) : undefined}
               className="person-pill" style={x.id === id ? SEL : OFF}>{x.name}</Link>
           ))}
-          <button className="btn dashed pill" style={{ flexShrink: 0 }} onClick={addPerson} disabled={busy}>+ Person</button>
+          <button className="btn dashed pill" style={{ flexShrink: 0 }} onClick={() => addPerson('male_default')} disabled={busy}>+ Male</button>
+          <button className="btn dashed pill" style={{ flexShrink: 0 }} onClick={() => addPerson('female_default')} disabled={busy}>+ Female</button>
         </div>
       </TopBar>
       <div className="workspace">

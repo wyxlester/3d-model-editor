@@ -1559,3 +1559,24 @@ def test_singlet_is_a_tank_top(outfits, name):
     for s in "lr":
         assert 0.035 <= m["strap_" + s] <= 0.07, m
         assert 0.10 <= m["armhole_" + s] <= 0.26, m
+
+
+FEMALE_CATALOG = ROOT / "catalog" / "crew" / "female_default.json"
+
+
+def test_default_female_base_builds_clean(tmp_path):
+    # Lester, 29 Oct: "start new should have default male and default female".
+    if not Path(BLENDER).exists():
+        pytest.skip("Blender not installed")
+    spec = json.loads(FEMALE_CATALOG.read_text(encoding="utf-8"))
+    norm, errors, warnings = crew_spec.normalize(spec)
+    assert errors == [] and warnings == [] and norm["body"]["gender"] == "female"
+    report = _build(tmp_path, spec)
+    assert report["ok"] and report["_exit"] == 0, report["errors"]
+    names = {p["path"] for p in json.loads((report["_out"] / "parts.json").read_text())}
+    assert {"Clothes__Shirt", "Clothes__Pants", "Equipment__life_vest"} <= names, names
+    assert not any(n.startswith("Clothes__Suit") for n in names)
+    assert set(report["animations"]) == set(ANIMS) and report["skeleton"] == "mpfb_game_engine"
+    # same options as the male base, so the screen's pickers apply to both
+    male = json.loads(CATALOG.read_text(encoding="utf-8"))
+    assert spec["options"] == male["options"] and spec["category"] == male["category"]

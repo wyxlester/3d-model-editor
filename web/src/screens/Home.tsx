@@ -33,6 +33,7 @@ const NEW: { kind: ProjectKind; base: ProjectBase; label: string }[] = [
   { kind: 'ship', base: 'sampan', label: 'Sampan' },
   { kind: 'ship', base: 'tanker', label: 'Tanker' },
   { kind: 'crew', base: 'male_default', label: 'Default male crew' },
+  { kind: 'crew', base: 'female_default', label: 'Default female crew' },
 ];
 
 const toCarried = (turns: Turn[]): Message[] => turns.filter((t) => !t.pending).map((t) => ({

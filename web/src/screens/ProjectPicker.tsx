@@ -81,7 +81,7 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
   // base-type filter offers it), but "Any ship" is started from the Describe card, not as a base.
   const types: { base: ProjectBase; name: string; description?: string; category?: string | null }[] = kind === 'ship'
     ? (catalog.data?.ships.map((s) => ({ base: s.type as ProjectBase, name: s.name, description: s.description, category: s.category })) ?? [])
-    : (catalog.data?.crew.map((c) => ({ base: c.id as ProjectBase, name: c.name, category: c.category })) ?? [{ base: 'male_default', name: 'Default male crew' }]);
+    : (catalog.data?.crew.map((c) => ({ base: c.id as ProjectBase, name: c.name, category: c.category })) ?? [{ base: 'male_default', name: 'Default male crew' }, { base: 'female_default', name: 'Default female crew' }]);
   const bases = types.filter((b) => b.base !== 'custom');
   const baseLabel = (b: string) => types.find((x) => x.base === b)?.name ?? b;
   const defaults = catalog.data?.categories?.[kind] ?? [];

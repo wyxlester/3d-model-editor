@@ -376,7 +376,8 @@ const catalog: Catalog = {
     // Filed under "Other" until the research AI picks the closest category (Lester, 29 Oct).
     { type: 'custom', name: 'Any ship', description: 'A general monohull shaped from research and an approved design plan', category: 'Other' },
   ],
-  crew: [{ id: 'male_default', name: 'Default male crew', category: 'Merchant crew' }],
+  crew: [{ id: 'male_default', name: 'Default male crew', category: 'Merchant crew' },
+    { id: 'female_default', name: 'Default female crew', category: 'Merchant crew' }],
   categories: {
     ship: ['Commercial vessels', 'Military vessels', 'Law enforcement and coast guard', 'Fishing and small craft', 'Passenger and leisure', 'Service and harbour craft', 'Other'],
     crew: ['Navy', 'Coast guard and police', 'Merchant crew', 'Fishermen', 'Civilians and passengers', 'Other'],
@@ -406,7 +407,7 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
   if (method === 'POST' && path === '/api/projects' && body.kind === 'ship' && body.base === 'custom') return createCustom(body);
   if (method === 'POST' && path === '/api/projects') {
     const id = `${body.kind === 'ship' ? 'p' : 'c'}_${++store.seq}`;
-    const names: Record<string, string> = { container: 'Container ship', sampan: 'Sampan', tanker: 'Tanker', male_default: 'Default male crew' };
+    const names: Record<string, string> = { container: 'Container ship', sampan: 'Sampan', tanker: 'Tanker', male_default: 'Default male crew', female_default: 'Default female crew' };
     const seedP = body.kind === 'ship' ? store.projects.p_pc303 ?? seed().projects.p_pc303 : seed().projects.c_cox;
     const p: Store['projects'][string] = JSON.parse(JSON.stringify(seedP));
     Object.assign(p, { id, name: body.name || names[body.base] || body.base, base: body.base, version: 0, versions: [], pins: [], messages: [], research: null, glbs: {}, model_url: null });
