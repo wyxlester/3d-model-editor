@@ -13,7 +13,7 @@ import { paths } from '../lib/routing';
 import { assetLabel, groupClothes, mergePatch } from '../lib/spec';
 import { GEAR_SWATCHES, HAIR_SWATCHES, hexToLinear, madeSomethingNew, removeItemPatch, selectedSwatch, type Swatch } from '../lib/describe';
 import {
-  ACCESSORIES, HAIR_STYLES, accessoryName, presetPatch, HATS, MODULES, PANTS_STYLES, PANTS_SWATCHES, PLACES, SHIRT_STYLES, SHIRT_SWATCHES, SHOE_SWATCHES, SKIN_TONES,
+  ACCESSORIES, HAIR_STYLES, accessoryName, presetPatch, HATS, MODULES, PANTS_STYLES, PANTS_SWATCHES, placesFor, SHIRT_STYLES, SHIRT_SWATCHES, SHOE_SWATCHES, SKIN_TONES,
   changedModules, equipmentName, garmentColorPatch, garmentStylePatch, itemsInModule, moduleMessage, moduleSummary, outfitPatch,
   outfitWouldRemove, placePatch, placementRows, shoeLabel, suitLabel, suitsFor, toggleAccessory, toggleEquipment, type ModuleDef,
 } from '../lib/modules';
@@ -101,10 +101,11 @@ export function CrewWorkshop() {
   const name = p?.name ?? 'Crew member';
   const groups = groupClothes(catalog.data?.clothes ?? []);
 
-  const addPerson = () => {
+  // Lester, 29 Oct: "start new should have default male and default female".
+  const addPerson = (base: 'male_default' | 'female_default') => {
     let newId = '';
-    void run('Building a new crew member', async () => {
-      const r = await api.createProject('crew', 'male_default');
+    void run(base === 'female_default' ? 'Building a new woman' : 'Building a new man', async () => {
+      const r = await api.createProject('crew', base);
       newId = r.project.id;
       return { job_id: r.job_id };
     }, async () => { remember('crew', newId); await projects.reload(); nav(paths.crew(newId)); });
@@ -275,7 +276,7 @@ export function CrewWorkshop() {
               <div key={r.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <span style={{ color: 'var(--text-soft)', overflowWrap: 'anywhere' }}>{r.label}{r.place === 'fixed' && <span className="faint"> · fixed</span>}</span>
                 {r.place !== 'fixed' && (
-                  <div className="picks">{PLACES.map((pl) => chip(pl.label, r.place === pl.id, () => edit(placePatch(spec, r, pl.id)), pl.id))}</div>
+                  <div className="picks">{placesFor(r).map((pl) => chip(pl.label, r.place === pl.id, () => edit(placePatch(spec, r, pl.id)), pl.id))}</div>
                 )}
               </div>
             ))}
@@ -353,7 +354,8 @@ export function CrewWorkshop() {
               ref={x.id === id ? (el) => el?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) : undefined}
               className="person-pill" style={x.id === id ? SEL : OFF}>{x.name}</Link>
           ))}
-          <button className="btn dashed pill" style={{ flexShrink: 0 }} onClick={addPerson} disabled={busy}>+ Person</button>
+          <button className="btn dashed pill" style={{ flexShrink: 0 }} onClick={() => addPerson('male_default')} disabled={busy}>+ Male</button>
+          <button className="btn dashed pill" style={{ flexShrink: 0 }} onClick={() => addPerson('female_default')} disabled={busy}>+ Female</button>
         </div>
       </TopBar>
       <div className="workspace">

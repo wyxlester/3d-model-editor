@@ -15,7 +15,7 @@ export class ApiError extends Error {
   }
 }
 
-type Method = 'GET' | 'POST' | 'PUT' | 'PATCH';
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 type Transport = (method: Method, path: string, body?: unknown) => Promise<unknown>;
 
 const httpTransport: Transport = async (method, path, body) => {
@@ -103,6 +103,8 @@ export const api = {
     call<{ project: Project; job_id: string }>('POST', `/api/projects/${enc(id)}/variants`, req),
   approve: (id: string) => call<ApproveResult>('POST', `/api/projects/${enc(id)}/approve`),
   discard: (id: string) => call<{ project: Project }>('POST', `/api/projects/${enc(id)}/discard`),
+  /** Move a project to data/trash (§10). 409 with a sentence when a scene uses it or a job of it runs. */
+  deleteProject: (id: string) => call<{ deleted: string; trash: string }>('DELETE', `/api/projects/${enc(id)}`),
 
   job: <R = unknown>(jobId: string) => call<Job<R>>('GET', `/api/jobs/${enc(jobId)}`),
   jobs: () => call<{ jobs: JobSummary[] }>('GET', '/api/jobs'),

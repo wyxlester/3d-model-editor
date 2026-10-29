@@ -86,6 +86,10 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .btn.selected, .btn.toggle-on { border: 1px solid var(--accent); background: var(--accent-bg); color: var(--accent-text); }
 .btn.dashed { border-style: dashed; color: var(--text-2); }
 .btn.pill { border-radius: 16px; }
+/* Destructive: quiet where it is offered (red words only), solid red only on the confirm in its dialog. */
+.btn.danger-quiet { color: var(--red-text); border-color: var(--border-2); }
+.btn.danger-quiet:hover:not(:disabled) { border-color: #5c2a2a; background: var(--red-bg); }
+.btn.danger { border: 1px solid #5c2a2a; background: var(--red-bg); color: var(--red-text); font-weight: 600; }
 a.btn { color: var(--text); }
 a.btn.primary { color: var(--on-accent); }
 

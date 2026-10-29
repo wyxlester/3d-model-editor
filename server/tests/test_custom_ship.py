@@ -548,3 +548,32 @@ def test_research_prompt_and_progress_line_for_filing():
     assert "set_category" in CUSTOM_RESEARCH_PROMPT and "Passenger and leisure" in CUSTOM_RESEARCH_PROMPT
     assert describe_tool("set_category", {"category": "Passenger and leisure"}) == \
         "Filing it under Passenger and leisure"
+
+
+def test_a_research_change_redrafts_the_plan_in_the_same_job(make_client, with_custom, settings):
+    # Lester, 29 Oct: "why can't i approve yet?" The research moved on and the plan was left behind,
+    # so Approve stayed off. Now the same job redrafts the plan and Approve is available again.
+    settings.plan_follow_up = True
+    c, pid, agent = drafted(make_client)
+    turns = iter([[("save_research", {"research": RESEARCH})],                     # the user's turn
+                  [("save_design_plan", {"summary": SUMMARY, "spec": YACHT})]])    # the redraft
+    real_run = agent.run
+
+    def run(session, prompt, mode, log):
+        agent.steps = next(turns, [])
+        return real_run(session, prompt, mode, log)
+    agent.run = run
+    job = research_turn(c, pid, "the beam is 6.9 m")
+    p = c.get(f"/api/projects/{pid}").json()
+    assert "• Redrafting the design plan to match the research" in job["log"]
+    assert p["design_plan"]["status"] == "draft" and p["design_plan"]["research_rev"] == p["research_rev"]
+    assert c.post(f"/api/projects/{pid}/design-plan/approve").status_code == 200
+
+
+def test_no_redraft_when_the_plan_is_current(make_client, with_custom, settings):
+    settings.plan_follow_up = True
+    c, pid, agent = drafted(make_client)
+    agent.steps = []
+    n = len(agent.prompts)
+    job = research_turn(c, pid, "what is the hull colour?")
+    assert len(agent.prompts) == n + 1 and "Redrafting" not in " ".join(job["log"])

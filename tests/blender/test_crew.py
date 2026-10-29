@@ -946,15 +946,25 @@ def test_shirt_and_pants_skinned_on_the_one_skeleton(modules_a):
 
 
 @needs_blender
-def test_singlet_has_no_arm_weighted_vertices(modules_a):
-    """No vertex is driven mainly by an arm, neck or head bone (that would be a sleeve or collar),
-    and no arm bone carries more than the garment trim (0.3) anywhere: a sleeve would carry 1.0."""
+def test_singlet_has_no_sleeves(modules_a):
+    """A tank top's straps lie on the top of the shoulder, which the upper arm partly drives, so
+    some arm weight there is right. A sleeve is not: nothing may be driven mainly by a forearm,
+    hand or head bone, nothing below the shoulder joint may carry more than 0.3 arm weight, and
+    nothing may reach out past the shoulder joint (a sleeve would, at 1.0). The neck may drive
+    the straps' inner edge, but no collar: nothing rises 2 cm above the base of the neck."""
     g = _gltf(modules_a)
     _, infl = _skin_data(g, "Clothes__Shirt")
-    assert not [d for d in _dominant(infl) if d.startswith(("upperarm", "lowerarm", "hand", "neck", "head"))]
-    arm = max((w for names, ws in infl for n, w in zip(names, ws)
-               if n.startswith(("upperarm", "lowerarm", "hand"))), default=0.0)
-    assert arm <= 0.3, arm
+    assert not [d for d in _dominant(infl) if d.startswith(("lowerarm", "hand", "head"))]
+    w = _world_positions(g)
+    pts = _world_verts(g, "Clothes__Shirt")
+    assert max(p[1] for p in pts) < w["neck_01"][1][3] + 0.02
+    for side in ("l", "r"):
+        joint = w["upperarm_" + side]
+        lat, height = abs(joint[2][3]), joint[1][3]
+        assert max(abs(p[2]) for p in pts if p[2] * joint[2][3] > 0) < lat + 0.01, side
+    below = [max((wt for n, wt in zip(names, ws) if n.startswith(("upperarm", "lowerarm", "hand"))), default=0.0)
+             for p, (names, ws) in zip(pts, infl) if p[1] < min(w["upperarm_l"][1][3], w["upperarm_r"][1][3])]
+    assert max(below) <= 0.3, max(below)
 
 
 @needs_blender
@@ -1040,10 +1050,11 @@ def _assert_only_changed(ga, gb, allowed, body_under=()):
             assert _same_verts(sa["verts"], sb["verts"]), name
 
 
-def _assert_body_differs_only_under(ga, gb, garments, reach=0.03):
+def _assert_body_differs_only_under(ga, gb, garments, reach=0.05):
     """The body's skin under a garment is trimmed (it cannot be seen and would poke through), so
     a different shirt trims a different patch. Everything else about the body must be identical:
-    same bounds, and every vertex present in one build but not the other lies under a garment."""
+    same bounds, and every vertex present in one build but not the other lies under a garment
+    (within reach: cloth spans hollows such as the spine, so it can stand 4-5 cm off the skin)."""
     va = {tuple(round(c, 5) for c in p) for p in _world_verts(ga, "Body__Skin")}
     vb = {tuple(round(c, 5) for c in p) for p in _world_verts(gb, "Body__Skin")}
     for k in range(3):
@@ -1142,3 +1153,430 @@ def test_a_bare_spec_is_dressed_by_the_builder():
     assert spec["clothes"]["shirt"] is None and spec["clothes"]["pants"] == CLOTHED_DEFAULT["pants"]
     spec, _, _ = normalize({"schema": "me3d.crew_spec/1", "id": "y"})
     assert spec["clothes"]["shirt"] is None and spec["clothes"]["suit"]
+
+
+# ---------------------------------------------------------------------------------------------
+# Clothes that look like clothes. Lester, 29 Oct, on a crew member in T-shirt and khakis: "a guy's
+# crotch is too protruding, looks too obscene" - garments cut from the skin followed every contour
+# (leggings), the cargo pockets floated beside the hips and the polo collar sat like a scarf. Then:
+# singlets should look like real tank tops (scooped round neck, narrow straps, deep armholes).
+# Measured on the GLB. glTF frame: +X forward, +Y up, Z = -(Blender Y), so the left is -Z.
+
+KHAKI = [0.45, 0.38, 0.25]
+OUTFITS = {
+    "male_trousers": {},                                          # the screenshot: T-shirt, khakis
+    "female_cargo": {"gender": "female", "shirt": "polo", "pants": "cargo"},
+    "male_heavy": {"body": {"weight": 1, "muscle": 1, "height_cm": 200}, "shirt": "singlet", "pants": "cargo"},
+    "male_slim": {"body": {"weight": 0, "muscle": 0, "height_cm": 160}, "shirt": "singlet", "pants": "shorts"},
+    "female_heavy": {"gender": "female", "body": {"weight": 1, "muscle": 0, "height_cm": 150}, "shirt": "singlet"},
+    "female_slim": {"gender": "female", "body": {"weight": 0, "muscle": 1, "height_cm": 185},
+                    "shirt": "polo", "pants": "shorts"},
+}
+
+
+def _outfit_spec(name, gender="male", body=None, shirt="tshirt", pants="trousers"):
+    spec = json.loads(CATALOG.read_text(encoding="utf-8"))
+    for k in ("param_docs", "options", "description"):
+        spec.pop(k, None)
+    spec["id"] = name
+    spec["body"]["gender"] = gender
+    if gender == "female":
+        spec["body"]["height_cm"] = 165
+    spec["body"].update(body or {})
+    spec["clothes"].update({"suit": None, "shirt": {"style": shirt, "color": [0.85, 0.85, 0.82]},
+                            "pants": {"style": pants, "color": KHAKI}})
+    spec["equipment"] = []
+    return spec
+
+
+@pytest.fixture(scope="module")
+def outfits(tmp_path_factory):
+    if not Path(BLENDER).exists():
+        pytest.skip("Blender not installed")
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(3) as ex:
+        jobs = {n: ex.submit(_build, tmp_path_factory.mktemp("outfit_" + n), _outfit_spec(n, **kw))
+                for n, kw in OUTFITS.items()}
+        return {n: job.result() for n, job in jobs.items()}
+
+
+def _indices(g, idx):
+    acc = g.accessors[idx]
+    bv = g.bufferViews[acc.bufferView]
+    fmt, size = {5121: ("B", 1), 5123: ("H", 2), 5125: ("I", 4)}[acc.componentType]
+    base = (bv.byteOffset or 0) + (acc.byteOffset or 0)
+    return list(struct.unpack_from("<%d%s" % (acc.count, fmt), g.binary_blob(), base))
+
+
+class _Skin:
+    """One skinned mesh node of a GLB: bind positions, normals, triangles, and linear-blend
+    skinning under a pose (joint matrices computed once per pose, so whole meshes are cheap)."""
+
+    def __init__(self, g, node_name):
+        node = g.nodes[_node(g, node_name)]
+        skin = g.skins[node.skin]
+        self.g = g
+        self.ibm = {g.nodes[j].name: [[m[c * 4 + r] for c in range(4)] for r in range(4)]
+                    for j, m in zip(skin.joints, _read_accessor(g, skin.inverseBindMatrices))}
+        self.pos, self.infl = _skin_data(g, node_name)
+        self.nrm, self.tris, base = [], [], 0
+        for prim in g.meshes[node.mesh].primitives:
+            self.nrm += _accessor_values(g, prim.attributes.NORMAL)
+            ix = _indices(g, prim.indices)
+            self.tris += [(base + ix[k], base + ix[k + 1], base + ix[k + 2]) for k in range(0, len(ix), 3)]
+            base += g.accessors[prim.attributes.POSITION].count
+
+    def mats(self, overrides=None):
+        world = _world_positions(self.g, overrides)
+        return {n: _mul(world[n], self.ibm[n]) for n in self.ibm}
+
+    def at(self, mats, i):
+        """(position, unit normal) of vertex i under pose matrices."""
+        p, n = self.pos[i], self.nrm[i]
+        q, m3 = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+        for name, w in zip(*self.infl[i]):
+            if w > 0:
+                m = mats[name]
+                for r in range(3):
+                    q[r] += w * (m[r][0] * p[0] + m[r][1] * p[1] + m[r][2] * p[2] + m[r][3])
+                    m3[r] += w * (m[r][0] * n[0] + m[r][1] * n[1] + m[r][2] * n[2])
+        ln = math.sqrt(sum(c * c for c in m3)) or 1.0
+        return q, [c / ln for c in m3]
+
+    def all(self, mats):
+        return [self.at(mats, i)[0] for i in range(len(self.pos))]
+
+
+def _widest_walk(g):
+    """Overrides for the walk keyframe where the knees are furthest apart front to back."""
+    _, n = _pose(g, "walk", 0)
+    best = None
+    for f in range(0, n, 2):
+        ov, _ = _pose(g, "walk", f)
+        w = _world_positions(g, ov)
+        d = abs(w["calf_l"][0][3] - w["calf_r"][0][3])
+        if best is None or d > best[1]:
+            best = (ov, d)
+    return best[0]
+
+
+def _slice(pts, tris, h):
+    """Points where the mesh crosses the horizontal plane at height h (glTF Y)."""
+    out = []
+    for t in tris:
+        tri = [pts[i] for i in t]
+        for u, v in ((0, 1), (1, 2), (2, 0)):
+            a, b = tri[u], tri[v]
+            if (a[1] - h) * (b[1] - h) < 0:
+                f = (h - a[1]) / (b[1] - a[1])
+                out.append([a[k] + f * (b[k] - a[k]) for k in range(3)])
+    return out
+
+
+def _front_excess(pts, tris, w):
+    """Worst amount (m) by which the trousers at the midline stand ahead of the straight line
+    between the fronts of the two thighs, from 9 to 2 cm below the hip joints (the groin; higher
+    up is the lower belly, which on a heavy body rightly stands ahead): a bulge is > 0."""
+    hl, hr = w["thigh_l"], w["thigh_r"]
+    mid, half = 0.5 * (hl[2][3] + hr[2][3]), 0.5 * abs(hl[2][3] - hr[2][3])
+    top = 0.5 * (hl[1][3] + hr[1][3])
+    near = [t for t in tris if any(top - 0.1 < pts[i][1] < top + 0.01 for i in t)]
+    worst, bands = -1.0, 0
+    for k in range(8):
+        band = _slice(pts, near, top - 0.09 + 0.01 * k)
+        centre = [p[0] for p in band if abs(p[2] - mid) < 0.01]
+        fronts = []
+        for sgn in (-1.0, 1.0):
+            side = [p for p in band if 0.55 * half <= sgn * (p[2] - mid) <= 1.05 * half]
+            if side:
+                fronts.append(max(side, key=lambda p: p[0]))
+        if not centre or len(fronts) < 2:
+            continue
+        a, b = fronts
+        line = a[0] + (mid - a[2]) / (b[2] - a[2]) * (b[0] - a[0])
+        worst = max(worst, max(centre) - line)
+        bands += 1
+    assert bands >= 5, "too few bands measured"
+    return worst
+
+
+@needs_blender
+def test_outfits_build_ok(outfits):
+    for name, r in outfits.items():
+        assert r["ok"] is True and r["_exit"] == 0, (name, r["errors"])
+
+
+@needs_blender
+@pytest.mark.parametrize("name", list(OUTFITS))
+def test_trousers_are_flat_in_front_of_the_crotch(outfits, name):
+    """Nothing at the fly stands more than 4 mm ahead of a straight line between the fronts of
+    the thighs, at rest and at the widest step of the walk. Trousers cut straight from the skin
+    carried the groin's contour about a centimetre proud of that line."""
+    g = _gltf(outfits[name])
+    sk = _Skin(g, "Clothes__Pants")
+    rest = _front_excess(sk.all(sk.mats()), sk.tris, _world_positions(g))
+    ov = _widest_walk(g)
+    walk = _front_excess(sk.all(sk.mats(ov)), sk.tris, _world_positions(g, ov))
+    assert rest <= 0.004 and walk <= 0.004, (rest, walk)
+
+
+def _closest_on_tri(p, a, b, c):
+    """Closest point to p on triangle abc (Ericson, Real-Time Collision Detection 5.1.5)."""
+    sub = lambda u, v: [u[0] - v[0], u[1] - v[1], u[2] - v[2]]
+    dot = lambda u, v: u[0] * v[0] + u[1] * v[1] + u[2] * v[2]
+    add = lambda u, v, t: [u[0] + t * v[0], u[1] + t * v[1], u[2] + t * v[2]]
+    ab, ac, ap = sub(b, a), sub(c, a), sub(p, a)
+    d1, d2 = dot(ab, ap), dot(ac, ap)
+    if d1 <= 0 and d2 <= 0:
+        return a
+    bp = sub(p, b)
+    d3, d4 = dot(ab, bp), dot(ac, bp)
+    if d3 >= 0 and d4 <= d3:
+        return b
+    vc = d1 * d4 - d3 * d2
+    if vc <= 0 and d1 >= 0 and d3 <= 0:
+        return add(a, ab, d1 / (d1 - d3))
+    cp = sub(p, c)
+    d5, d6 = dot(ab, cp), dot(ac, cp)
+    if d6 >= 0 and d5 <= d6:
+        return c
+    vb = d5 * d2 - d1 * d6
+    if vb <= 0 and d2 >= 0 and d6 <= 0:
+        return add(a, ac, d2 / (d2 - d6))
+    va = d3 * d6 - d5 * d4
+    if va <= 0 and (d4 - d3) >= 0 and (d5 - d6) >= 0:
+        return add(b, sub(c, b), (d4 - d3) / ((d4 - d3) + (d5 - d6)))
+    den = 1.0 / (va + vb + vc)
+    v, w = vb * den, vc * den
+    return [a[k] + ab[k] * v + ac[k] * w for k in range(3)]
+
+
+def _components(sk):
+    """Connected pieces of a mesh (vertices the exporter split at seams are merged by position)."""
+    key = [tuple(round(c, 5) for c in p) for p in sk.pos]
+    parent = {}
+
+    def find(x):
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for t in sk.tris:
+        a = find(key[t[0]])
+        for i in t[1:]:
+            b = find(key[i])
+            if a != b:
+                parent[b] = a
+    comps = {}
+    for i, k in enumerate(key):
+        comps.setdefault(find(k), []).append(i)
+    return sorted(comps.values(), key=len, reverse=True)
+
+
+@needs_blender
+@pytest.mark.parametrize("name", ["female_cargo", "male_heavy"])
+def test_cargo_pockets_lie_on_the_trouser_leg(outfits, name):
+    """Each cargo pocket and flap is its own piece on the outside of a thigh. Every point of it
+    is within 2.2 cm of the trouser surface (pockets stand about 1 cm proud) and its edge meets
+    the surface (within 6 mm), at rest and at the widest step of the walk: a box that floats off
+    the hip, or stays behind when the leg swings, fails."""
+    g = _gltf(outfits[name])
+    sk = _Skin(g, "Clothes__Pants")
+    comps = _components(sk)
+    legs, pieces = comps[0], [c for c in comps[1:] if len(c) >= 8]
+    assert len(pieces) >= 4, [len(c) for c in comps[:8]]
+    w = _world_positions(g)
+    hip, knee = w["thigh_l"][1][3], w["calf_l"][1][3]
+    legset = set(legs)
+    leg_tris = [t for t in sk.tris if t[0] in legset]
+    for ov in (None, _widest_walk(g)):
+        pts = sk.all(sk.mats(ov))
+        cent = [[sum(pts[i][k] for i in t) / 3 for k in range(3)] for t in leg_tris]
+        for piece in pieces:
+            if ov is None:
+                ys = [pts[i][1] for i in piece]
+                assert knee < min(ys) and max(ys) < hip, "pocket not on the thigh"
+                assert len({math.copysign(1, pts[i][2]) for i in piece}) == 1
+            dists = []
+            for i in piece[::2]:
+                p = pts[i]
+                near = [t for t, c in zip(leg_tris, cent) if math.dist(c, p) < 0.08]
+                assert near, ("pocket point far from the trousers", p)
+                dists.append(min(math.dist(p, _closest_on_tri(p, *(pts[j] for j in t))) for t in near))
+            assert max(dists) < 0.022 and min(dists) < 0.006, (ov is not None, max(dists), min(dists))
+
+
+POSES = {"idle": [0], "walk": [0, 4, 8, 12, 16], "squat": [10, 20, 30], "brace": [8, 16], "hands_up": [10, 20]}
+
+
+def _under_pairs(outer, inner, reach=0.03):
+    """At rest: (inner vertex, nearest outer vertex) for inner vertices lying behind the outer
+    garment's surface within reach. Only these can poke through."""
+    cell = {}
+    for j, p in enumerate(outer.pos):
+        cell.setdefault(tuple(int(math.floor(c / reach)) for c in p), []).append(j)
+    pairs = []
+    for i, p in enumerate(inner.pos):
+        k = [int(math.floor(c / reach)) for c in p]
+        near = [j for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)
+                for j in cell.get((k[0] + dx, k[1] + dy, k[2] + dz), ())]
+        if not near:
+            continue
+        j = min(near, key=lambda j: math.dist(p, outer.pos[j]))
+        q, n = outer.pos[j], outer.nrm[j]
+        if math.dist(p, q) < reach and sum((p[k] - q[k]) * n[k] for k in range(3)) < -0.001:
+            pairs.append((i, j))
+    return pairs
+
+
+def _tri_grid(pts, tris, size=0.04):
+    grid = {}
+    for t in tris:
+        c = [sum(pts[i][k] for i in t) / 3 for k in range(3)]
+        grid.setdefault(tuple(int(math.floor(x / size)) for x in c), []).append(t)
+    return grid
+
+
+def _ray_hits(p, d, pts, grid, reach=0.08, size=0.04):
+    """Does the ray from p along unit d cross any triangle within reach (Moller-Trumbore)?"""
+    seen = set()
+    for step in range(int(reach / 0.02) + 1):
+        c = [int(math.floor((p[k] + d[k] * 0.02 * step) / size)) for k in range(3)]
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    for t in grid.get((c[0] + dx, c[1] + dy, c[2] + dz), ()):
+                        if t in seen:
+                            continue
+                        seen.add(t)
+                        a, b, cc = (pts[i] for i in t)
+                        e1 = [b[k] - a[k] for k in range(3)]
+                        e2 = [cc[k] - a[k] for k in range(3)]
+                        h = [d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2], d[0] * e2[1] - d[1] * e2[0]]
+                        det = sum(e1[k] * h[k] for k in range(3))
+                        if abs(det) < 1e-12:
+                            continue
+                        sv = [p[k] - a[k] for k in range(3)]
+                        u = sum(sv[k] * h[k] for k in range(3)) / det
+                        if u < 0 or u > 1:
+                            continue
+                        qv = [sv[1] * e1[2] - sv[2] * e1[1], sv[2] * e1[0] - sv[0] * e1[2], sv[0] * e1[1] - sv[1] * e1[0]]
+                        v = sum(d[k] * qv[k] for k in range(3)) / det
+                        if v < 0 or u + v > 1:
+                            continue
+                        if 0 < sum(e2[k] * qv[k] for k in range(3)) / det < reach:
+                            return True
+    return False
+
+
+@needs_blender
+@pytest.mark.parametrize("name", list(OUTFITS))
+def test_nothing_pokes_through_the_clothes(outfits, name):
+    """Skin under the shirt and trousers, and the trousers' waist under the shirt, stay under the
+    cloth in sampled frames of every clip, on the slider extremes, male and female. A point that
+    was behind the garment at rest has poked through when, in the pose, it stands more than 3 mm
+    out past the local surface of the cloth AND a ray from it outwards meets no cloth at all (so
+    a fold further out, or the trousers under a shirt's hem, still count as covering it). And the trousers' waistband
+    (everything above the shirt's hem) is under the shirt, at rest and in every one of those
+    frames."""
+    g = _gltf(outfits[name])
+    names = {n.name for n in g.nodes}
+    skins = {n: _Skin(g, n) for n in ("Body__Skin", "Clothes__Shirt", "Clothes__Pants") if n in names}
+    layers = [("Clothes__Shirt", "Body__Skin"), ("Clothes__Pants", "Body__Skin"), ("Clothes__Shirt", "Clothes__Pants")]
+    pairs = {(o, i): _under_pairs(skins[o], skins[i]) for o, i in layers}
+    assert pairs[("Clothes__Shirt", "Clothes__Pants")], "no trouser waist under the shirt"
+    shirt, pants = skins["Clothes__Shirt"], skins["Clothes__Pants"]
+    hem, top = min(p[1] for p in shirt.pos), max(p[1] for p in pants.pos)
+    band = [i for i, p in enumerate(pants.pos)       # the waistband's outside, not its turned-in edge
+            if hem + 0.015 < p[1] < top - 0.015 and abs(pants.nrm[i][1]) < 0.5]
+    assert band, "the trousers do not reach up under the shirt"
+    pokes = []
+    for clip, frames in [("rest", [None])] + list(POSES.items()):
+        for f in frames:
+            ov = _pose(g, clip, f)[0] if f is not None else None
+            mats = {n: s.mats(ov) for n, s in skins.items()}
+            posed = {"Clothes__Shirt": shirt.all(mats["Clothes__Shirt"])}
+            grids = {"Clothes__Shirt": _tri_grid(posed["Clothes__Shirt"], shirt.tris)}
+            for i in band:
+                p, n = pants.at(mats["Clothes__Pants"], i)
+                if not _ray_hits(p, n, posed["Clothes__Shirt"], grids["Clothes__Shirt"]):
+                    pokes.append(("waistband", clip, f, [round(c, 3) for c in pants.pos[i]]))
+            if f is None:
+                continue
+            for (o, i), pp in pairs.items():
+                for a, b in pp:
+                    p, _ = skins[i].at(mats[i], a)
+                    q, n = skins[o].at(mats[o], b)
+                    d = sum((p[k] - q[k]) * n[k] for k in range(3))
+                    if d <= 0.003:
+                        continue
+                    # Skin is covered if any garment is over it (skin out from under the
+                    # shirt's hem is still inside the trousers); the waistband needs the shirt.
+                    over = [o] if i == "Clothes__Pants" else [x for x in ("Clothes__Shirt", "Clothes__Pants") if x in skins]
+                    rays = []
+                    for x in over:
+                        if x not in posed:
+                            posed[x] = skins[x].all(mats[x])
+                            grids[x] = _tri_grid(posed[x], skins[x].tris)
+                        if x == o:
+                            rays.append((x, n))
+                        else:   # outwards through that garment: along its own nearest normal
+                            j = min(range(len(posed[x])), key=lambda j: math.dist(p, posed[x][j]))
+                            rays.append((x, skins[x].at(mats[x], j)[1]))
+                    if not any(_ray_hits(p, dn, posed[x], grids[x]) for x, dn in rays):
+                        pokes.append((round(d, 4), clip, f, o, i, [round(c, 3) for c in skins[i].pos[a]]))
+    assert not pokes, pokes[:10]
+
+
+def _singlet(g):
+    """Tank-top measurements (m): neck drop at front and back centre below the neck joint, the
+    shoulder straps' widths across the top of each shoulder, and each armhole's depth at the
+    side below the shoulder joint."""
+    w = _world_positions(g)
+    pts = _world_verts(g, "Clothes__Shirt")
+    nx, nh = w["neck_01"][0][3], w["neck_01"][1][3]
+    out = {"front_drop": nh - max(p[1] for p in pts if abs(p[2]) < 0.015 and p[0] > nx + 0.02),
+           "back_drop": nh - max(p[1] for p in pts if abs(p[2]) < 0.015 and p[0] < nx - 0.02)}
+    for s in "lr":
+        j = w["upperarm_" + s]
+        sx, sh, sz = j[0][3], j[1][3], j[2][3]
+        strap = [abs(p[2]) for p in pts if abs(p[0] - nx) < 0.012 and p[1] > sh and p[2] * sz > 0 and abs(p[2]) > 0.03]
+        out["strap_" + s] = max(strap) - min(strap) if strap else 0.0
+        side = [p[1] for p in pts if abs(p[0] - sx) < 0.02 and p[2] * sz > 0 and abs(p[2]) > 0.06 and p[1] < sh]
+        out["armhole_" + s] = sh - max(side)
+    return out
+
+
+@needs_blender
+@pytest.mark.parametrize("name", ["male_heavy", "male_slim", "female_heavy"])
+def test_singlet_is_a_tank_top(outfits, name):
+    """Lester's references (Nike Miler, Standard Issue, AGOLDE, N.A.C., MP): a round neck scooped
+    to about the collarbones or a little below at the front (6-17 cm under the neck joint), lower
+    than at the back; straps 4-6 cm wide over the top of each shoulder (3.5-7 measured flat);
+    armholes open 10-26 cm below the shoulder joint at the side, baring shoulder and armpit."""
+    m = _singlet(_gltf(outfits[name]))
+    assert 0.06 <= m["front_drop"] <= 0.17 and m["back_drop"] < m["front_drop"], m
+    for s in "lr":
+        assert 0.035 <= m["strap_" + s] <= 0.07, m
+        assert 0.10 <= m["armhole_" + s] <= 0.26, m
+
+
+FEMALE_CATALOG = ROOT / "catalog" / "crew" / "female_default.json"
+
+
+def test_default_female_base_builds_clean(tmp_path):
+    # Lester, 29 Oct: "start new should have default male and default female".
+    if not Path(BLENDER).exists():
+        pytest.skip("Blender not installed")
+    spec = json.loads(FEMALE_CATALOG.read_text(encoding="utf-8"))
+    norm, errors, warnings = crew_spec.normalize(spec)
+    assert errors == [] and warnings == [] and norm["body"]["gender"] == "female"
+    report = _build(tmp_path, spec)
+    assert report["ok"] and report["_exit"] == 0, report["errors"]
+    names = {p["path"] for p in json.loads((report["_out"] / "parts.json").read_text())}
+    assert {"Clothes__Shirt", "Clothes__Pants", "Equipment__life_vest"} <= names, names
+    assert not any(n.startswith("Clothes__Suit") for n in names)
+    assert set(report["animations"]) == set(ANIMS) and report["skeleton"] == "mpfb_game_engine"
+    # same options as the male base, so the screen's pickers apply to both
+    male = json.loads(CATALOG.read_text(encoding="utf-8"))
+    assert spec["options"] == male["options"] and spec["category"] == male["category"]

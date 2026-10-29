@@ -344,7 +344,7 @@ describe('picker offer', () => {
 
 import {
   SHIRT_SWATCHES, changedModules, colourName, garmentColorPatch, garmentStylePatch, itemsInModule, moduleMessage, moduleOfItem,
-  moduleSummary, outfitPatch, outfitWouldRemove, placePatch, presetPatch, placementRows, suitLabel, suitsFor, toggleAccessory, toggleEquipment,
+  moduleSummary, outfitPatch, outfitWouldRemove, placePatch, placesFor, presetPatch, placementRows, suitLabel, suitsFor, toggleAccessory, toggleEquipment,
 } from './modules';
 import type { CrewSpec, CustomItem } from '../types';
 
@@ -418,6 +418,22 @@ describe('crew modules', () => {
     const p = placePatch(s, { kind: 'item', ref: 'rifle' }, 'back') as { custom_items: CustomItem[] };
     expect(p.custom_items[0].place).toBe('back');
     expect(p.custom_items[1]).toEqual(s.custom_items[1]);
+  });
+
+  it('offers both hands for described items only, and stores it as the place', () => {
+    // Lester, 29 Oct: "carry rifle in both hands". Long described items get the chip; the short
+    // catalog binoculars and radio do not (the builder refuses them).
+    const s = base();
+    s.equipment = ['life_vest', 'radio'];
+    s.custom_items = [ci('rifle', 'Equipment__Rifle', { module: 'equipment' })];
+    const [, radio, rifle] = placementRows(s);
+    expect(placesFor(rifle).map((p) => p.id)).toContain('both_hands');
+    expect(placesFor(rifle).find((p) => p.id === 'both_hands')?.label).toBe('Both hands');
+    expect(placesFor(radio).map((p) => p.id)).not.toContain('both_hands');
+    expect(placesFor(radio)).toHaveLength(6);
+    const p = placePatch(s, rifle, 'both_hands') as { custom_items: CustomItem[] };
+    expect(p.custom_items[0].place).toBe('both_hands');
+    expect(placementRows({ ...s, custom_items: p.custom_items })[2].place).toBe('both_hands');
   });
 
   it('toggles equipment and accessories without dropping colour or place', () => {
@@ -677,6 +693,57 @@ describe('finding ships and crew', () => {
     expect(isFiltered(DEFAULT_FILTER)).toBe(false);
     expect(isFiltered({ ...DEFAULT_FILTER, sort: 'name', group: true })).toBe(false); // sorting and grouping hide nothing
     expect(isFiltered(f)).toBe(true);
+  });
+});
+
+import { TRASH_NOTE, deleteFacts, draftBadge, draftKind, isDraft } from './draft';
+
+describe('draft or final, and the delete dialog (Lester, 29 Oct)', () => {
+  const ship = (extra: Record<string, unknown> = {}) => ({ id: 'x', kind: 'ship' as const, name: 'Yacht', base: 'container', version: 1, ...extra });
+  const unapproved = ship({ base: 'custom', plan_built: false });
+
+  it('a described ship whose plan was never built is a draft; once built it is final', () => {
+    expect(draftKind(unapproved)).toBe('plan');
+    expect(draftKind(ship({ base: 'custom' }))).toBe('plan');                      // plan_built missing = not built
+    expect(draftKind(ship({ base: 'custom', plan_built: true }))).toBeNull();
+    expect(draftBadge(unapproved)).toBe('Draft · plan not approved');
+    expect(draftBadge(ship({ base: 'custom', plan_built: true }))).toBeNull();
+  });
+  it('a variant awaiting review is a draft and keeps its own badge, even of a described ship', () => {
+    const v = ship({ base: 'custom', plan_built: true, draft: { stage: 'ready' } });
+    expect(draftKind(v)).toBe('variant');
+    expect(draftBadge(v)).toBe('Awaiting your approval');
+  });
+  it('catalog ships and crew are final, with no badge', () => {
+    expect(isDraft(ship())).toBe(false);
+    expect(draftBadge(ship({ version: 0 }))).toBeNull();                           // not built yet is not a draft
+    expect(isDraft({ kind: 'crew', base: 'custom', plan_built: false })).toBe(false); // only ships have plans
+    expect(isDraft(null)).toBe(false);
+  });
+  it('the Draft and Final filters split the list, and combine with the other filters', () => {
+    const list = [
+      ship({ id: 'cat' }),
+      ship({ id: 'plan', base: 'custom' }),
+      ship({ id: 'built', base: 'custom', plan_built: true, updated: '2026-10-29T09:00:00Z' }),
+      ship({ id: 'var', draft: { stage: 'ready' }, derived_from: { project: 'cat', version: 1, name: 'Yacht' } }),
+    ];
+    const ctx = { working: new Set<string>(), baseLabel: (b: string) => b };
+    const ids = (f: Partial<typeof DEFAULT_FILTER>) => applyFilter(list, { ...DEFAULT_FILTER, sort: 'name', ...f }, ctx).map((x) => x.id).sort();
+    expect(ids({ status: 'draft' })).toEqual(['plan', 'var']);
+    expect(ids({ status: 'final' })).toEqual(['built', 'cat']);
+    expect(ids({ status: 'approval' })).toEqual(['var']);                          // Bryan's filter is unchanged
+    expect(ids({ status: 'draft', origin: 'originals' })).toEqual(['plan']);
+    expect(filterFromParams(new URLSearchParams('status=draft')).status).toBe('draft');
+    expect(filterToParams({ ...DEFAULT_FILTER, status: 'final' })).toEqual({ status: 'final' });
+    expect(isFiltered({ ...DEFAULT_FILTER, status: 'draft' })).toBe(true);
+  });
+  it('the dialog names the kind, versions, category and draft state', () => {
+    expect(deleteFacts(unapproved, 1, 'Other')).toEqual(['Ship', '1 version', 'Category: Other', 'Draft: its design plan was never approved']);
+    expect(deleteFacts(ship(), 3, 'Commercial vessels')).toEqual(['Ship', '3 versions', 'Category: Commercial vessels']);
+    expect(deleteFacts({ kind: 'crew', draft: { stage: 'ready' } as never }, 0, 'Navy'))
+      .toEqual(['Crew member', 'No versions built yet', 'Category: Navy', 'Draft: a variant awaiting your approval']);
+    expect(deleteFacts(ship(), null, 'Other')[1]).toBe('Counting versions…');
+    expect(TRASH_NOTE).toBe('It is removed from the app. Its files are kept in the data/trash folder, so it can be recovered by hand.');
   });
 });
 

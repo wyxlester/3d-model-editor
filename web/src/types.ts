@@ -75,7 +75,7 @@ export interface VersionInfo {
 
 export type ProjectKind = 'ship' | 'crew';
 /** `custom` = a ship of any type, made from a brief (CONTRACT §5 `type: "custom"`). */
-export type ProjectBase = 'container' | 'sampan' | 'tanker' | 'male_default' | 'custom';
+export type ProjectBase = 'container' | 'sampan' | 'tanker' | 'male_default' | 'female_default' | 'custom';
 
 /** §5 `type: "custom"`: what will be built, approved by the user before anything builds. */
 export interface DesignPlan {
@@ -126,7 +126,7 @@ export interface PartOverride {
 export type ModuleId = 'gender' | 'skin' | 'hair' | 'shirt' | 'pants' | 'outfit' | 'shoes' | 'equipment' | 'placement' | 'accessories';
 
 /** Where a held or attached equipment item goes (§6 "Placement"). Absent = the item's fixed spot. */
-export type Place = 'right_hand' | 'left_hand' | 'chest' | 'back' | 'hip' | 'head';
+export type Place = 'right_hand' | 'left_hand' | 'chest' | 'back' | 'hip' | 'head' | 'both_hands';
 
 /** `clothes.shirt` / `clothes.pants`: a preset garment. */
 export interface Garment { style: string; color?: Vec3 | null }

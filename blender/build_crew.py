@@ -24,6 +24,7 @@ from crew import animations as crew_anims  # noqa: E402
 from crew import custom as crew_custom  # noqa: E402
 from crew import equipment as crew_equipment  # noqa: E402
 from crew import spec as crew_spec  # noqa: E402
+from crew import two_hands as crew_two_hands  # noqa: E402
 
 MAX_TRIANGLES = 40000
 HEIGHT_TOLERANCE_M = 0.02
@@ -86,6 +87,11 @@ def part_entry(obj, parent=None, bone=None):
     }
     if bone:
         entry["bone"] = bone
+    if obj.get("me3d_place") == crew_two_hands.PLACE:
+        # Contract section 6: the points the hands close on, in the item's own (mesh) frame.
+        entry["place"] = crew_two_hands.PLACE
+        entry["grip_m"] = r6(obj[crew_two_hands.GRIP_PROP])
+        entry["support_m"] = r6(obj[crew_two_hands.SUPPORT_PROP])
     return entry
 
 
@@ -221,9 +227,10 @@ def run_custom_items(items, armature, errors, warnings, log):
     return made, to_place
 
 
-def build_modules(spec, armature, objects, equipment, warnings, log):
+def build_modules(spec, armature, objects, equipment, warnings, log, holds=None):
     """Shirt, pants, accessories, custom items and placement, in the order that keeps modules
-    independent (see blender/crew/modules.py). Mutates objects/equipment; returns errors."""
+    independent (see blender/crew/modules.py). Mutates objects/equipment; returns errors. An item
+    placed both_hands appends its two_hands.Hold to ``holds`` for the animation bake."""
     from crew import modules as crew_modules
     errors = []
     c = spec["clothes"]
@@ -267,6 +274,15 @@ def build_modules(spec, armature, objects, equipment, warnings, log):
             for name, ob in made.items():
                 (equipment if name.startswith("Equipment__") else objects)[name] = ob
         for ob, where in to_place:
+            if where == crew_two_hands.PLACE:
+                try:
+                    hold = crew_two_hands.place_both_hands(ob, armature, surface, log)
+                except ValueError as e:
+                    errors.append(str(e))
+                    continue
+                if holds is not None:
+                    holds.append(hold)
+                continue
             crew_modules.place(ob, where, armature, surface, log)
             if ob.name == "Equipment__binoculars" and where == "chest":
                 crew_equipment.add_binocular_strap(ob, armature)
@@ -303,10 +319,10 @@ def main():
         reset_scene()
         report["mpfb_pack_installed"] = mpfb_human.pack_installed()
         armature, objects, barefoot_h, height_macro = mpfb_human.build_human(spec, warnings, log)
-        equipment = {}
-        errors.extend(build_modules(spec, armature, objects, equipment, warnings, log))
+        equipment, holds = {}, []
+        errors.extend(build_modules(spec, armature, objects, equipment, warnings, log, holds))
 
-        actions = crew_anims.bake_all(armature, spec["animations"], log)
+        actions = crew_anims.bake_all(armature, spec["animations"], log, holds[0] if holds else None)
         report["feet"] = check_feet(armature, [a.name for a in actions], errors, warnings)
 
         # Parts, triangles, bounds - at rest pose.

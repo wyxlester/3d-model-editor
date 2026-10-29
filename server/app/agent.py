@@ -279,7 +279,10 @@ class AgentSession:
              _obj({"equipment": {"type": "array", "items": equipment_item}}, ["equipment"])),
             ("set_place", "Module placement: move one equipment item to " + ", ".join(cm.PLACES) + ". `item` "
              "is a catalog equipment name in the list (e.g. radio) or an equipment custom item id (item_2). "
-             "No code change and nothing else moves.",
+             "both_hands is a two-handed ready carry for a long item (rifle, boat hook, pole): across the "
+             "front of the body, muzzle forward-down, right hand on the grip, left hand on the barrel or "
+             "handguard, held in every animation. It needs both hands: move anything held in a hand "
+             "elsewhere first. No code change and nothing else moves.",
              _obj({"item": {"type": "string"}, "place": place}, ["item", "place"])),
             ("set_accessories", "Module accessories: replace the accessories list. Entries are a name (" +
              ", ".join(cm.ACCESSORIES) + " or the catalog's accessories options) or {\"name\", \"color\": "
@@ -339,6 +342,11 @@ class AgentSession:
                 "grip point at the origin, +Z up, +X forward, sizes in metres. Do NOT parent or position it "
                 "(no crew.hold, crew.attach or .parent): the builder attaches it by its place, so moving it "
                 "later is set_place with no code change. Equipment makes Equipment__ objects only.\n"
+                "- Long items carried in both hands (place both_hands: a rifle, a boat hook): model them the "
+                "same way, and mark where the hands go with crew.two_hand_grips(obj, grip, support) in the "
+                "item's own coordinates: grip = right hand (a rifle's pistol grip and trigger), support = left "
+                "hand (its handguard or barrel). Without it the builder uses the origin (if it lies in the back "
+                "half) or a third from the back end for the grip, and two thirds for the support.\n"
                 "- Accessories that sit rigidly on the body (sunglasses, a badge) may use crew.attach.\n"
                 "Names use letters/digits/underscore only, e.g. Clothes__Singlet, Equipment__Torch. Colours via "
                 "crew.material. No file, network or OS access (imports of os/sys/subprocess, open(), eval, exec "
@@ -662,6 +670,13 @@ class AgentSession:
         if name in cm.FIXED_PLACE_EQUIPMENT:
             raise ToolError(f"{name} is worn in one fixed spot and takes no place.")
 
+    @staticmethod
+    def _check_hands(spec: dict) -> None:
+        """A both_hands carry needs both hands free (contract §6 Placement)."""
+        problems = cm.hand_conflicts(spec)
+        if problems:
+            raise ToolError(" ".join(problems))
+
     def t_set_equipment(self, equipment: list) -> str:
         self._check_crew()
         self._check_list("equipment", equipment, allow_color=True)
@@ -678,7 +693,9 @@ class AgentSession:
             if old and (isinstance(e, str) or "place" not in e):
                 e = dict({"name": e} if isinstance(e, str) else e, place=old.pop(0))
             kept.append(e)
-        self.spec = deep_merge(self.spec, {"equipment": kept})
+        new = deep_merge(self.spec, {"equipment": kept})
+        self._check_hands(new)
+        self.spec = new
         return "Equipment updated. Call rebuild."
 
     def t_set_place(self, item: str, place: str) -> str:
@@ -690,6 +707,7 @@ class AgentSession:
         for i, e in enumerate(spec.get("equipment") or []):
             if (e if isinstance(e, str) else e.get("name") if isinstance(e, dict) else None) == item:
                 spec["equipment"][i] = dict({"name": e} if isinstance(e, str) else e, place=place)
+                self._check_hands(spec)
                 self.spec = spec
                 return f"{item} moved to {place}. Call rebuild."
         for it in spec.get("custom_items") or []:
@@ -697,6 +715,7 @@ class AgentSession:
                 if cm.item_module(it) != "equipment":
                     raise ToolError(f"{item} is a {cm.item_module(it)} item; only equipment has a place.")
                 it["place"] = place
+                self._check_hands(spec)
                 self.spec = spec
                 return f"{item} ({it.get('description')}) moved to {place}. Call rebuild."
         names = [e if isinstance(e, str) else e.get("name") for e in spec.get("equipment") or []
@@ -760,7 +779,9 @@ class AgentSession:
         if place is not None:
             item["place"] = place
         items.append(item)
-        self.spec = deep_merge(self.spec, {"custom_items": items})
+        new = deep_merge(self.spec, {"custom_items": items})
+        self._check_hands(new)
+        self.spec = new
         return (f"Custom item item_{i} added to {module}" +
                 (f", replacing {', '.join(map(str, removed))}" if removed else "") + ". Call rebuild to run it.")
 
@@ -816,15 +837,18 @@ class AgentSession:
 
     def _change_media(self, fn: Callable[[dict, dict], tuple[Any, bool]]) -> tuple[Any, bool]:
         """Read-modify-write the research record under the project lock. fn(research, project) changes
-        it in place and returns (result, changed). A change recounts photos and coverage and bumps the
-        research revision, as save_research does; a ToolError inside fn saves nothing."""
+        it in place and returns (result, changed). A change recounts photos and coverage; a ToolError
+        inside fn saves nothing.
+
+        It does NOT bump the research revision. Lester, 29 Oct ("why can't i approve yet?"): adding
+        photographs made his design plan look older than the research, so Approve stayed off although
+        nothing the plan rests on had changed. Only save_research (the facts) moves the revision."""
         with self.store.edit(self.pid) as project:
             research = project.get("research") or {"schema": "me3d.research/1"}
             result, changed = fn(research, project)
             if changed:
                 rm.refresh(research)
                 project["research"] = research
-                dp.on_research_saved(project)
             return result, changed
 
     @staticmethod
@@ -1144,6 +1168,7 @@ CREW_PROMPT = """You edit one human crew member for a maritime simulator. Blende
   - Hair: a style from the options plus hair_color (blonde is about [0.85, 0.7, 0.4]).
   - Shirts and trousers: a preset style and colour with set_clothes shirt / pants when one fits; otherwise (a singlet, cargo shorts with pockets) add_custom_item with module shirt or pants and crew.garment over the body regions it covers. Either way the suit is set to null for you, so the outfit no longer shows through.
   - Things held or carried (a torch, a clipboard, a rope, a tool belt): add_custom_item with module equipment and a place, a low-poly mesh modelled at the origin and not parented; the builder puts it at its place.
+  - Carried in both hands ("carry the rifle in both hands", "left hand on the barrel, right hand on the trigger", a ready carry): place both_hands (set_place for an item that exists). The builder holds it across the body, muzzle forward-down, right hand on the grip and left on the barrel, in every animation. Declare the grip and support with crew.two_hand_grips when you write the item.
   - Gloves, sunglasses, ear defenders, caps: set_accessories, or add_custom_item with module accessories.
 - Never answer that something is not available when you can make it. If part of a request truly cannot be built (cloth that flows in the wind, real physics), make the closest thing and say plainly what you made instead.
 - The person is ten modules: gender, skin, hair, shirt, pants, outfit, shoes, equipment, placement, accessories (get_project lists what each owns). Work out which module or modules the request is about and change only those. Leave every other module exactly as it is: never remove, recolour, replace or reset anything the user did not mention. Matching a photo or a description is still one change per module it mentions, not a rebuild of the whole person.
@@ -1288,7 +1313,8 @@ def describe_tool(name: str, args: dict | None) -> str | None:
         "set_body": f"Changing the body: {_words(patch)}",
         "set_clothes": f"Changing clothes: {_words(patch)}",
         "set_equipment": f"Setting equipment: {_words(_item_names(a.get('equipment') or ['none']))}",
-        "set_place": f"Moving {_words([a.get('item') or 'an item'])} to the {_words([a.get('place') or 'new place'])}",
+        "set_place": (f"Moving {_words([a.get('item') or 'an item'])} into both hands" if a.get("place") == "both_hands"
+                      else f"Moving {_words([a.get('item') or 'an item'])} to the {_words([a.get('place') or 'new place'])}"),
         "set_accessories": f"Setting accessories: {_words(_item_names(a.get('accessories') or ['none']))}",
         "save_design_plan": "Drafting the design plan",
         "set_category": f"Filing it under {a.get('category') or 'a category'}",

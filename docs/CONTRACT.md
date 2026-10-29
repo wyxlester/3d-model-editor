@@ -180,7 +180,7 @@ in words (the AI then writes a custom item **tagged with that module**).
 | `outfit` | `clothes.suit`, `clothes.suit_color` | catalog suits (textured, fill shirt *and* pants) or null |
 | `shoes` | `clothes.shoes`, `clothes.shoes_color`; custom items `module: "shoes"` | catalog shoes, or null = barefoot |
 | `equipment` | `equipment[]` items (name, color); custom items `module: "equipment"` | life_vest, helmet, binoculars, radio |
-| `placement` | the `place` of each equipment entry and each equipment custom item | right_hand, left_hand, chest, back, hip, head |
+| `placement` | the `place` of each equipment entry and each equipment custom item | right_hand, left_hand, chest, back, hip, head, both_hands |
 | `accessories` | `accessories[]` (`{"name","color"}`), `clothes.hat`, `clothes.hat_color`; custom items `module: "accessories"` | cap, sunglasses, ear_defenders, gloves, fedora01, fedora_cocked |
 
 Rules:
@@ -190,11 +190,32 @@ Rules:
   do this; the builder just draws the suit if set.)
 - **A described item replaces its module's preset:** a `shirt` custom item means `clothes.shirt`
   is null. Describing a module again replaces that module's custom items, nothing else.
-- **Placement:** `place` is one of `right_hand`, `left_hand`, `chest`, `back`, `hip`, `head`, or
-  absent for worn items that have one fixed spot (life_vest, helmet). Equipment custom items are
+- **Placement:** `place` is one of `right_hand`, `left_hand`, `chest`, `back`, `hip`, `head`,
+  `both_hands`, or absent for worn items that have one fixed spot (life_vest, helmet). Equipment custom items are
   modelled at the origin (grip point at the origin, +Z up, +X forward) and **not parented by their
   code**; the builder attaches every equipment object by its `place`, so moving an item is a
   spec change with no AI and no code change.
+- **Both hands** (Lester, 29 Oct: "carry rifle in both hands. left hand on barrel, right hand on
+  trigger"): `both_hands` is a two-handed ready carry for long items (at least 30 cm; a rifle, a
+  boat hook). The builder (`blender/crew/two_hands.py`) parents the item to `spine_03`, across the
+  front of the body, its long axis forward and 30–45° down and turned 15–45° toward the left, clear
+  of the torso (and vest), at a height and distance measured from the body so it fits every size.
+  Both arms are solved onto it by two-bone IK (elbows down and out; a shoulder may come forward up
+  to 20° to reach) and the result is **baked into every clip**, fingers closed on the item, so the
+  GLB and Unreal get the hold with no runtime IK. Right palm on the **grip**, left palm on the
+  **support**: custom item code may declare both with `crew.two_hand_grips(obj, grip, support)`
+  (item-local metres, as modelled); otherwise the long axis is the item's longest extent, its front
+  the end further from the origin, the grip the origin when that lies 15–50% along from the back
+  end (the one-hand grip: a rifle's pistol grip) or else a third along, and the support two thirds
+  along. *Down* (it faces the deck) is the side the item reaches furthest from the grip–support line
+  (a magazine). One `both_hands` item at most, and no other item may then be in `right_hand` or
+  `left_hand`: the spec check, the AI's tools and the builder refuse it, naming both items.
+  **hands_up** lets go: the hands rise, the item stays where it is carried (as on a sling) and the
+  hands return to it at the end. The item is a rigid mesh riding a bone; dropping it or holding it
+  overhead would need the item itself animated, which Unreal does not import for such a mesh.
+  `parts.json` gives the item `"place": "both_hands"`, `"grip_m"` and `"support_m"` (item mesh
+  frame). The screen offers "Both hands" for described items only (the catalog's binoculars and
+  radio are too short).
 - Custom items gain `"module"` (required for new items; an item without one is treated as
   `equipment` if it makes `Equipment__` objects, else `shirt`) and, for equipment, `"place"`.
 - **A preset replaces what was described:** choosing a hair/shirt/pants/shoes preset removes that
@@ -340,6 +361,7 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | POST `/api/projects/{id}/variants` | `{"name"?,"version"?,"brief"?,"research"?:bool,"scene"?}` | `{"project","job_id"}` (below) |
 | POST `/api/projects/{id}/approve` | | `{"project","scene":{"id","missing_stations"}|null}` |
 | POST `/api/projects/{id}/discard` | | `{"project"}` |
+| DELETE `/api/projects/{id}` | | `{"deleted": id, "trash": "trash/<id>-<timestamp>"}`; 409 with a sentence when it can't be (below) |
 | GET `/api/jobs` | | `{"jobs":[JobSummary]}` (above) |
 | GET `/api/jobs/{id}` | | Job |
 | GET `/api/scenes` / POST `/api/scenes` | `SceneSpec` without `id` | `[Scene]` / `{"scene"}` |
@@ -430,6 +452,23 @@ or copied into another variant, and approve or discard are refused while its job
 - `discard` sets `discarded`. The project disappears from `GET /api/projects` and routing; its
   files stay on disk. The original is never changed by either.
 
+**Delete** (Lester, 29 Oct: "should also allow user to delete ship. if choose delete ship, render a
+dialog box to confirm with user, before actually deleting"). `DELETE /api/projects/{id}` works on any
+ship or crew project. It moves the project's folder to `data/trash/<id>-<UTC timestamp>/`, so it can
+be recovered by hand by moving it back; afterwards it is gone from `GET /api/projects`, routing and
+every project route (404). It is refused with 409 and a sentence for the user:
+
+- while any scene uses it, as its ship or as crew; the sentence names the scenes and the role in each
+  (there is no scene delete, and a scene's ship can't be changed, so a ship in a scene stays);
+- while one of its jobs is queued or running.
+
+Deleting a project leaves its variants alone: their `derived_from` still names it, and they list,
+open, approve and make variants as before. The screens ask for confirmation first; the server does not.
+
+**Draft or final** (screens only, no new field). The lists badge a project as a draft when it is a
+variant awaiting review (`draft` set) or a `custom` ship whose plan has never been built
+(`plan_built` false); everything else is final.
+
 **Attachments** (pictures and documents sent with a chat message). An upload is stored at once and
 returns `{"id","name","type","size","url"}`; the chat message then names it by `id`, and the AI
 receives the file itself alongside the text: pictures as images, PDFs as documents, text files as
@@ -458,6 +497,7 @@ data/projects/<id>/logs/<job id>.json           each finished job's log
 data/projects/<id>/uploads/<upload id>.<ext>   and <upload id>.json (name, type, size)
 data/uploads/<upload id>.<ext>                 attached on Home, before a project exists
 data/scenes/<id>.json
+data/trash/<id>-<timestamp>/                   a deleted project's folder, moved here whole
 data/packages/<package_id>/...  and <package_id>.zip
 ```
 

@@ -75,7 +75,9 @@ export function VariantReview() {
     setActing(true); setErr(null);
     try {
       await api.discard(v.id);
-      nav(isShip ? paths.shipBuild(src.project) : paths.crew(src.project));
+      // Back to the original; if it has since been deleted, back to the list instead of a "not found".
+      const original = await api.project(src.project).then(() => src.project, () => null);
+      nav(isShip ? paths.shipBuild(original) : paths.crew(original));
     } catch (e) { setErr(errorText(e)); } finally { setActing(false); setConfirmDiscard(false); }
   };
 

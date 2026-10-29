@@ -41,6 +41,9 @@ class Settings:
     route_model: str = os.environ.get("ME3D_ROUTE_MODEL", "claude-haiku-5-5")
     # After a research turn with too few photographs, run a photo-finding turn in the same job.
     photo_follow_up: bool = os.environ.get("ME3D_PHOTO_FOLLOW_UP", "1") != "0"
+    # After a custom-ship research turn that changed the facts but left the design plan behind,
+    # redraft the plan in the same job, so Approve is never left off for want of a click.
+    plan_follow_up: bool = os.environ.get("ME3D_PLAN_FOLLOW_UP", "1") != "0"
 
     @property
     def projects_dir(self) -> Path:
@@ -53,6 +56,11 @@ class Settings:
     @property
     def packages_dir(self) -> Path:
         return self.data_dir / "packages"
+
+    @property
+    def trash_dir(self) -> Path:
+        """Deleted projects: data/trash/<id>-<UTC timestamp>/, kept so they can be recovered by hand."""
+        return self.data_dir / "trash"
 
     @property
     def unreal_script(self) -> Path:
