@@ -344,7 +344,7 @@ describe('picker offer', () => {
 
 import {
   SHIRT_SWATCHES, changedModules, colourName, garmentColorPatch, garmentStylePatch, itemsInModule, moduleMessage, moduleOfItem,
-  moduleSummary, outfitPatch, outfitWouldRemove, placePatch, presetPatch, placementRows, suitLabel, suitsFor, toggleAccessory, toggleEquipment,
+  moduleSummary, outfitPatch, outfitWouldRemove, placePatch, placesFor, presetPatch, placementRows, suitLabel, suitsFor, toggleAccessory, toggleEquipment,
 } from './modules';
 import type { CrewSpec, CustomItem } from '../types';
 
@@ -418,6 +418,22 @@ describe('crew modules', () => {
     const p = placePatch(s, { kind: 'item', ref: 'rifle' }, 'back') as { custom_items: CustomItem[] };
     expect(p.custom_items[0].place).toBe('back');
     expect(p.custom_items[1]).toEqual(s.custom_items[1]);
+  });
+
+  it('offers both hands for described items only, and stores it as the place', () => {
+    // Lester, 29 Oct: "carry rifle in both hands". Long described items get the chip; the short
+    // catalog binoculars and radio do not (the builder refuses them).
+    const s = base();
+    s.equipment = ['life_vest', 'radio'];
+    s.custom_items = [ci('rifle', 'Equipment__Rifle', { module: 'equipment' })];
+    const [, radio, rifle] = placementRows(s);
+    expect(placesFor(rifle).map((p) => p.id)).toContain('both_hands');
+    expect(placesFor(rifle).find((p) => p.id === 'both_hands')?.label).toBe('Both hands');
+    expect(placesFor(radio).map((p) => p.id)).not.toContain('both_hands');
+    expect(placesFor(radio)).toHaveLength(6);
+    const p = placePatch(s, rifle, 'both_hands') as { custom_items: CustomItem[] };
+    expect(p.custom_items[0].place).toBe('both_hands');
+    expect(placementRows({ ...s, custom_items: p.custom_items })[2].place).toBe('both_hands');
   });
 
   it('toggles equipment and accessories without dropping colour or place', () => {

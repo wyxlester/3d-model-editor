@@ -395,6 +395,20 @@ def hold(obj, hand="right"):
     return attach(obj, "hand_" + s)
 
 
+def two_hand_grips(obj, grip, support):
+    """Long items (rifle, boat hook): item-local (x,y,z) m of the right-hand grip and left-hand support (else inferred along it)."""
+    # Used only when the item's place is both_hands (contract section 6): the right hand closes on
+    # `grip` (a rifle's pistol grip / trigger), the left on `support` (its handguard or barrel).
+    # Given in the coordinates the item was modelled in, before any placing. Without this call
+    # the builder infers both along the item's longest extent: the grip is the origin if it lies
+    # 15-50% along from the back end, else a third along; the support two thirds; the front is
+    # the end further from the origin.
+    from . import two_hands as _two
+    obj[_two.GRIP_PROP] = [float(c) for c in grip]
+    obj[_two.SUPPORT_PROP] = [float(c) for c in support]
+    return obj
+
+
 def _side(hand):
     h = str(hand).lower()
     if h in ("right", "r", "hand_r"):
