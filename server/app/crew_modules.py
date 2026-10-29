@@ -1,4 +1,4 @@
-"""Crew modules (contract §6 "Modules"): which spec keys each of the ten modules owns, what a
+"""Crew modules (contract §6 "Modules"): which spec keys each of the nine modules owns, what a
 change between two specs touched, and the cross-module rules the screen and the AI share.
 
 This is the guard behind "describe one module without resetting the entire human": a scoped AI
@@ -15,8 +15,12 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-MODULES = ("gender", "skin", "hair", "shirt", "pants", "outfit", "shoes", "equipment", "placement",
-           "accessories")
+MODULES = ("gender", "skin", "hair", "shirt", "pants", "outfit", "shoes", "equipment", "accessories")
+# Old module ids still accepted on POST /chat (older clients, saved messages). Lester, 29 Oct:
+# "combine equipment and equipment placement, it is a duplicate. when user describe a equipment,
+# user will also need to describe how the human is holding the equipment" — so where an item sits
+# (its `place`) is part of the equipment module, not a module of its own.
+MODULE_ALIASES = {"placement": "equipment"}
 
 # (section, key) -> module, for the dict sections body and clothes.
 KEY_OWNER: dict[tuple[str, str], str] = {
@@ -41,7 +45,7 @@ HAND_PLACES = ("right_hand", "left_hand", "both_hands")
 # CUSTOM_DEFAULT_PLACE): binoculars on the chest, the radio on the hip, described items in the right hand.
 DEFAULT_PLACES = {"binoculars": "chest", "radio": "hip"}
 CUSTOM_DEFAULT_PLACE = "right_hand"
-# Worn catalog equipment with one fixed spot: no `place` (contract §6 Placement).
+# Worn catalog equipment with one fixed spot: no `place` (contract §6 "Placement").
 FIXED_PLACE_EQUIPMENT = ("life_vest", "helmet")
 SHIRT_STYLES = ("tshirt", "singlet", "long_sleeve", "polo")
 PANTS_STYLES = ("shorts", "trousers", "cargo")
@@ -69,9 +73,8 @@ MODULE_DOCS = {
     "pants": "clothes.pants {style, color} or null (set_clothes); described: add_custom_item module 'pants'",
     "outfit": "clothes.suit, clothes.suit_color (set_clothes)",
     "shoes": "clothes.shoes, clothes.shoes_color (set_clothes); described: add_custom_item module 'shoes'",
-    "equipment": "the equipment list: names and colours (set_equipment); described: add_custom_item "
-                 "module 'equipment'",
-    "placement": "where each equipment item sits: its place (set_place)",
+    "equipment": "the equipment list: names, colours and where each is held or carried (set_equipment, "
+                 "set_place); described: add_custom_item module 'equipment' with its place",
     "accessories": "accessories list (set_accessories), clothes.hat, clothes.hat_color (set_clothes); "
                    "described: add_custom_item module 'accessories'",
 }
@@ -194,7 +197,7 @@ def _equipment_changes(a: list, b: list) -> list[Change]:
         if content_a != content_b:
             out.append(Change(path, "equipment", "set", eb))
         if ea.get("place") != eb.get("place"):
-            out.append(Change(f"{path}.place", "placement", "set", eb.get("place")))
+            out.append(Change(f"{path}.place", "equipment", "set", eb.get("place")))
     return out
 
 
@@ -224,8 +227,16 @@ def _item_changes(a: list, b: list) -> list[Change]:
         pa = ia.get("place") if isinstance(ia, dict) else None
         pb = ib.get("place") if isinstance(ib, dict) else None
         if pa != pb:
-            out.append(Change(f"{path}.place", "placement" if mb == "equipment" else mb, "set", pb))
+            out.append(Change(f"{path}.place", mb, "set", pb))
     return out
+
+
+def module_id(name: Any) -> str | None:
+    """A module id as sent by a client, aliases resolved (placement -> equipment); None if unknown."""
+    if not isinstance(name, str):
+        return None
+    name = MODULE_ALIASES.get(name, name)
+    return name if name in MODULES else None
 
 
 def changed_modules(old: dict, new: dict) -> set[str]:
@@ -248,6 +259,7 @@ def outside_changes(old: dict, new: dict, allowed_module: str) -> list[Change]:
     The only cross-module changes allowed are the ones the outfit rule itself makes: a shirt or
     pants change may clear the suit (and fill the other half with its plain default), and an outfit choice may clear shirt and pants and remove
     their described items. They count only when the module really changed in that direction."""
+    allowed_module = module_id(allowed_module) or allowed_module
     cs = changes(old, new)
     own = [c for c in cs if c.module == allowed_module]
     new_suit = ((new or {}).get("clothes") or {}).get("suit")

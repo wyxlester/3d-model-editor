@@ -696,8 +696,10 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             raise HTTPException(400, "mode must be build or research")
         module = body.get("module")
         if module is not None:
-            if module not in crew_modules.MODULES:
+            # "placement" is an old id for the equipment module (older clients, saved messages).
+            if crew_modules.module_id(module) is None:
                 raise HTTPException(400, f"module must be one of {list(crew_modules.MODULES)}")
+            module = crew_modules.module_id(module)
             if project.get("kind") != "crew" or mode != "build":
                 raise HTTPException(400, "module is only for build chats on crew projects")
         if mode == "build":

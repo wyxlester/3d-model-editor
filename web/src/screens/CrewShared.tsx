@@ -33,7 +33,10 @@ export function useSpecEditor(projectId: string | undefined, run: Run, reload: (
     void flush();
   }, [flush]);
 
-  return { edit, optimistic };
+  /** Forget edits not yet sent and what was shown ahead of the server (after an undo). */
+  const reset = useCallback(() => { pending.current = null; setOptimistic({}); }, []);
+
+  return { edit, optimistic, reset };
 }
 
 /**

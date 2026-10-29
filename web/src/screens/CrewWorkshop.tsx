@@ -1,10 +1,11 @@
-// Crew workshop. The right panel is the ten crew modules (CONTRACT §6 "Modules", approved mock
-// "Crew workshop: modules"): each opens to presets, colours and "Or describe it". Presets and
+// Crew workshop. The right panel is the nine crew modules (CONTRACT §6 "Modules", approved mock
+// "Crew workshop: modules"): each opens to presets, colours and "Or describe it". Equipment lists
+// each item with where it is carried (Lester, 29 Oct: "combine equipment and equipment placement"). Presets and
 // colours patch the spec through POST /spec (no AI); "Make it" sends the words through the crew
 // chat scoped to that module, so only that module changes. The viewer plays the chosen animation.
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { api } from '../api';
+import { api, errorText } from '../api';
 import { AiWorking, ChatPanel, ErrorNote, JobLines, Loading, TopBar, useCarried } from '../components/common';
 import { DerivedFromLink, useVariantDialog } from '../components/VariantDialog';
 import { OtherWork, useProjectWork } from '../components/JobCenter';
@@ -15,8 +16,9 @@ import { GEAR_SWATCHES, HAIR_SWATCHES, hexToLinear, madeSomethingNew, removeItem
 import {
   ACCESSORIES, HAIR_STYLES, accessoryName, presetPatch, HATS, MODULES, PANTS_STYLES, PANTS_SWATCHES, placesFor, SHIRT_STYLES, SHIRT_SWATCHES, SHOE_SWATCHES, SKIN_TONES,
   changedModules, equipmentName, garmentColorPatch, garmentStylePatch, itemsInModule, moduleMessage, moduleSummary, outfitPatch,
-  outfitWouldRemove, placePatch, placementRows, shoeLabel, suitLabel, suitsFor, toggleAccessory, toggleEquipment, type ModuleDef,
+  outfitWouldRemove, placePatch, equipmentRows, shoeLabel, suitLabel, suitsFor, toggleAccessory, toggleEquipment, type ModuleDef,
 } from '../lib/modules';
+import { undoHint } from '../lib/undo';
 import type { Attachment, CrewSpec, CustomItem, ModuleId, Vec3 } from '../types';
 import { CrewViewer } from '../viewer/Viewer';
 import { useCrewChat, useSpecEditor } from './CrewShared';
@@ -54,7 +56,7 @@ export function CrewWorkshop() {
   const [search] = useSearchParams();
   const variant = useVariantDialog();
   const reload = project.reload;
-  const { edit, optimistic } = useSpecEditor(id, run, reload);
+  const { edit, optimistic, reset } = useSpecEditor(id, run, reload);
   const sendChat = useCrewChat(id, run, reload);
   // Work on this person carries on while the user is elsewhere; when it finishes, show the result.
   const work = useProjectWork(id, () => void reload(), jobs);
@@ -73,6 +75,9 @@ export function CrewWorkshop() {
   const [changed, setChanged] = useState<ModuleId[]>([]);
   // A preset that would remove described items waits here for a yes (same confirm-first rule as Remove).
   const [pending, setPending] = useState<{ module: ModuleId; label: string; patch: Record<string, unknown>; gone: CustomItem[] } | null>(null);
+  const [askingRemove, setAskingRemove] = useState<string | null>(null);
+  const [undoing, setUndoing] = useState(false);
+  const [undoErr, setUndoErr] = useState<string | null>(null);
   const changedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => { if (id) remember('crew', id); }, [id]);
@@ -148,6 +153,27 @@ export function CrewWorkshop() {
     try { await sendTracked(text, [], m); } finally { setDescribing(null); }
   };
 
+  // Lester, 29 Oct: "create a undo button for both crew and ship for user to return back to previous
+  // state". Undo moves the project back one version (no rebuild): the panel and model follow it.
+  const canUndo = !!p && p.can_undo !== false && !!p.version;
+  const undo = async () => {
+    if (!id || !canUndo || busy || undoing) return;
+    setUndoing(true);
+    setUndoErr(null);
+    try {
+      await api.undo(id);
+      reset();
+      setDrafts({});
+      setPending(null);
+      setChanged([]);
+      await reload();
+    } catch (e) {
+      setUndoErr(errorText(e));
+    } finally {
+      setUndoing(false);
+    }
+  };
+
   const msgs = p?.messages ?? [];
   const last = msgs[msgs.length - 1];
   const offerPicker = last?.who === 'AI' && answeredAt !== msgs.length && madeSomethingNew(itemsAtSend, customItems);
@@ -181,7 +207,8 @@ export function CrewWorkshop() {
   /** Presets, colours, described items and the describe box for one module. */
   const moduleBody = (d: ModuleDef): ReactNode => {
     const m = d.id;
-    const made = m === 'placement' ? [] : itemsInModule(customItems, m);
+    // Equipment lists its described items in its own rows (with where each is carried).
+    const made = m === 'equipment' ? [] : itemsInModule(customItems, m);
     let controls: ReactNode = null;
     switch (m) {
       case 'gender':
@@ -258,30 +285,46 @@ export function CrewWorkshop() {
         );
         break;
       case 'equipment': {
+        // Each item with where it is carried (catalog items switched on, then described ones), then
+        // the catalog switches, then the describe box (below, shared with the other modules).
         const names = equipment.map(equipmentName);
         const cat = catalog.data?.equipment ?? [];
+        const rows = equipmentRows(spec);
         controls = (
-          <div className="picks">
-            {cat.map((e) => chip(assetLabel(e), names.includes(e), () => edit({ equipment: toggleEquipment(equipment, e) }), e))}
-            {names.filter((e) => !cat.includes(e)).map((e) => chip(`${assetLabel(e)} (not in catalogue)`, true, () => edit({ equipment: toggleEquipment(equipment, e) }), e))}
-          </div>
-        );
-        break;
-      }
-      case 'placement': {
-        const rows = placementRows(spec);
-        controls = rows.length ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {rows.map((r) => (
-              <div key={r.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <span style={{ color: 'var(--text-soft)', overflowWrap: 'anywhere' }}>{r.label}{r.place === 'fixed' && <span className="faint"> · fixed</span>}</span>
-                {r.place !== 'fixed' && (
-                  <div className="picks">{placesFor(r).map((pl) => chip(pl.label, r.place === pl.id, () => edit(placePatch(spec, r, pl.id)), pl.id))}</div>
-                )}
+          <>
+            {rows.length ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {rows.map((r) => (
+                  <div key={r.key} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 10px', background: 'var(--bg)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ flex: 1, minWidth: 0, lineHeight: 1.4, overflowWrap: 'anywhere' }}>
+                        {r.label}{r.place === 'fixed' && <span className="faint"> · fixed</span>}
+                      </span>
+                      {r.kind === 'item' && (askingRemove === r.ref ? (
+                        <>
+                          <button className="btn sm" onClick={() => setAskingRemove(null)}>Keep</button>
+                          <button className="btn sm" style={{ color: 'var(--red-text)' }} onClick={() => { setAskingRemove(null); removeItem(r.ref); }}>Remove</button>
+                        </>
+                      ) : (
+                        <button className="btn sm" aria-label={`Remove ${r.label}`} onClick={() => setAskingRemove(r.ref)}>Remove</button>
+                      ))}
+                    </div>
+                    {r.place !== 'fixed' && (
+                      <div className="picks" role="group" aria-label={`Where ${r.label} is carried`}>
+                        {placesFor(r).map((pl) => chip(pl.label, r.place === pl.id, () => edit(placePatch(spec, r, pl.id)), pl.id))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        ) : <span className="module-label">Add equipment first; then choose where each item goes.</span>;
+            ) : <span className="module-label">Nothing carried yet. Switch an item on below, or describe one.</span>}
+            <span className="module-label">Items</span>
+            <div className="picks">
+              {cat.map((e) => chip(assetLabel(e), names.includes(e), () => edit({ equipment: toggleEquipment(equipment, e) }), e))}
+              {names.filter((e) => !cat.includes(e)).map((e) => chip(`${assetLabel(e)} (not in catalogue)`, true, () => edit({ equipment: toggleEquipment(equipment, e) }), e))}
+            </div>
+          </>
+        );
         break;
       }
       case 'accessories': {
@@ -320,7 +363,7 @@ export function CrewWorkshop() {
         {m === 'outfit'
           // The server cannot scope a described outfit, so this module has no describe box.
           ? <span className="module-label">To describe your own, use Shirt and Pants.</span>
-          : <DescribeBox module={m} placeholder={d.placeholder} value={said[m] ?? ''} busy={busy} blank={blank === m}
+          : <DescribeBox module={m} label={d.describeLabel} placeholder={d.placeholder} value={said[m] ?? ''} busy={busy} blank={blank === m}
               working={describing?.module === m ? describing.since : null}
               onChange={(v) => { setSaid((s) => ({ ...s, [m]: v })); if (blank === m) setBlank(null); }}
               onSend={() => void describe(m)} />}
@@ -357,6 +400,9 @@ export function CrewWorkshop() {
           <button className="btn dashed pill" style={{ flexShrink: 0 }} onClick={() => addPerson('male_default')} disabled={busy}>+ Male</button>
           <button className="btn dashed pill" style={{ flexShrink: 0 }} onClick={() => addPerson('female_default')} disabled={busy}>+ Female</button>
         </div>
+        {/* Outside the scrolling people row, so it is never pushed off the bar. */}
+        <button className="btn" style={{ flexShrink: 0, marginLeft: 12 }} onClick={() => void undo()} disabled={!canUndo || busy || undoing}
+          title={undoHint(p)}>{undoing ? 'Undoing…' : 'Undo last change'}</button>
       </TopBar>
       <div className="workspace">
         <aside className="side left" style={{ width: 300 }}>
@@ -390,6 +436,7 @@ export function CrewWorkshop() {
             <span style={{ marginLeft: 'auto' }}>Playing: {anim ? assetLabel(anim) : 'nothing'}</span>
           </div>
           {project.error && <div style={{ padding: 12 }}><ErrorNote error={project.error} retry={reload} /></div>}
+          {undoErr && <div style={{ padding: 12 }}><ErrorNote error={undoErr} retry={() => void undo()} /></div>}
           {!p && project.loading ? <div className="viewer"><Loading what="crew member" /></div> : (
             <CrewViewer urls={p?.model_url ? [p.model_url] : []} animation={anim} playing
               onDuration={(_d, c) => setClips((old) => (old.join() === c.join() ? old : c))} />
@@ -516,14 +563,14 @@ function Swatches({ label, swatches, value, withDefault, onPick }: {
 }
 
 /** "Or describe it": words typed in a module, sent through the crew chat scoped to that module. */
-function DescribeBox({ module, placeholder, value, busy, blank, working, onChange, onSend }: {
-  module: ModuleId; placeholder: string; value: string; busy: boolean; blank: boolean; working: number | null;
+function DescribeBox({ module, label, placeholder, value, busy, blank, working, onChange, onSend }: {
+  module: ModuleId; label?: string; placeholder: string; value: string; busy: boolean; blank: boolean; working: number | null;
   onChange: (v: string) => void; onSend: () => void;
 }) {
   const fieldId = `describe-${module}`;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <label htmlFor={fieldId} className="module-label">Or describe it</label>
+      <label htmlFor={fieldId} className="module-label">{label ?? 'Or describe it'}</label>
       <div style={{ display: 'flex', gap: 6 }}>
         <input id={fieldId} className="field" style={{ flex: 1, minWidth: 0, height: 36 }} value={value} placeholder={placeholder}
           onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !busy) onSend(); }} />

@@ -350,7 +350,7 @@ describe('picker offer', () => {
 
 import {
   SHIRT_SWATCHES, changedModules, colourName, garmentColorPatch, garmentStylePatch, itemsInModule, moduleMessage, moduleOfItem,
-  moduleSummary, outfitPatch, outfitWouldRemove, placePatch, placesFor, presetPatch, placementRows, suitLabel, suitsFor, toggleAccessory, toggleEquipment,
+  MODULES, moduleSummary, outfitPatch, outfitWouldRemove, placePatch, placesFor, presetPatch, equipmentRows, suitLabel, suitsFor, toggleAccessory, toggleEquipment,
 } from './modules';
 import type { CrewSpec, CustomItem } from '../types';
 
@@ -417,7 +417,7 @@ describe('crew modules', () => {
     const s = base();
     s.equipment = ['life_vest', { name: 'binoculars', color: 'navy' }, 'radio'];
     s.custom_items = [ci('rifle', 'Equipment__Rifle', { module: 'equipment' }), ci('vest', 'Clothes__V', { module: 'shirt' })];
-    const rows = placementRows(s);
+    const rows = equipmentRows(s);
     expect(rows.map((r) => [r.ref, r.place])).toEqual([['life_vest', 'fixed'], ['binoculars', 'chest'], ['radio', 'hip'], ['rifle', 'right_hand']]);
     expect(placePatch(s, { kind: 'equipment', ref: 'radio' }, 'back')).toEqual({ equipment: ['life_vest', { name: 'binoculars', color: 'navy' }, { name: 'radio', place: 'back' }] });
     expect(placePatch(s, { kind: 'equipment', ref: 'binoculars' }, 'head')).toEqual({ equipment: ['life_vest', { name: 'binoculars', color: 'navy', place: 'head' }, 'radio'] });
@@ -432,14 +432,38 @@ describe('crew modules', () => {
     const s = base();
     s.equipment = ['life_vest', 'radio'];
     s.custom_items = [ci('rifle', 'Equipment__Rifle', { module: 'equipment' })];
-    const [, radio, rifle] = placementRows(s);
+    const [, radio, rifle] = equipmentRows(s);
     expect(placesFor(rifle).map((p) => p.id)).toContain('both_hands');
     expect(placesFor(rifle).find((p) => p.id === 'both_hands')?.label).toBe('Both hands');
     expect(placesFor(radio).map((p) => p.id)).not.toContain('both_hands');
     expect(placesFor(radio)).toHaveLength(6);
     const p = placePatch(s, rifle, 'both_hands') as { custom_items: CustomItem[] };
     expect(p.custom_items[0].place).toBe('both_hands');
-    expect(placementRows({ ...s, custom_items: p.custom_items })[2].place).toBe('both_hands');
+    expect(equipmentRows({ ...s, custom_items: p.custom_items })[2].place).toBe('both_hands');
+  });
+
+  it('has one Equipment module that owns where items are carried (no Equipment placement row)', () => {
+    // Lester, 29 Oct: "combine equipment and equipment placement, it is a duplicate".
+    expect(MODULES.map((m) => m.id)).toEqual(['gender', 'skin', 'hair', 'shirt', 'pants', 'outfit', 'shoes', 'equipment', 'accessories']);
+    expect(MODULES.some((m) => /placement/i.test(m.name))).toBe(false);
+    const eq = MODULES.find((m) => m.id === 'equipment')!;
+    expect(eq.describeLabel).toBe("Describe an item and how it's held");
+    expect(eq.placeholder).toBe('An old wooden-stock rifle, carried in both hands across the body');
+    // An older server's "placement" lights Equipment; unknown ids are dropped; no duplicates.
+    expect(changedModules({ changed_modules: ['placement'] })).toEqual(['equipment']);
+    expect(changedModules({ changed_modules: ['equipment', 'placement', 'pockets', 'hair'] })).toEqual(['equipment', 'hair']);
+  });
+
+  it('lists equipment rows in order and summarises each with its carry', () => {
+    const s = base();
+    s.equipment = ['life_vest', 'binoculars', { name: 'radio', place: 'back' }];
+    s.custom_items = [ci('item_1', 'Equipment__Rifle', { module: 'equipment', description: 'Rifle', place: 'both_hands' }),
+      ci('item_2', 'Clothes__V', { module: 'shirt', description: 'vest' }), ci('item_3', 'Equipment__T', { module: 'equipment', description: 'Torch' })];
+    expect(equipmentRows(s).map((r) => [r.kind, r.label, r.place])).toEqual([
+      ['equipment', 'Life vest', 'fixed'], ['equipment', 'Binoculars', 'chest'], ['equipment', 'Radio', 'back'],
+      ['item', 'Rifle', 'both_hands'], ['item', 'Torch', 'right_hand']]);
+    expect(moduleSummary(s, 'equipment')).toBe('Life vest · Binoculars: chest · Radio: back · Rifle: both hands · Torch: right hand');
+    expect(moduleSummary({ ...s, equipment: [], custom_items: [] }, 'equipment')).toBe('None');
   });
 
   it('toggles equipment and accessories without dropping colour or place', () => {
@@ -459,7 +483,7 @@ describe('crew modules', () => {
     expect(moduleSummary(s, 'shirt')).toBe('Covered by the full outfit');
     expect(moduleSummary(s, 'outfit')).toBe('Work overalls');
     expect(moduleSummary(s, 'shoes')).toBe('Work shoes');
-    expect(moduleSummary(s, 'placement')).toBe('Nothing held');
+    expect(moduleSummary(s, 'equipment')).toBe('Life vest');
     expect(moduleSummary(s, 'accessories')).toBe('None');
     s.clothes = { ...s.clothes!, suit: null, shirt: { style: 'singlet', color: hexToLinear('#D6A63A') }, shoes: null };
     expect(moduleSummary(s, 'shirt')).toBe('Singlet · mustard');
@@ -468,7 +492,7 @@ describe('crew modules', () => {
     s.custom_items = [{ id: 'v', code: 'Clothes__V', description: 'khaki vest', module: 'shirt' }];
     expect(moduleSummary(s, 'shirt')).toBe('Described: khaki vest');
     s.equipment = ['binoculars'];
-    expect(moduleSummary(s, 'placement')).toBe('Binoculars: Chest');
+    expect(moduleSummary(s, 'equipment')).toBe('Binoculars: chest');
     s.body = { ...s.body!, hair: 'none', hair_color: [0.5, 0.5, 0.5] };
     expect(moduleSummary(s, 'hair')).toBe('Bald');
     s.body = { ...s.body!, hair: 'afro01', hair_color: hexToLinear(HAIR_SWATCHES[0].hex) };
@@ -887,6 +911,34 @@ describe('always clothed: untagged leg garments are trousers', () => {
     expect(moduleOfItem({ code: "crew.garment('Clothes__Shorts', ['pelvis', 'thighs'], (0, 0, 1))" })).toBe('pants');
     expect(moduleOfItem({ code: "crew.garment('Clothes__Overall', ['torso', 'thighs'], (0, 0, 1))" })).toBe('shirt');
     expect(moduleOfItem({ code: "crew.garment('Clothes__Vest', ['torso'], (1, 1, 1))" })).toBe('shirt');
+  });
+});
+
+import { undoHint, undoTarget } from './undo';
+
+describe('undo last change (ship and crew)', () => {
+  const v = (n: number, summary: string, ok = true) => ({ n, at: '', summary, ok });
+  const versions = [v(1, 'First build'), v(2, 'Edited equipment'), v(3, 'Build failed', false), v(4, 'Edited body')];
+
+  it('says where undo goes and what it takes away', () => {
+    expect(undoHint({ version: 2, versions: versions.slice(0, 2), can_undo: true, undo_to: 1 })).toBe('Back to v1, undoing v2: Edited equipment');
+    // undo_to is the server's word: after an undo and a new change it is not the number below
+    expect(undoHint({ version: 4, versions, can_undo: true, undo_to: 1 })).toBe('Back to v1, undoing v4: Edited body');
+    expect(undoTarget({ version: 4, versions, can_undo: true, undo_to: 1 })).toBe(1);
+  });
+
+  it('without undo_to, goes back to the newest good version below', () => {
+    expect(undoTarget({ version: 4, versions, can_undo: true })).toBe(2);
+    expect(undoHint({ version: 4, versions, can_undo: true })).toBe('Back to v2, undoing v4: Edited body');
+    expect(undoHint({ version: 2, versions: [v(1, 'First build'), v(2, '')], can_undo: true })).toBe('Back to v1');
+  });
+
+  it('says there is nothing to undo when there is not', () => {
+    expect(undoHint(null)).toBe('Nothing to undo');
+    expect(undoHint({ version: 1, versions: [v(1, 'First build')], can_undo: false, undo_to: null })).toBe('Nothing to undo');
+    expect(undoHint({ version: 1, versions: [v(1, 'First build')] })).toBe('Nothing to undo');
+    expect(undoHint({ version: 0, versions: [], can_undo: undefined })).toBe('Nothing to undo');
+    expect(undoTarget({ version: 2, versions, can_undo: false, undo_to: 1 })).toBeNull();
   });
 });
 

@@ -1,6 +1,6 @@
 """Two-handed carry (contract §6 Placement, place both_hands).
 
-Lester, 29 Oct, in Equipment placement: "carry rifle in both hands. left hand on barrel, right hand
+Lester, 29 Oct, in Equipment placement (since merged into Equipment): "carry rifle in both hands. left hand on barrel, right hand
 on trigger". The AI could not, because every place was one bone. These check that the place is
 accepted by the tools, that the hands are not double-booked, and that the AI is told how to do it.
 """
@@ -24,11 +24,11 @@ def _run(make_client, steps):
     return agent, c.get(f"/api/projects/{p['id']}").json()["spec"]
 
 
-def test_both_hands_is_a_place_owned_by_placement():
+def test_both_hands_is_a_place_owned_by_equipment():
     assert "both_hands" in cm.PLACES
     old = {"custom_items": [{"id": "item_1", "module": "equipment", "place": "right_hand", "code": RIFLE}]}
     new = {"custom_items": [{"id": "item_1", "module": "equipment", "place": "both_hands", "code": RIFLE}]}
-    assert cm.changed_modules(old, new) == {"placement"}
+    assert cm.changed_modules(old, new) == {"equipment"}
 
 
 def test_hand_conflicts():

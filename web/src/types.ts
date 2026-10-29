@@ -122,10 +122,13 @@ export interface PartOverride {
   hidden?: boolean;
 }
 
-/** CONTRACT §6 "Modules": the ten parts of a crew member, each owning fixed spec keys. */
-export type ModuleId = 'gender' | 'skin' | 'hair' | 'shirt' | 'pants' | 'outfit' | 'shoes' | 'equipment' | 'placement' | 'accessories';
+/**
+ * CONTRACT §6 "Modules": the nine parts of a crew member, each owning fixed spec keys. Equipment
+ * owns its items and where each is carried (the old "placement" module was merged into it).
+ */
+export type ModuleId = 'gender' | 'skin' | 'hair' | 'shirt' | 'pants' | 'outfit' | 'shoes' | 'equipment' | 'accessories';
 
-/** Where a held or attached equipment item goes (§6 "Placement"). Absent = the item's fixed spot. */
+/** Where a held or attached equipment item goes (§6 "Placement", part of equipment). Absent = the item's fixed spot. */
 export type Place = 'right_hand' | 'left_hand' | 'chest' | 'back' | 'hip' | 'head' | 'both_hands';
 
 /** `clothes.shirt` / `clothes.pants`: a preset garment. */
@@ -208,6 +211,8 @@ export interface Project {
   category?: string | null;
   /** Server extra: whether POST /undo has something to undo. */
   can_undo?: boolean;
+  /** The version POST /undo returns to; null when there is nothing to undo (CONTRACT §10). */
+  undo_to?: number | null;
 }
 
 export type DraftStage = 'copying' | 'researching' | 'changing' | 'ready' | 'failed';

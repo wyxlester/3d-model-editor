@@ -68,6 +68,15 @@ def _obj(props: dict, required: list[str]) -> dict:
 VEC3 = {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
 
 
+# Lester, 29 Oct: "when user describe a equipment, user will also need to describe how the human
+# is holding the equipment". Equipment and where it is carried are one module, so the AI always
+# settles the carry with the item, and a missing carry is never a reason to refuse or to ask.
+CARRY_RULE = ("Describing an equipment item means saying what it is AND how it is held or carried. If the "
+              "user did not say how, pick the sensible carry for that item (a rifle: both_hands; binoculars: "
+              "chest; a radio: hip; a small tool: right_hand), do it, and say in the reply which carry you "
+              "chose. Never refuse or stop to ask because the carry is missing.")
+
+
 def module_helpers(path: Path, alias: str) -> str:
     """Public functions (and UPPERCASE constants) of a Blender helper module, one line each, read
     with ast so the AI's tool docs follow the module without importing bpy. Degrades to a note
@@ -275,9 +284,9 @@ class AgentSession:
             ("set_equipment", "Module equipment: replace the catalog equipment list. Entries are a catalog name "
              "or {\"name\", \"color\", \"place\"} with color one of " + ", ".join(EQUIPMENT_COLOR_NAMES) +
              " or [r,g,b] 0..1. An entry that is already worn keeps its place unless you give one; "
-             "life_vest and helmet have a fixed spot and take no place.",
+             "life_vest and helmet have a fixed spot and take no place. " + CARRY_RULE,
              _obj({"equipment": {"type": "array", "items": equipment_item}}, ["equipment"])),
-            ("set_place", "Module placement: move one equipment item to " + ", ".join(cm.PLACES) + ". `item` "
+            ("set_place", "Module equipment: move one equipment item to " + ", ".join(cm.PLACES) + ". `item` "
              "is a catalog equipment name in the list (e.g. radio) or an equipment custom item id (item_2). "
              "both_hands is a two-handed ready carry for a long item (rifle, boat hook, pole): across the "
              "front of the body, muzzle forward-down, right hand on the grip, left hand on the barrel or "
@@ -338,7 +347,7 @@ class AgentSession:
                 "cover, so they fit any body and move with every animation; name them Clothes__<Name>. Modules "
                 "shirt, pants and shoes make Clothes__ objects only.\n"
                 "- Module equipment (held or carried things): `place` is required, one of " +
-                ", ".join(cm.PLACES) + ". Build a low-poly mesh named Equipment__<Name> modelled at the origin: "
+                ", ".join(cm.PLACES) + ". " + CARRY_RULE + " Build a low-poly mesh named Equipment__<Name> modelled at the origin: "
                 "grip point at the origin, +Z up, +X forward, sizes in metres. Do NOT parent or position it "
                 "(no crew.hold, crew.attach or .parent): the builder attaches it by its place, so moving it "
                 "later is set_place with no code change. Equipment makes Equipment__ objects only.\n"
@@ -680,8 +689,8 @@ class AgentSession:
     def t_set_equipment(self, equipment: list) -> str:
         self._check_crew()
         self._check_list("equipment", equipment, allow_color=True)
-        # An item already worn keeps its place unless one is given: changing what is carried must
-        # not move things (placement is its own module).
+        # An item already worn keeps its place unless one is given: changing what is carried (or
+        # its colour) must not move what is already held.
         places: dict[str, list] = {}
         for e in self.spec.get("equipment") or []:
             if isinstance(e, dict) and e.get("place"):
@@ -746,7 +755,7 @@ class AgentSession:
                             "belongs to; describing that module again replaces it, nothing else).")
         if module == "equipment":
             if place is None:
-                raise ToolError(f"An equipment item needs a place: one of {list(cm.PLACES)}.")
+                raise ToolError(f"An equipment item needs a place: one of {list(cm.PLACES)}. " + CARRY_RULE)
             self._check_place("", place)
             if re.search(r"\bcrew\.(hold|attach)\s*\(|\.parent\s*=", code):
                 raise ToolError("Equipment code must not parent or position the item (no crew.hold, crew.attach "
@@ -1171,8 +1180,9 @@ CREW_PROMPT = """You edit one human crew member for a maritime simulator. Blende
   - Carried in both hands ("carry the rifle in both hands", "left hand on the barrel, right hand on the trigger", a ready carry): place both_hands (set_place for an item that exists). The builder holds it across the body, muzzle forward-down, right hand on the grip and left on the barrel, in every animation. Declare the grip and support with crew.two_hand_grips when you write the item.
   - Gloves, sunglasses, ear defenders, caps: set_accessories, or add_custom_item with module accessories.
 - Never answer that something is not available when you can make it. If part of a request truly cannot be built (cloth that flows in the wind, real physics), make the closest thing and say plainly what you made instead.
-- The person is ten modules: gender, skin, hair, shirt, pants, outfit, shoes, equipment, placement, accessories (get_project lists what each owns). Work out which module or modules the request is about and change only those. Leave every other module exactly as it is: never remove, recolour, replace or reset anything the user did not mention. Matching a photo or a description is still one change per module it mentions, not a rebuild of the whole person.
+- The person is nine modules: gender, skin, hair, shirt, pants, outfit, shoes, equipment, accessories (get_project lists what each owns). Where an item is held or carried (its place) is part of equipment. Work out which module or modules the request is about and change only those. Leave every other module exactly as it is: never remove, recolour, replace or reset anything the user did not mention. Matching a photo or a description is still one change per module it mentions, not a rebuild of the whole person.
 - Describing a module (hair, shirt, pants, shoes, equipment, accessories) is add_custom_item with that module; it replaces that module's earlier described item and nothing else. Equipment items take a place; moving one is set_place.
+- Equipment: """ + CARRY_RULE + """
 - An outfit (suit) fills shirt and pants. Setting a shirt or pants clears the suit; choosing a suit clears shirt, pants and their described items. The tools do this for you.
 """ + COMMON_RULES
 
@@ -1271,11 +1281,15 @@ def plan_build_prompt(plan: dict) -> str:
 
 
 def module_prompt(module: str) -> str:
-    """Prefix for a scoped chat turn (contract §6: POST /chat with "module")."""
-    return (f"You are editing only the {module} module ({cm.MODULE_DOCS[module]}). Change nothing else: any "
+    """Prefix for a scoped chat turn (contract §6: POST /chat with "module"; "placement" is equipment)."""
+    module = cm.module_id(module) or module
+    text = (f"You are editing only the {module} module ({cm.MODULE_DOCS[module]}). Change nothing else: any "
             "tool call that touches another module is refused and changes nothing. If the request needs "
             "another module, make the {module} part and say in the reply what the user should change in "
-            "the other module.\n\n").replace("{module}", module)
+            "the other module.").replace("{module}", module)
+    if module == "equipment":
+        text += " " + CARRY_RULE
+    return text + "\n\n"
 
 
 def _lower_first(s: str) -> str:

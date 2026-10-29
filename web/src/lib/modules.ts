@@ -4,9 +4,14 @@ import type { Accessory, CrewSpec, CustomItem, Equipment, EquipmentEntry, Garmen
 import { hexToLinear, selectedSwatch, GEAR_SWATCHES, HAIR_SWATCHES, type Swatch } from './describe';
 import { assetLabel } from './spec';
 
-export interface ModuleDef { id: ModuleId; name: string; placeholder: string; note?: string }
+export interface ModuleDef { id: ModuleId; name: string; placeholder: string; note?: string; describeLabel?: string }
 
-/** The ten rows, in the approved mock's order and wording. */
+/**
+ * The nine rows, in the approved mock's order and wording. Lester, 29 Oct: "combine equipment and
+ * equipment placement, it is a duplicate. when user describe a equipment, user will also need to
+ * describe how the human is holding the equipment" — so Equipment lists each item with where it
+ * is carried, and its describe box asks for both.
+ */
 export const MODULES: ModuleDef[] = [
   { id: 'gender', name: 'Gender', placeholder: 'A stocky man in his fifties' },
   { id: 'skin', name: 'Skin colour', placeholder: 'Sunburnt, weathered' },
@@ -15,8 +20,7 @@ export const MODULES: ModuleDef[] = [
   { id: 'pants', name: 'Pants', placeholder: 'Loose faded trousers, rolled at the ankle' },
   { id: 'outfit', name: 'Full outfit', placeholder: 'Navy coverall with reflective strips', note: 'A ready-made textured outfit fills Shirt and Pants together.' },
   { id: 'shoes', name: 'Shoes', placeholder: 'Rubber deck boots' },
-  { id: 'equipment', name: 'Equipment', placeholder: 'An old rifle with a wooden stock' },
-  { id: 'placement', name: 'Equipment placement', placeholder: 'Rifle held up in the right hand' },
+  { id: 'equipment', name: 'Equipment', placeholder: 'An old wooden-stock rifle, carried in both hands across the body', describeLabel: "Describe an item and how it's held" },
   { id: 'accessories', name: 'Other accessories', placeholder: 'A canvas shoulder bag, worn across the body' },
 ];
 
@@ -133,10 +137,11 @@ export function moduleMessage(m: ModuleId, text: string): string | null {
   return t ? `${moduleName(m)}: ${t}` : null;
 }
 
-/** `changed_modules` from a chat job's result, keeping only real module ids. */
+/** `changed_modules` from a chat job's result, keeping only real module ids ("placement", the old id, lights Equipment). */
 export function changedModules(result: unknown): ModuleId[] {
   const v = (result && typeof result === 'object') ? (result as { changed_modules?: unknown }).changed_modules : undefined;
-  return Array.isArray(v) ? v.filter(isModuleId) : [];
+  if (!Array.isArray(v)) return [];
+  return [...new Set(v.map((x) => (x === 'placement' ? 'equipment' : x)).filter(isModuleId))];
 }
 
 // ---- Patches (sent through POST /spec; no AI) -----------------------------------------------
@@ -202,7 +207,7 @@ export function toggleAccessory(list: Accessory[] | undefined, name: string): Ac
   return l.some((a) => accessoryName(a) === name) ? l.filter((a) => accessoryName(a) !== name) : [...l, name];
 }
 
-// ---- Placement ------------------------------------------------------------------------------
+// ---- Equipment: each item and where it is carried ---------------------------------------------
 
 export const PLACES: { id: Place; label: string }[] = [
   { id: 'right_hand', label: 'Right hand' }, { id: 'left_hand', label: 'Left hand' }, { id: 'chest', label: 'Chest' },
@@ -225,14 +230,16 @@ const DEFAULT_PLACE: Record<string, Place> = { binoculars: 'chest', radio: 'hip'
  * it is offered for described items (a rifle, a boat hook) and not for the short catalog ones
  * (binoculars, radio), which the builder refuses to carry in both hands.
  */
-export function placesFor(row: Pick<PlacementRow, 'kind'>): { id: Place; label: string }[] {
+export function placesFor(row: Pick<EquipmentRow, 'kind'>): { id: Place; label: string }[] {
   return row.kind === 'item' ? PLACES : PLACES.filter((p) => p.id !== 'both_hands');
 }
 
-export interface PlacementRow { key: string; label: string; kind: 'equipment' | 'item'; ref: string; place: Place | 'fixed' }
+/** One item in the Equipment module: a catalog entry switched on, or a described item. */
+export interface EquipmentRow { key: string; label: string; kind: 'equipment' | 'item'; ref: string; place: Place | 'fixed' }
 
-export function placementRows(spec: Spec): PlacementRow[] {
-  const rows: PlacementRow[] = (spec.equipment ?? []).map((e) => {
+/** Catalog entries switched on, then described items, each with where it is carried now. */
+export function equipmentRows(spec: Spec): EquipmentRow[] {
+  const rows: EquipmentRow[] = (spec.equipment ?? []).map((e) => {
     const name = equipmentName(e);
     const place = typeof e === 'string' ? undefined : e.place;
     return {
@@ -247,7 +254,7 @@ export function placementRows(spec: Spec): PlacementRow[] {
 }
 
 /** Move one equipment entry (by name) or one described equipment item (by id). The whole array goes. */
-export function placePatch(spec: Spec, row: Pick<PlacementRow, 'kind' | 'ref'>, place: Place): Patch {
+export function placePatch(spec: Spec, row: Pick<EquipmentRow, 'kind' | 'ref'>, place: Place): Patch {
   if (row.kind === 'equipment') {
     return {
       equipment: (spec.equipment ?? []).map((e): Equipment => {
@@ -293,12 +300,9 @@ export function moduleSummary(spec: Spec, m: ModuleId): string {
       if (items.length) return `Described: ${described(items)}`;
       return clothes?.shoes ? join(shoeLabel(clothes.shoes), colourName(clothes.shoes_color, SHOE_SWATCHES)) : 'Barefoot';
     case 'equipment': {
-      const names = [...(spec.equipment ?? []).map((e) => assetLabel(equipmentName(e))), ...items.map((i) => i.description || i.id)];
-      return names.length ? names.join(', ') : 'None';
-    }
-    case 'placement': {
-      const rows = placementRows(spec).filter((r) => r.place !== 'fixed');
-      return rows.length ? rows.map((r) => `${r.label}: ${placeLabel(r.place as Place)}`).join(', ') : 'Nothing held';
+      // "Rifle: both hands · Binoculars: chest"; worn items with a fixed spot are just named.
+      const rows = equipmentRows(spec);
+      return rows.length ? rows.map((r) => (r.place === 'fixed' ? r.label : `${r.label}: ${placeLabel(r.place).toLowerCase()}`)).join(' · ') : 'None';
     }
     case 'accessories': {
       const hat = clothes?.hat ? (HATS.find((h) => h.id === clothes.hat)?.label ?? assetLabel(clothes.hat)) : null;

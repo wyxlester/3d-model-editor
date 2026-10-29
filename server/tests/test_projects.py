@@ -33,6 +33,28 @@ def test_spec_patch_makes_new_version_and_undo_goes_back(make_client):
     assert c.post(f"/api/projects/{p['id']}/undo").json()["project"]["version"] == 1
 
 
+def test_undo_on_a_crew_project_returns_to_the_previous_spec(make_client):
+    """Lester, 29 Oct: "create a undo button for both crew and ship for user to return back to
+    previous state". Undo is not ship-only: a crew change goes back to the earlier spec and model."""
+    c = make_client()
+    p = create_ready(c, "crew", "male_default")
+    v1 = c.get(f"/api/projects/{p['id']}").json()
+    assert v1["can_undo"] is False
+    job = wait_job(c, c.post(f"/api/projects/{p['id']}/spec", json={"patch": {
+        "equipment": ["life_vest", {"name": "binoculars", "place": "back"}], "body": {"skin": "dark"}}}).json()["job_id"])
+    assert job["status"] == "done", job
+    v2 = c.get(f"/api/projects/{p['id']}").json()
+    assert v2["version"] == 2 and v2["can_undo"] is True and v2["spec"] != v1["spec"]
+    back = c.post(f"/api/projects/{p['id']}/undo").json()["project"]
+    assert back["version"] == 1 and back["spec"] == v1["spec"] and back["can_undo"] is False
+    assert back["model_url"].endswith("/versions/1/model.glb")
+    assert c.get(f"/api/projects/{p['id']}").json()["spec"] == v1["spec"]
+    # A new change after an undo: undo goes back to v1 again (not to v2, the version number below).
+    wait_job(c, c.post(f"/api/projects/{p['id']}/spec", json={"patch": {"body": {"skin": "light"}}}).json()["job_id"])
+    v3 = c.get(f"/api/projects/{p['id']}").json()
+    assert v3["version"] == 3 and v3["undo_to"] == 1
+
+
 def test_failed_build_surfaces_report_errors_and_keeps_previous_version(make_client):
     c = make_client()
     p = create_ready(c)

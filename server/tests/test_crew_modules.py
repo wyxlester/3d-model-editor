@@ -6,7 +6,7 @@ import copy
 import pytest
 
 from app.crew_modules import (MODULES, ModuleRuleError, apply_module_rules, changed_modules, item_module,
-                              outside)
+                              module_id, outside)
 from app.crew_modules import FILL_IN
 
 BASE = {
@@ -66,8 +66,17 @@ def test_each_contract_key_belongs_to_exactly_its_module(section, key, value, mo
 
 
 def test_every_module_has_at_least_one_owned_change():
-    seen = {m for *_, m in CONTRACT_KEYS} | {"equipment", "placement"}
+    seen = {m for *_, m in CONTRACT_KEYS} | {"equipment"}
     assert seen == set(MODULES)
+
+
+def test_nine_modules_and_placement_is_an_alias_of_equipment():
+    """Lester, 29 Oct: "combine equipment and equipment placement, it is a duplicate"."""
+    assert MODULES == ("gender", "skin", "hair", "shirt", "pants", "outfit", "shoes", "equipment",
+                       "accessories")
+    assert module_id("placement") == "equipment"
+    assert module_id("equipment") == "equipment" and module_id("hair") == "hair"
+    assert module_id("pockets") is None and module_id(None) is None
 
 
 def test_missing_key_and_null_differ():
@@ -82,24 +91,26 @@ def test_unchanged_spec_changes_nothing():
     assert outside(BASE, copy.deepcopy(BASE), "shirt") == []
 
 
-# ---- equipment and placement ---------------------------------------------------------------
+# ---- equipment (its items and where each is carried) ---------------------------------------
 
-def test_place_only_change_is_placement_not_equipment():
+def test_place_only_change_is_equipment():
     new = spec(equipment=["life_vest", {"name": "radio", "color": "navy", "place": "chest"}])
-    assert changed_modules(BASE, new) == {"placement"}
-    assert outside(BASE, new, "placement") == []
-    assert outside(BASE, new, "equipment") == ["equipment[radio].place"]
+    assert changed_modules(BASE, new) == {"equipment"}
+    assert outside(BASE, new, "equipment") == []
+    assert outside(BASE, new, "placement") == []  # the old id still means equipment
+    assert outside(BASE, new, "accessories") == ["equipment[radio].place"]
 
 
-def test_colour_change_is_equipment_not_placement():
+def test_colour_change_is_equipment():
     new = spec(equipment=["life_vest", {"name": "radio", "color": "red", "place": "hip"}])
     assert changed_modules(BASE, new) == {"equipment"}
-    assert outside(BASE, new, "placement") == ["equipment[radio]"]
+    assert outside(BASE, new, "equipment") == []
 
 
-def test_colour_and_place_together_are_both():
+def test_colour_and_place_together_are_equipment_only():
     new = spec(equipment=["life_vest", {"name": "radio", "color": "red", "place": "chest"}])
-    assert changed_modules(BASE, new) == {"equipment", "placement"}
+    assert changed_modules(BASE, new) == {"equipment"}
+    assert outside(BASE, new, "equipment") == []
 
 
 def test_adding_or_removing_equipment_is_equipment_even_with_a_place():
@@ -107,7 +118,7 @@ def test_adding_or_removing_equipment_is_equipment_even_with_a_place():
     assert changed_modules(BASE, added) == {"equipment"}
     removed = spec(equipment=["life_vest"])
     assert changed_modules(BASE, removed) == {"equipment"}
-    assert outside(BASE, removed, "placement") == ["equipment[radio]"]
+    assert outside(BASE, removed, "shoes") == ["equipment[radio]"]
 
 
 def test_equipment_order_and_string_form_are_not_changes():
@@ -118,8 +129,8 @@ def test_equipment_order_and_string_form_are_not_changes():
 def test_duplicate_equipment_names_match_by_occurrence():
     old = spec(equipment=[{"name": "radio", "place": "hip"}, {"name": "radio", "place": "chest"}])
     new = spec(equipment=[{"name": "radio", "place": "hip"}, {"name": "radio", "place": "back"}])
-    assert changed_modules(old, new) == {"placement"}
-    assert outside(old, new, "equipment") == ["equipment[radio#2].place"]
+    assert changed_modules(old, new) == {"equipment"}
+    assert outside(old, new, "hair") == ["equipment[radio#2].place"]
 
 
 # ---- custom items ---------------------------------------------------------------------------
@@ -156,10 +167,11 @@ def test_retagging_an_item_touches_both_modules():
     assert changed_modules(old, new) == {"shirt", "pants"}
 
 
-def test_custom_equipment_place_is_placement_and_code_is_equipment():
+def test_custom_equipment_place_and_code_are_both_equipment():
     items = copy.deepcopy(BASE["custom_items"])
     items[0]["place"] = "back"
-    assert changed_modules(BASE, spec(custom_items=items)) == {"placement"}
+    assert changed_modules(BASE, spec(custom_items=items)) == {"equipment"}
+    assert outside(BASE, spec(custom_items=items), "equipment") == []
     items = copy.deepcopy(BASE["custom_items"])
     items[0]["code"] += "\n# longer"
     assert changed_modules(BASE, spec(custom_items=items)) == {"equipment"}

@@ -346,8 +346,10 @@ SCENARIOS = [
                                 "module": "equipment"},
              expect=lambda b: {"equipment"},
              allowed_parts=r"^Equipment__", check=check_c),
-    Scenario("d", "Placement: rifle to back (no AI)", "spec",
-             body=body_d, expect=lambda b: {"placement"},
+    # Where an item is carried is part of the equipment module (Lester, 29 Oct: "combine equipment
+    # and equipment placement, it is a duplicate"), so moving the rifle changes equipment only.
+    Scenario("d", "Equipment: move the rifle to the back (no AI)", "spec",
+             body=body_d, expect=lambda b: {"equipment"},
              allowed_parts="<rifle parts>", check=check_d, depends_on="c"),
     Scenario("e", "Main chat: red baseball cap", "chat",
              body=lambda s, b: {"message": "give him a red baseball cap", "mode": "build"},
