@@ -408,7 +408,7 @@ const catalog: Catalog = {
   clothes: ['male_worksuit01', 'male_casualsuit01', 'male_casualsuit02', 'male_elegantsuit01', 'female_casualsuit01', 'female_elegantsuit01', 'female_sportsuit01',
     'shoes01', 'shoes02', 'shoes03', 'fedora01', 'fedora_cocked'],
   equipment: ['life_vest', 'helmet', 'binoculars', 'radio'],
-  animations: ['idle', 'walk', 'run', 'brace', 'hands_up', 'squat', 'binocular_look'],
+  animations: ['idle', 'walk', 'run', 'brace', 'hands_up', 'squat', 'binocular_look', 'raise_to_aim'],
 };
 
 function sceneWithStations(s: Scene): Scene {

@@ -133,7 +133,14 @@ ANIMATIONS = {
                  "keys": [(0.0, {}), (0.6, _HANDS_UP), (1.8, _HANDS_UP_HOLD), (2.4, {})]},
     "squat": {"interp": "smooth", "loop": False, "duration": 2.4,
               "keys": [(0.0, {}), (0.8, _SQUAT), (1.6, _SQUAT_HOLD), (2.4, {})]},
+    # ---- raise_to_aim: an item carried in both hands goes from the ready carry to the aim (stock in
+    # the shoulder) in 1 s, eased in and out, then is held; 2.5 s, feet planted, no loop. The body just
+    # stands: the item, arms and head are moved by the two-hand hold (two_hands.HandHold), which blends
+    # the carry into the aim over two_hands.RAISE_S. Contract section 6, "Stance".
+    "raise_to_aim": {"interp": "smooth", "loop": False, "duration": 2.5, "keys": [(0.0, {}), (2.5, {})]},
 }
+# Clips whose feet never leave the deck (build_crew.check_feet holds them to it).
+PLANTED = ("idle", "brace", "squat", "hands_up", "raise_to_aim")
 
 LEG_BONES = ("thigh_l", "calf_l", "foot_l", "thigh_r", "calf_r", "foot_r")
 

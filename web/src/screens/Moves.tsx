@@ -7,6 +7,7 @@ import { ChatPanel, ErrorNote, JobLines, Loading, TopBar, useCarried } from '../
 import { OtherWork, useProjectWork } from '../components/JobCenter';
 import { remember, useCatalog, useJobs, useProject, useProjects } from '../hooks';
 import { paths } from '../lib/routing';
+import { moveNeeds } from '../lib/modules';
 import { assetLabel, mergePatch } from '../lib/spec';
 import type { CrewSpec } from '../types';
 import { CrewViewer } from '../viewer/Viewer';
@@ -88,12 +89,15 @@ export function Moves() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <span style={{ padding: '0 6px', fontSize: 12, color: 'var(--text-3)' }}>In the catalogue, not on this person yet</span>
               {notYet.length === 0 && <span className="faint" style={{ padding: '0 6px' }}>Nothing else in the catalogue.</span>}
-              {notYet.map((a) => (
-                <div key={a} style={{ ...itemStyle(false), cursor: 'default' }}>
-                  <span>{assetLabel(a)}</span>
-                  <button className="btn sm" onClick={() => edit({ animations: [...specAnims, a] })}>Add</button>
-                </div>
-              ))}
+              {notYet.map((a) => {
+                const needs = moveNeeds(spec, a);
+                return (
+                  <div key={a} style={{ ...itemStyle(false), cursor: 'default' }}>
+                    <span>{assetLabel(a)}{needs && <span className="faint" style={{ display: 'block', fontSize: 11 }}>{needs}</span>}</span>
+                    <button className="btn sm" disabled={!!needs} onClick={() => edit({ animations: [...specAnims, a] })}>Add</button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </aside>

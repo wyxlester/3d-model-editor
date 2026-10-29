@@ -71,6 +71,12 @@ VEC3 = {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems":
 # Lester, 29 Oct: "when user describe a equipment, user will also need to describe how the human
 # is holding the equipment". Equipment and where it is carried are one module, so the AI always
 # settles the carry with the item, and a missing carry is never a reason to refuse or to ask.
+# Lester, 29 Oct, in the animation editor: "raise the rifle up to shooting position" -- and the AI said
+# it could not. An aimed stance and the raise_to_aim move now exist (contract §6 "Stance").
+AIM_RULE = ("'Raise the rifle to shooting position', 'aim the rifle', 'shoulder the rifle', 'point the gun' "
+            "mean set_stance aim on the item carried in both hands (put it in both_hands first with set_place "
+            "if it is carried another way), which also adds the raise_to_aim move. 'Lower it', 'back to the "
+            "ready', 'carry it low' mean set_stance ready. Never answer that aiming is not possible.")
 CARRY_RULE = ("Describing an equipment item means saying what it is AND how it is held or carried. If the "
               "user did not say how, pick the sensible carry for that item (a rifle: both_hands; binoculars: "
               "chest; a radio: hip; a small tool: right_hand), do it, and say in the reply which carry you "
@@ -288,11 +294,19 @@ class AgentSession:
              _obj({"equipment": {"type": "array", "items": equipment_item}}, ["equipment"])),
             ("set_place", "Module equipment: move one equipment item to " + ", ".join(cm.PLACES) + ". `item` "
              "is a catalog equipment name in the list (e.g. radio) or an equipment custom item id (item_2). "
-             "both_hands is a two-handed ready carry for a long item (rifle, boat hook, pole): across the "
-             "front of the body, muzzle forward-down, right hand on the grip, left hand on the barrel or "
-             "handguard, held in every animation. It needs both hands: move anything held in a hand "
-             "elsewhere first. No code change and nothing else moves.",
+             "both_hands is a two-handed carry for a long item (rifle, boat hook, pole): right hand on the "
+             "grip, left hand on the barrel or handguard, held in every animation; how it is held is its "
+             "stance (set_stance), the low ready carry unless aimed. It needs both hands: move anything held "
+             "in a hand elsewhere first. No code change and nothing else moves.",
              _obj({"item": {"type": "string"}, "place": place}, ["item", "place"])),
+            ("set_stance", "Module equipment: how the item carried in both hands is held. 'ready' (the default): "
+             "the low ready carry, across the body, muzzle forward-down. 'aim' (shooting position): stock in "
+             "the right shoulder, muzzle level pointing forward, cheek on the stock behind the sights, left "
+             "hand on the handguard; held in idle, walk, brace and squat, and lifted overhead in both hands "
+             "in hands_up. Choosing 'aim' also adds the raise_to_aim move (ready to aim in about a second, "
+             "then hold). `item` is the both_hands custom item id. " + AIM_RULE,
+             _obj({"item": {"type": "string"}, "stance": {"type": "string", "enum": list(cm.STANCES)}},
+                  ["item", "stance"])),
             ("set_accessories", "Module accessories: replace the accessories list. Entries are a name (" +
              ", ".join(cm.ACCESSORIES) + " or the catalog's accessories options) or {\"name\", \"color\": "
              "[r,g,b] 0..1}. Hats are set_clothes hat.",
@@ -302,7 +316,8 @@ class AgentSession:
             ("add_custom_item", self._custom_item_doc(),
              _obj({"description": {"type": "string"}, "code": {"type": "string"},
                    "module": {"type": "string", "enum": list(cm.CUSTOM_ITEM_MODULES)},
-                   "place": place, "replace": {"type": "boolean"}},
+                   "place": place, "stance": {"type": "string", "enum": list(cm.STANCES)},
+                   "replace": {"type": "boolean"}},
                   ["description", "code", "module"])),
             ("remove_custom_item", "Remove a custom item by id.", _obj({"id": {"type": "string"}}, ["id"])),
         ] + common[1:]
@@ -724,6 +739,8 @@ class AgentSession:
                 if cm.item_module(it) != "equipment":
                     raise ToolError(f"{item} is a {cm.item_module(it)} item; only equipment has a place.")
                 it["place"] = place
+                if place != "both_hands":
+                    it.pop("stance", None)        # only an item in both hands has a stance
                 self._check_hands(spec)
                 self.spec = spec
                 return f"{item} ({it.get('description')}) moved to {place}. Call rebuild."
@@ -732,6 +749,28 @@ class AgentSession:
         ids = [it.get("id") for it in spec.get("custom_items") or []
                if isinstance(it, dict) and cm.item_module(it) == "equipment"]
         raise ToolError(f"No equipment item {item!r}. Equipment: {names}; equipment custom items: {ids}.")
+
+    def t_set_stance(self, item: str, stance: str) -> str:
+        """Contract §6 "Stance": ready or aim, on the item carried in both hands. Aim adds raise_to_aim."""
+        self._check_crew()
+        if stance not in cm.STANCES:
+            raise ToolError(f"stance must be one of {list(cm.STANCES)}, got {stance!r}")
+        spec = copy.deepcopy(self.spec)
+        it = next((x for x in spec.get("custom_items") or [] if isinstance(x, dict) and x.get("id") == item), None)
+        both = [x.get("id") for x in spec.get("custom_items") or [] if isinstance(x, dict) and x.get("place") == "both_hands"]
+        if it is None or it.get("place") != "both_hands":
+            raise ToolError(f"{item!r} is not carried in both hands; only an item in both hands has a stance. "
+                            + (f"The item in both hands is {both[0]}." if both else
+                               "Nothing is in both hands: set_place the long item to both_hands first."))
+        it["stance"] = stance
+        added = ""
+        if stance == "aim":
+            anims = list(spec.get("animations") or cm.DEFAULT_ANIMATIONS)
+            if cm.RAISE_MOVE not in anims:
+                spec["animations"] = anims + [cm.RAISE_MOVE]
+                added = " The raise_to_aim move (ready to aim in about a second, then hold) was added."
+        self.spec = spec
+        return f"{item} ({it.get('description')}) stance {stance}.{added} Call rebuild."
 
     def t_set_accessories(self, accessories: list) -> str:
         self._check_crew()
@@ -746,7 +785,7 @@ class AgentSession:
         return "Animations updated. Call rebuild."
 
     def t_add_custom_item(self, description: str, code: str, module: str | None = None,
-                          place: str | None = None, replace: bool | None = None) -> str:
+                          place: str | None = None, replace: bool | None = None, stance: str | None = None) -> str:
         self._check_crew()
         if not isinstance(description, str) or not isinstance(code, str) or not description.strip() or not code.strip():
             raise ToolError("description and code are both required")
@@ -763,6 +802,8 @@ class AgentSession:
                                 "builder attaches it by its place.")
         elif place is not None:
             raise ToolError("Only equipment items take a place.")
+        if stance is not None and (place != "both_hands" or stance not in cm.STANCES):
+            raise ToolError(f"stance ({list(cm.STANCES)}) is only for an item placed both_hands.")
         if replace is not None and not isinstance(replace, bool):
             raise ToolError("replace is true or false")
         check_code(code)
@@ -787,9 +828,15 @@ class AgentSession:
         item = {"id": f"item_{i}", "module": module, "description": description, "code": code}
         if place is not None:
             item["place"] = place
+        if stance is not None:
+            item["stance"] = stance
         items.append(item)
         new = deep_merge(self.spec, {"custom_items": items})
         self._check_hands(new)
+        if stance == "aim":
+            anims = list(new.get("animations") or cm.DEFAULT_ANIMATIONS)
+            if cm.RAISE_MOVE not in anims:
+                new["animations"] = anims + [cm.RAISE_MOVE]
         self.spec = new
         return (f"Custom item item_{i} added to {module}" +
                 (f", replacing {', '.join(map(str, removed))}" if removed else "") + ". Call rebuild to run it.")
@@ -1178,6 +1225,7 @@ CREW_PROMPT = """You edit one human crew member for a maritime simulator. Blende
   - Shirts and trousers: a preset style and colour with set_clothes shirt / pants when one fits; otherwise (a singlet, cargo shorts with pockets) add_custom_item with module shirt or pants and crew.garment over the body regions it covers. Either way the suit is set to null for you, so the outfit no longer shows through.
   - Things held or carried (a torch, a clipboard, a rope, a tool belt): add_custom_item with module equipment and a place, a low-poly mesh modelled at the origin and not parented; the builder puts it at its place.
   - Carried in both hands ("carry the rifle in both hands", "left hand on the barrel, right hand on the trigger", a ready carry): place both_hands (set_place for an item that exists). The builder holds it across the body, muzzle forward-down, right hand on the grip and left on the barrel, in every animation. Declare the grip and support with crew.two_hand_grips when you write the item.
+  - Aiming ("raise the rifle up to shooting position", "aim the rifle", "shoulder it"): set_stance aim on the item in both hands. The builder puts the stock in the right shoulder, the muzzle level and forward, the cheek on the stock, the left hand on the handguard, in idle, walk, brace and squat, and adds the raise_to_aim move (ready carry up to the aim in about a second, then hold). "Lower it" / "back to the ready" is set_stance ready. Never say aiming is not possible.
   - Gloves, sunglasses, ear defenders, caps: set_accessories, or add_custom_item with module accessories.
 - Never answer that something is not available when you can make it. If part of a request truly cannot be built (cloth that flows in the wind, real physics), make the closest thing and say plainly what you made instead.
 - The person is nine modules: gender, skin, hair, shirt, pants, outfit, shoes, equipment, accessories (get_project lists what each owns). Where an item is held or carried (its place) is part of equipment. Work out which module or modules the request is about and change only those. Leave every other module exactly as it is: never remove, recolour, replace or reset anything the user did not mention. Matching a photo or a description is still one change per module it mentions, not a rebuild of the whole person.
@@ -1284,7 +1332,7 @@ def module_prompt(module: str) -> str:
             "another module, make the {module} part and say in the reply what the user should change in "
             "the other module.").replace("{module}", module)
     if module == "equipment":
-        text += " " + CARRY_RULE
+        text += " " + CARRY_RULE + " " + AIM_RULE
     return text + "\n\n"
 
 

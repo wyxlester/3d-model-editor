@@ -47,6 +47,13 @@ DEFAULT_PLACES = {"binoculars": "chest", "radio": "hip"}
 CUSTOM_DEFAULT_PLACE = "right_hand"
 # Worn catalog equipment with one fixed spot: no `place` (contract §6 "Placement").
 FIXED_PLACE_EQUIPMENT = ("life_vest", "helmet")
+# How an item carried in both hands is held (contract §6 "Stance"): the low ready carry, or aimed
+# (stock in the right shoulder, muzzle level and forward). Lester, 29 Oct: "raise the rifle up to
+# shooting position". The stance is a field of the equipment item, so the equipment module owns it.
+STANCES = ("ready", "aim")
+RAISE_MOVE = "raise_to_aim"
+# What a crew member animates when the spec has no `animations` key (blender/crew/spec.py).
+DEFAULT_ANIMATIONS = ("idle", "walk", "brace", "hands_up", "squat")
 SHIRT_STYLES = ("tshirt", "singlet", "long_sleeve", "polo")
 PANTS_STYLES = ("shorts", "trousers", "cargo")
 ACCESSORIES = ("cap", "sunglasses", "ear_defenders", "gloves")
@@ -74,7 +81,8 @@ MODULE_DOCS = {
     "outfit": "clothes.suit, clothes.suit_color (set_clothes)",
     "shoes": "clothes.shoes, clothes.shoes_color (set_clothes); described: add_custom_item module 'shoes'",
     "equipment": "the equipment list: names, colours and where each is held or carried (set_equipment, "
-                 "set_place); described: add_custom_item module 'equipment' with its place",
+                 "set_place), and how an item carried in both hands is held, ready or aimed (set_stance); "
+                 "described: add_custom_item module 'equipment' with its place",
     "accessories": "accessories list (set_accessories), clothes.hat, clothes.hat_color (set_clothes); "
                    "described: add_custom_item module 'accessories'",
 }
@@ -220,15 +228,29 @@ def _item_changes(a: list, b: list) -> list[Change]:
             out.append(Change(path, ma, "removed"))
             out.append(Change(path, mb, "added", ib))
             continue
-        strip = lambda it: {x: v for x, v in it.items() if x not in ("place", "module")} \
+        strip = lambda it: {x: v for x, v in it.items() if x not in ("place", "module", "stance")} \
             if isinstance(it, dict) else it  # noqa: E731
         if _canon(strip(ia)) != _canon(strip(ib)):
             out.append(Change(path, mb, "set", ib))
-        pa = ia.get("place") if isinstance(ia, dict) else None
-        pb = ib.get("place") if isinstance(ib, dict) else None
-        if pa != pb:
-            out.append(Change(f"{path}.place", mb, "set", pb))
+        for field in ("place", "stance"):
+            pa = ia.get(field) if isinstance(ia, dict) else None
+            pb = ib.get(field) if isinstance(ib, dict) else None
+            if pa != pb:
+                out.append(Change(f"{path}.{field}", mb, "set", pb))
     return out
+
+
+def aimed(spec: dict) -> bool:
+    """True when an item carried in both hands is aimed."""
+    return any(isinstance(it, dict) and it.get("place") == "both_hands" and it.get("stance") == "aim"
+               for it in (spec or {}).get("custom_items") or [])
+
+
+def adds_only_raise(old: dict, new: dict) -> bool:
+    """The animation list went from what it was to that plus raise_to_aim, nothing else."""
+    a = list((old or {}).get("animations") or DEFAULT_ANIMATIONS)
+    b = list((new or {}).get("animations") or [])
+    return RAISE_MOVE not in a and b == a + [RAISE_MOVE]
 
 
 def module_id(name: Any) -> str | None:
@@ -257,8 +279,9 @@ def outside_changes(old: dict, new: dict, allowed_module: str) -> list[Change]:
     """The changes outside `allowed_module` (see `outside`).
 
     The only cross-module changes allowed are the ones the outfit rule itself makes: a shirt or
-    pants change may clear the suit (and fill the other half with its plain default), and an outfit choice may clear shirt and pants and remove
-    their described items. They count only when the module really changed in that direction."""
+    pants change may clear the suit (and fill the other half with its plain default), an outfit choice may clear shirt and pants and remove
+    their described items, and an equipment change that aims an item may add raise_to_aim to the
+    animations. They count only when the module really changed in that direction."""
     allowed_module = module_id(allowed_module) or allowed_module
     cs = changes(old, new)
     own = [c for c in cs if c.module == allowed_module]
@@ -272,6 +295,9 @@ def outside_changes(old: dict, new: dict, allowed_module: str) -> list[Change]:
             return True
         if allowed_module in ("shirt", "pants") and own:
             return c.path == "clothes.suit" and c.kind == "set" and c.new is None
+        # Aiming an item adds the move that raises it (contract §6 "Stance"): an equipment turn may.
+        if allowed_module == "equipment" and c.path == "animations" and aimed(new) and adds_only_raise(old, new):
+            return True
         if allowed_module == "outfit" and new_suit is not None:
             if c.path in ("clothes.shirt", "clothes.pants") and c.kind == "set" and c.new is None:
                 return True

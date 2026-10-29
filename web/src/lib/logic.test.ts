@@ -350,7 +350,7 @@ describe('picker offer', () => {
 
 import {
   SHIRT_SWATCHES, changedModules, colourName, garmentColorPatch, garmentStylePatch, itemsInModule, moduleMessage, moduleOfItem,
-  MODULES, moduleSummary, outfitPatch, outfitWouldRemove, placePatch, placesFor, presetPatch, equipmentRows, suitLabel, suitsFor, toggleAccessory, toggleEquipment,
+  MODULES, moduleSummary, moveNeeds, outfitPatch, outfitWouldRemove, placePatch, placesFor, presetPatch, equipmentRows, STANCES, stancePatch, suitLabel, suitsFor, toggleAccessory, toggleEquipment,
 } from './modules';
 import type { CrewSpec, CustomItem } from '../types';
 
@@ -440,6 +440,31 @@ describe('crew modules', () => {
     const p = placePatch(s, rifle, 'both_hands') as { custom_items: CustomItem[] };
     expect(p.custom_items[0].place).toBe('both_hands');
     expect(equipmentRows({ ...s, custom_items: p.custom_items })[2].place).toBe('both_hands');
+  });
+
+  it('offers Ready / Aim for the item in both hands only, and Aim adds the raise move', () => {
+    // Lester, 29 Oct, in the animation editor: "raise the rifle up to shooting position".
+    const s = base();
+    s.equipment = ['life_vest', 'radio'];
+    s.custom_items = [ci('rifle', 'Equipment__Rifle', { module: 'equipment', place: 'both_hands' }),
+      ci('torch', 'Equipment__T', { module: 'equipment', place: 'hip' })];
+    const rows = equipmentRows(s);
+    expect(rows.map((r) => r.stance)).toEqual([undefined, undefined, 'ready', undefined]);
+    expect(STANCES.map((x) => x.label)).toEqual(['Ready', 'Aim']);
+    const p = stancePatch(s, 'rifle', 'aim') as { custom_items: CustomItem[]; animations: string[] };
+    expect(p.custom_items[0].stance).toBe('aim');
+    expect(p.custom_items[1]).toEqual(s.custom_items[1]);
+    expect(p.animations).toEqual(['idle', 'raise_to_aim']);
+    const aimed = { ...s, ...p };
+    expect(stancePatch(aimed, 'rifle', 'ready')).toEqual({ custom_items: [{ ...p.custom_items[0], stance: 'ready' }, s.custom_items[1]] });
+    expect(stancePatch(aimed, 'rifle', 'aim')).not.toHaveProperty('animations');   // already there
+    expect(moduleSummary(aimed, 'equipment')).toBe('Life vest · Radio: hip · rifle: both hands, aimed · torch: hip');
+    // Moved out of both hands, the stance goes with it.
+    const moved = placePatch(aimed, { kind: 'item', ref: 'rifle' }, 'back') as { custom_items: CustomItem[] };
+    expect(moved.custom_items[0]).not.toHaveProperty('stance');
+    expect(moveNeeds(aimed, 'raise_to_aim')).toBeNull();
+    expect(moveNeeds({ ...s, custom_items: [s.custom_items![1]] }, 'raise_to_aim')).toMatch(/both hands/);
+    expect(moveNeeds(s, 'squat')).toBeNull();
   });
 
   it('has one Equipment module that owns where items are carried (no Equipment placement row)', () => {

@@ -171,7 +171,10 @@ export interface CrewSpec {
   custom_items?: CustomItem[];
 }
 
-export interface CustomItem { id: string; description: string; code: string; module?: ModuleId; place?: Place }
+/** How an item carried in both hands is held (§6 "Stance"): the low ready carry, or aimed (stock in the shoulder). */
+export type Stance = 'ready' | 'aim';
+
+export interface CustomItem { id: string; description: string; code: string; module?: ModuleId; place?: Place; stance?: Stance }
 
 /** A project's spec: a ship spec (§5) or a crew spec (§6), depending on `kind`. */
 export type ProjectSpec = { schema?: string } & Partial<Omit<ShipSpec, 'schema'>> & Partial<Omit<CrewSpec, 'schema' | 'id' | 'name'>> & Record<string, unknown>;

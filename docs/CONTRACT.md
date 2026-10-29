@@ -224,8 +224,43 @@ Rules:
   `parts.json` gives the item `"place": "both_hands"`, `"grip_m"` and `"support_m"` (item mesh
   frame). The screen offers "Both hands" for described items only (the catalog's binoculars and
   radio are too short).
+- **Stance** (Lester, 29 Oct, in the animation editor: "raise the rifle up to shooting position …
+  it didn't work"): the item carried `both_hands` has `"stance"`, `"ready"` (the carry above; the
+  default when absent) or `"aim"`, a field of the equipment item (the equipment module owns it; the
+  AI's `set_stance`, the screen's Ready / Aim chips). Only a `both_hands` item has one: moving the
+  item elsewhere drops it, and the builder ignores it on any other item with a warning.
+  - **Aim:** the stock end (centre of the item's back-most cross-section) in the right shoulder
+    pocket: halfway from `clavicle_r`'s head to `upperarm_r`'s head, 3.5 cm up, pushed forward to the
+    chest (or vest) surface + 1 cm; the long axis **level**, pointing where the body faces (3° in
+    toward the centre line), its down side to the deck; the chest turned 20° right (a bladed stance,
+    so the left hand reaches), neck and head turned back to face forward, then pitched and rolled
+    toward the stock so the right eye sits about 6.5 cm above the bore line (within limits; measured
+    4–12 cm); right palm on the grip; left palm on the item between grip and support, as far forward
+    as the left arm reaches (≤ 88% of its reach, the shoulder forward up to 20°), never nearer than
+    12 cm to the grip; elbows down (right out a little). All measured from the posed body every frame,
+    so brace and squat keep the rifle level at the shoulder as the body leans.
+  - **Which clips:** with `aim`, idle, walk, brace and squat hold the aim (brace: knees bend with
+    the rifle still aimed; squat: aimed from the squat — decided 29 Oct, both feasible with the arms
+    re-solved every frame). **hands_up** cannot leave the item slung (see below): both hands lift it
+    level over the head, pointing to the character's left, and bring it back to the aim.
+  - **`raise_to_aim`** (a built-in move, 2.5 s, no loop, feet planted, listed in the catalog's
+    `options.animations`, not in the default `animations`): from the ready carry to the aim in 1 s,
+    eased in and out, then held. Allowed only with an item in `both_hands` (otherwise dropped with a
+    warning). Choosing `aim` adds it to `animations` (the one change an equipment-scoped turn may
+    make outside its module). It also works with stance `ready`: carried low in every other clip,
+    raised in this one.
+  - **How it is built:** a rigid mesh rides one bone in every clip, and the skeleton gets no extra
+    bone, so an item that is aimed or raised **rides `hand_r`** (`parts.json` `"bone": "hand_r"`);
+    a `ready` item with no `raise_to_aim` still rides `spine_03`, byte-for-byte as before. Every
+    frame the builder decides where the item should be (the ready carry relative to `spine_03`, the
+    aim, or a blend), solves the right arm by the same two-bone IK so the hand puts it there, and
+    solves the left arm onto the item where it really is. The result is baked keys: Unreal gets
+    plain clips, no IK. Because the item is in the right hand, the hands never let go in any clip.
+    `parts.json` adds `"stance"` and `"aim_support_m"` (where the left hand holds in the aim, item
+    mesh frame).
 - Custom items gain `"module"` (required for new items; an item without one is treated as
-  `equipment` if it makes `Equipment__` objects, else `shirt`) and, for equipment, `"place"`.
+  `equipment` if it makes `Equipment__` objects, else `shirt`), for equipment `"place"`, and for
+  a `both_hands` item `"stance"`.
 - **A preset replaces what was described:** choosing a hair/shirt/pants/shoes preset removes that
   module's custom items (the screen asks first). Full outfit has no describe box; a described
   outfit is a described shirt and pants.
@@ -247,7 +282,7 @@ Rules:
   ```json
   "options": {"suit": ["male_worksuit01"], "shoes": ["shoes01"], "hat": [null, "fedora01"],
               "skin": ["light", "medium", "dark"], "equipment": ["life_vest", "helmet"],
-              "animations": ["idle", "walk", "brace", "hands_up", "squat"]}
+              "animations": ["idle", "walk", "brace", "hands_up", "squat", "raise_to_aim"]}
   ```
 
   The server's `GET /api/catalog` and the AI's validation read `options`; a value not listed

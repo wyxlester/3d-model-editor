@@ -92,6 +92,11 @@ def part_entry(obj, parent=None, bone=None):
         entry["place"] = crew_two_hands.PLACE
         entry["grip_m"] = r6(obj[crew_two_hands.GRIP_PROP])
         entry["support_m"] = r6(obj[crew_two_hands.SUPPORT_PROP])
+        if obj.get(crew_two_hands.STANCE_PROP):
+            # It rides the right hand; in the aim the left hand holds here (it slides back toward the
+            # grip when the arm cannot reach the support).
+            entry["stance"] = obj[crew_two_hands.STANCE_PROP]
+            entry["aim_support_m"] = r6(obj[crew_two_hands.AIM_SUPPORT_PROP])
     return entry
 
 
@@ -163,7 +168,7 @@ def check_feet(armature, action_names, errors, warnings):
             st["foot_%s_x_range" % s] = round(max(xs[s]) - min(xs[s]), 4)
             if min(zs[s]) < rest_z[s] - 0.005:
                 errors.append("animation %s: foot_%s sinks %.3f m below its rest height" % (name, s, rest_z[s] - min(zs[s])))
-            if name in ("idle", "brace", "squat") and (st["foot_%s_z_range" % s] > 0.01 or st["foot_%s_x_range" % s] > 0.01):
+            if name in crew_anims.PLANTED and (st["foot_%s_z_range" % s] > 0.01 or st["foot_%s_x_range" % s] > 0.01):
                 errors.append("animation %s: foot_%s is not planted (moves %.3f m)" % (name, s, max(st["foot_%s_z_range" % s], st["foot_%s_x_range" % s])))
         stats[name] = st
     ad.action = None
@@ -273,10 +278,13 @@ def build_modules(spec, armature, objects, equipment, warnings, log, holds=None)
             to_place += more
             for name, ob in made.items():
                 (equipment if name.startswith("Equipment__") else objects)[name] = ob
+        stance = next((i["stance"] for i in items if i.get("place") == crew_two_hands.PLACE and i.get("stance")),
+                      "ready")
         for ob, where in to_place:
             if where == crew_two_hands.PLACE:
                 try:
-                    hold = crew_two_hands.place_both_hands(ob, armature, surface, log)
+                    hold = crew_two_hands.place_both_hands(ob, armature, surface, log, stance=stance,
+                                                           moves=spec["animations"])
                 except ValueError as e:
                     errors.append(str(e))
                     continue

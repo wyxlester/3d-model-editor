@@ -6,7 +6,11 @@ import re
 
 SCHEMA = "me3d.crew_spec/1"
 
-ANIMATIONS = ["idle", "walk", "brace", "hands_up", "squat"]
+ANIMATIONS = ["idle", "walk", "brace", "hands_up", "squat", "raise_to_aim"]
+# What a new crew member gets; raise_to_aim only means something with an item in both hands.
+DEFAULT_ANIMATIONS = ["idle", "walk", "brace", "hands_up", "squat"]
+# How an item carried in both hands is held (contract section 6, "Stance").
+STANCES = ["ready", "aim"]
 EQUIPMENT = ["life_vest", "helmet", "binoculars", "radio"]
 EQUIPMENT_COLORS = {
     "orange": [0.95, 0.35, 0.03],
@@ -55,7 +59,7 @@ DEFAULT_SPEC = {
                 "shoes_color": None, "hat_color": None, "shirt": None, "pants": None},
     "equipment": ["life_vest"],
     "accessories": [],
-    "animations": list(ANIMATIONS),
+    "animations": list(DEFAULT_ANIMATIONS),
     "custom_items": [],
 }
 
@@ -199,7 +203,16 @@ def custom_items(items, errors, warnings=None):
             warnings.append("custom_items %s: place %r is ignored; only equipment items are placed "
                             "(a %s item fixes its own spot)" % (iid, place, module))
             place = None
-        out.append({"id": iid, "description": desc, "code": code, "module": module, "place": place})
+        stance = item.get("stance")
+        if stance is not None and stance not in STANCES:
+            errors.append("custom_items %s: stance must be one of %s or absent, got %r" % (iid, STANCES, stance))
+            continue
+        if stance is not None and place != "both_hands":
+            warnings.append("custom_items %s: stance %r is ignored; only an item carried in both hands has a "
+                            "stance" % (iid, stance))
+            stance = None
+        out.append({"id": iid, "description": desc, "code": code, "module": module, "place": place,
+                    "stance": (stance or "ready") if place == "both_hands" else None})
     return out
 
 
@@ -379,6 +392,11 @@ def normalize(spec):
         errors.append("animations must be from %s, got unknown %s" % (ANIMATIONS, bad))
     spec["animations"] = [a for a in anims if a in ANIMATIONS]
     spec["custom_items"] = custom_items(spec.get("custom_items"), errors, warnings)
+    if "raise_to_aim" in spec["animations"] and not any(
+            i.get("place") == "both_hands" for i in spec["custom_items"]):
+        warnings.append("raise_to_aim raises an item carried in both hands, and nothing is; it is left out "
+                        "until something is carried in both hands")
+        spec["animations"] = [a for a in spec["animations"] if a != "raise_to_aim"]
     errors.extend(hand_conflicts(spec))
     # Lester, 29 Oct: a person is always clothed. With no suit, a top or trousers that has neither a
     # preset nor a described item gets the plain default (the server does the same; this catches

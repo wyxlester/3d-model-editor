@@ -110,7 +110,7 @@ def test_catalog_options_are_installed():
         for name in opts[slot]:
             if name is not None:
                 assert (MPFB_DATA / "clothes" / name / f"{name}.mhclo").exists(), name
-    assert opts["animations"] == ANIMS
+    assert opts["animations"] == ANIMS + ["raise_to_aim"]   # raise_to_aim: only with a both_hands item
     assert sorted(opts["equipment"]) == sorted(crew_spec.EQUIPMENT)
 
 

@@ -1,6 +1,6 @@
 // Crew modules (CONTRACT §6 "Modules"): which module a described item belongs to, the spec patches
 // presets and swatches send (no AI), and the one-line summary each collapsed row shows. Pure, unit tested.
-import type { Accessory, CrewSpec, CustomItem, Equipment, EquipmentEntry, Garment, ModuleId, Place, Vec3 } from '../types';
+import type { Accessory, CrewSpec, CustomItem, Equipment, EquipmentEntry, Garment, ModuleId, Place, Stance, Vec3 } from '../types';
 import { hexToLinear, selectedSwatch, GEAR_SWATCHES, HAIR_SWATCHES, type Swatch } from './describe';
 import { assetLabel } from './spec';
 
@@ -234,8 +234,19 @@ export function placesFor(row: Pick<EquipmentRow, 'kind'>): { id: Place; label: 
   return row.kind === 'item' ? PLACES : PLACES.filter((p) => p.id !== 'both_hands');
 }
 
-/** One item in the Equipment module: a catalog entry switched on, or a described item. */
-export interface EquipmentRow { key: string; label: string; kind: 'equipment' | 'item'; ref: string; place: Place | 'fixed' }
+/** One item in the Equipment module: a catalog entry switched on, or a described item. `stance` is set
+ * only for the item carried in both hands. */
+export interface EquipmentRow { key: string; label: string; kind: 'equipment' | 'item'; ref: string; place: Place | 'fixed'; stance?: Stance }
+
+/**
+ * How the item carried in both hands is held (§6 "Stance"). Lester, 29 Oct, in the animation editor:
+ * "raise the rifle up to shooting position". Ready is the low carry across the body; Aim puts the stock
+ * in the right shoulder with the muzzle level, in idle, walk, brace and squat.
+ */
+export const STANCES: { id: Stance; label: string }[] = [{ id: 'ready', label: 'Ready' }, { id: 'aim', label: 'Aim' }];
+/** The move that raises an item from the ready carry to the aim; choosing Aim adds it (as the AI's set_stance does). */
+export const RAISE_MOVE = 'raise_to_aim';
+const DEFAULT_ANIMATIONS = ['idle', 'walk', 'brace', 'hands_up', 'squat'];
 
 /** Catalog entries switched on, then described items, each with where it is carried now. */
 export function equipmentRows(spec: Spec): EquipmentRow[] {
@@ -248,7 +259,11 @@ export function equipmentRows(spec: Spec): EquipmentRow[] {
     };
   });
   for (const i of itemsInModule(spec.custom_items, 'equipment')) {
-    rows.push({ key: `i:${i.id}`, label: i.description || i.id, kind: 'item', ref: i.id, place: i.place ?? 'right_hand' });
+    const place = i.place ?? 'right_hand';
+    rows.push({
+      key: `i:${i.id}`, label: i.description || i.id, kind: 'item', ref: i.id, place,
+      ...(place === 'both_hands' ? { stance: i.stance ?? 'ready' } : {}),
+    });
   }
   return rows;
 }
@@ -264,7 +279,28 @@ export function placePatch(spec: Spec, row: Pick<EquipmentRow, 'kind' | 'ref'>, 
       }),
     };
   }
-  return { custom_items: (spec.custom_items ?? []).map((i) => (i.id === row.ref ? { ...i, place } : i)) };
+  return {
+    custom_items: (spec.custom_items ?? []).map((i) => {
+      if (i.id !== row.ref) return i;
+      // Only an item in both hands has a stance (the server's set_place drops it the same way).
+      const { stance, ...rest } = i;
+      return place === 'both_hands' && stance ? { ...rest, place, stance } : { ...rest, place };
+    }),
+  };
+}
+
+/** Why a catalogue move cannot go on this person yet, or null. raise_to_aim raises an item carried in both hands. */
+export function moveNeeds(spec: Spec, move: string): string | null {
+  if (move !== RAISE_MOVE) return null;
+  return (spec.custom_items ?? []).some((i) => i.place === 'both_hands') ? null : 'Needs an item carried in both hands';
+}
+
+/** Ready or Aim for the item carried in both hands. Aim also adds the raise_to_aim move when it is missing. */
+export function stancePatch(spec: Spec, ref: string, stance: Stance): Patch {
+  const patch: Patch = { custom_items: (spec.custom_items ?? []).map((i) => (i.id === ref ? { ...i, stance } : i)) };
+  const anims = spec.animations ?? DEFAULT_ANIMATIONS;
+  if (stance === 'aim' && !anims.includes(RAISE_MOVE)) patch.animations = [...anims, RAISE_MOVE];
+  return patch;
 }
 
 // ---- Summaries (the collapsed row's one line) -------------------------------------------------
@@ -302,7 +338,8 @@ export function moduleSummary(spec: Spec, m: ModuleId): string {
     case 'equipment': {
       // "Rifle: both hands · Binoculars: chest"; worn items with a fixed spot are just named.
       const rows = equipmentRows(spec);
-      return rows.length ? rows.map((r) => (r.place === 'fixed' ? r.label : `${r.label}: ${placeLabel(r.place).toLowerCase()}`)).join(' · ') : 'None';
+      return rows.length ? rows.map((r) => (r.place === 'fixed' ? r.label
+        : `${r.label}: ${placeLabel(r.place).toLowerCase()}${r.stance === 'aim' ? ', aimed' : ''}`)).join(' · ') : 'None';
     }
     case 'accessories': {
       const hat = clothes?.hat ? (HATS.find((h) => h.id === clothes.hat)?.label ?? assetLabel(clothes.hat)) : null;

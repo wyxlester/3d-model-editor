@@ -392,10 +392,10 @@ def _aim(rest_mat, head, direction, rest_dir):
     return m
 
 
-def _solve_arm(arm, rest, s, palm_target, basis, view_layer):
+def _solve_arm(arm, rest, s, palm_target, basis, view_layer, pole=None):
     """Analytic two-bone IK (as the legs in animations.py): wrist onto the point that puts the palm
-    centre on palm_target with the hand turned to basis; elbow toward POLE; the forearm takes the
-    wrist's twist so the hand is not wrung."""
+    centre on palm_target with the hand turned to basis; elbow toward POLE (or ``pole``); the
+    forearm takes the wrist's twist so the hand is not wrung."""
     pb = arm.pose.bones
     up, lo, hand = pb["upperarm_" + s], pb["lowerarm_" + s], pb["hand_" + s]
     hand_rot = basis @ rest["basis"].transposed() @ rest["hand_mat"]
@@ -405,7 +405,7 @@ def _solve_arm(arm, rest, s, palm_target, basis, view_layer):
     dv = wrist - shoulder
     dist = min(max(dv.length, abs(l1 - l2) + 1e-4), (l1 + l2) * 0.9995)
     u = dv.normalized()
-    pole = POLE[s]
+    pole = POLE[s] if pole is None else pole
     v = (pole - u * pole.dot(u)).normalized()
     a = (l1 * l1 - l2 * l2 + dist * dist) / (2 * dist)
     h = math.sqrt(max(l1 * l1 - a * a, 0.0))
@@ -462,13 +462,15 @@ def _curl_quats(arm):
     return out
 
 
-def place_both_hands(obj, arm, surface, log=print):
-    """Place obj across the front of the body on spine_03 and return the Hold the bake uses."""
+def place_both_hands(obj, arm, surface, log=print, stance="ready", moves=()):
+    """Place obj in both hands and return the Hold the bake uses.
+
+    Ready stance with no clip that raises it: the item rides spine_03 (the carry above, unchanged).
+    Aim stance, or any clip that moves the item against the chest (raise_to_aim): it rides the right
+    hand instead (see HandHold)."""
     from . import equipment as eq
     info = plan(obj, arm, surface)
     obj.parent = None
-    obj.matrix_world = info["world"]
-    eq.parent_to_bone(obj, arm, PARENT_BONE)
     obj["me3d_place"] = PLACE
     obj[GRIP_PROP] = list(info["grip"])
     obj[SUPPORT_PROP] = list(info["support"])
@@ -478,4 +480,344 @@ def place_both_hands(obj, arm, surface, log=print):
     log("placed %s in both hands on %s: muzzle %d deg down, %d deg across, %.2f m long, reach %.0f%%, "
         "shoulders forward %s deg" % (obj.name, PARENT_BONE, info["pitch"], info["yaw"], info["length"],
                                       100 * info["reach"], info["protract"]))
-    return Hold(obj, arm, info)
+    if not rides_hand(stance, moves):
+        obj.matrix_world = info["world"]
+        eq.parent_to_bone(obj, arm, PARENT_BONE)
+        return Hold(obj, arm, info)
+    aim = plan_aim(obj, arm, surface, info)
+    hold = HandHold(obj, arm, info, aim, stance, _eye_rest(arm))
+    rest_tail = arm.data.bones[HAND_BONE].matrix_local @ Matrix.Translation((0.0, arm.data.bones[HAND_BONE].length, 0.0))
+    obj.matrix_world = arm.matrix_world @ rest_tail @ hold.offset
+    eq.parent_to_bone(obj, arm, HAND_BONE)
+    obj[STANCE_PROP] = stance
+    obj[AIM_SUPPORT_PROP] = list(aim["support"])
+    log("%s rides the right hand (stance %s): aimed with the stock %.0f cm in front of the shoulder joint line, "
+        "left hand %.0f cm in front of the grip, reach %.0f%%, shoulders forward %s deg"
+        % (obj.name, stance, 100 * aim["pocket_fwd"], 100 * aim["support_dist"], 100 * aim["reach"], aim["protract"]))
+    return hold
+
+
+# ---------------------------------------------------------------------------------------------
+# Aim stance (contract section 6, "Stance"). Lester, 29 Oct, in the animation editor: "raise the
+# rifle up to shooting position" -- and the AI had to say it could not.
+#
+# A rigid mesh rides exactly one bone in every clip of a GLB, and the shared skeleton gets no extra
+# bone. On spine_03 the item can never leave the chest, so it cannot be raised. So an aimed item
+# (or one a clip raises) rides the RIGHT HAND: every frame the builder decides where the item should
+# be (the ready carry, the aim, or a blend), solves the right arm so the hand puts it there, and the
+# item follows the hand by construction; the left arm is then solved onto the item where it really
+# is. The cost: in hands_up the item cannot stay slung while the hands go up empty (it is in the
+# right hand); instead both hands lift it overhead, level, and bring it back.
+#
+# The aim, measured from the body each frame (so it fits every size, and leans with brace/squat):
+# * the stock end (the item's back end, centre of its last cross-section) in the right shoulder
+#   pocket: POCKET_ALONG of the way from clavicle_r's head to upperarm_r's head, raised POCKET_UP_M,
+#   pushed forward to the chest (or vest) surface plus POCKET_GAP_M;
+# * the chest turned AIM_BLADE_DEG to the right (a bladed stance: it brings the left shoulder
+#   forward so the left hand reaches the handguard), the neck and head turned back to face forward;
+# * the item's long axis level and pointing where the body faces (the chest's heading without the
+#   blade, AIM_YAW_IN_DEG toward the centre line, as a rifle converges on the eye), down side to the deck;
+# * the left hand on the item between grip and support: as far forward as the left arm reaches
+#   (AIM_REACH_OK, the shoulder coming forward up to 20 degrees), never closer than 12 cm to the grip;
+# * the head: neck and head pitched forward and rolled toward the stock so the right eye sits
+#   SIGHT_M above the bore line (cheek on the stock, eye behind the sights), within HEAD_LIMITS.
+
+STANCES = ("ready", "aim")
+HAND_BONE = "hand_r"
+STANCE_PROP, AIM_SUPPORT_PROP = "me3d_stance", "me3d_aim_support"
+RAISE_CLIP = "raise_to_aim"
+RAISE_S = 1.0                   # raise_to_aim: ready to aim in this long, eased in and out
+POCKET_ALONG = 0.5
+AIM_BLADE_DEG = 20.0
+BLADE_SPLIT = {"spine_01": -0.3, "spine_02": -0.3, "spine_03": -0.4, "neck_01": 0.5, "head": 0.5}
+POCKET_UP_M = 0.035
+POCKET_GAP_M = 0.01
+AIM_YAW_IN_DEG = 3.0
+SIGHT_M = 0.065
+AIM_REACH_OK = 0.88
+AIM_SUPPORT_MIN_M = 0.12
+AIM_POLE = {"r": Vector((-0.3, -0.8, -0.5)), "l": Vector((0.0, 0.35, -1.0))}
+HEAD_LIMITS = {"pitch": (-20.0, 45.0), "roll": (-5.0, 30.0)}   # degrees, neck and head together
+HEAD_SPLIT = {"neck_01": 0.5, "head": 0.5}
+OVERHEAD_CLEAR_M = 0.07         # item axis above the top of the head when lifted overhead in hands_up
+POCKET_TAGS = {"spine_02", "spine_03", "clavicle_r", "upperarm_r", "neck_01", "life_vest"}
+
+
+def rides_hand(stance, moves):
+    """True when the item must ride the right hand: aimed, or a clip raises it to the aim."""
+    return stance == "aim" or RAISE_CLIP in (moves or ())
+
+
+def pocket(clavicle_head, upperarm_head):
+    """The right shoulder pocket's joint-line point (before it is pushed forward to the surface)."""
+    return clavicle_head + POCKET_ALONG * (upperarm_head - clavicle_head)
+
+
+def _aim_axes(fwd, blade=0.0):
+    """Level aim direction (the chest's heading, less the blade, turned AIM_YAW_IN_DEG toward the
+    centre) and down."""
+    h = Vector((fwd.x, fwd.y, 0.0))
+    h = h.normalized() if h.length > 1e-6 else Vector((1.0, 0.0, 0.0))
+    d = Matrix.Rotation(math.radians(AIM_YAW_IN_DEG + blade), 3, "Z") @ h
+    return d, Vector((0.0, 0.0, -1.0))
+
+
+def _compose(rot3, at_local, at_world, scale):
+    """Item matrix with rotation rot3 that puts the (scaled) local point at_local at at_world."""
+    return Matrix.Translation(at_world - rot3 @ at_local) @ rot3.to_4x4() @ Matrix.Diagonal(scale.to_4d())
+
+
+def plan_aim(obj, arm, surface, ready):
+    """The aim, at rest: stock-end point, pocket offset, how far along the left hand holds, reach."""
+    grip, support, axis, down, length = item_frame(obj)
+    pts, scale = _mesh_points(obj)
+    edges = [tuple(e.vertices) for e in obj.data.edges]
+    s0 = min(p.dot(axis) for p in pts)
+    butt = _section_centre(pts, edges, axis, s0 + 0.005)
+    local = _basis(axis, down, axis.cross(down))
+    bones = arm.data.bones
+    p0 = pocket(bones["clavicle_r"].head_local, bones["upperarm_r"].head_local)
+    z = p0.z + POCKET_UP_M
+    near = [p for p, g in surface.pts if g in POCKET_TAGS and abs(p.y - p0.y) < 0.03 and abs(p.z - z) < 0.03
+            and p.x > p0.x]
+    front = max(p.x for p in near) if near else p0.x + 0.08
+    pocket_fwd = front + POCKET_GAP_M - p0.x
+    # Planning estimate of the bladed chest: the upper body turned about the spine's vertical line.
+    pivot = bones["spine_02"].head_local
+    turn = Matrix.Rotation(math.radians(-AIM_BLADE_DEG), 3, "Z")
+    bl = lambda v: pivot + turn @ (v - pivot)                          # noqa: E731
+    d, dn = _aim_axes(Vector((1.0, 0.0, 0.0)))
+    rot = _basis(d, dn, d.cross(dn)) @ local.transposed()
+    butt_w = bl(p0) + turn @ Vector((pocket_fwd, 0.0, POCKET_UP_M))
+    grip_w = butt_w + rot @ (grip - butt)
+    rest = _rest_hands(arm)
+    full = {s: rest[s]["l1"] + rest[s]["l2"] for s in "lr"}
+    span = (support - grip).length
+    u_min = min(1.0, AIM_SUPPORT_MIN_M / span) if span > 1e-6 else 1.0
+    best = None
+    steps = 20
+    for k in range(steps + 1):
+        u = 1.0 - (1.0 - u_min) * k / steps
+        sup_w = grip_w + rot @ ((support - grip) * u)
+        tg = _hand_targets(grip_w, sup_w, d, dn)
+        reach, prot = {}, {}
+        for side in "lr":
+            wrist = _wrist_target(rest, side, *tg[side])
+            for deg in PROTRACT_STEPS:
+                reach[side], prot[side] = (wrist - bl(_shoulder(bones, side, deg))).length / full[side], deg
+                if reach[side] <= AIM_REACH_OK:
+                    break
+        cand = (max(reach.values()), u, dict(prot))
+        if best is None or cand[0] < best[0] - 1e-9:
+            best = cand
+        if cand[0] <= AIM_REACH_OK:
+            best = cand
+            break
+    ratio, u, prot = best
+    inv = [1.0 / c if abs(c) > 1e-12 else 0.0 for c in scale]
+    sup = grip + (support - grip) * u
+    return {"butt": butt, "pocket_fwd": pocket_fwd, "u": u, "protract": prot, "reach": ratio,
+            "support_dist": (sup - grip).length,
+            "support": Vector([sup[i] * inv[i] for i in range(3)]),
+            "butt_m": Vector([butt[i] * inv[i] for i in range(3)]),
+            "world": _compose(rot, butt, butt_w, scale), "scale": scale, "local": local}
+
+
+def _eye_rest(arm):
+    """The right eye's centre at rest (armature space), from the eye mesh; else estimated from the head."""
+    import bpy
+    inv = arm.matrix_world.inverted()
+    eyes = bpy.data.objects.get("Head__Eyes")
+    if eyes is not None and len(eyes.data.vertices):
+        pts = [inv @ (eyes.matrix_world @ v.co) for v in eyes.data.vertices]
+        right = [p for p in pts if p.y < 0]
+        if right:
+            return sum(right, Vector()) / len(right)
+    h = arm.data.bones["head"]
+    return h.head_local + Vector((0.09, -0.031, 0.045))
+
+
+def _char_quat(roll_deg, pitch_deg):
+    """Rotation about the character's X (roll: + tips the head to its right) then Y (+ pitches forward)."""
+    from mathutils import Euler
+    return Euler((math.radians(roll_deg), math.radians(pitch_deg), 0.0), "XYZ").to_quaternion()
+
+
+class HandHold(Hold):
+    """The item rides the right hand; every frame it is put where the stance and clip want it."""
+
+    def __init__(self, obj, arm, info, aim, stance, eye_rest):
+        super().__init__(obj, arm, info)
+        self.aim, self.stance = aim, stance
+        bones = arm.data.bones
+        sp = bones[PARENT_BONE]
+        self.ready_basis = (sp.matrix_local @ Matrix.Translation((0.0, sp.length, 0.0))).inverted() @ info["world"]
+        self.rest_m = {n: bones[n].matrix_local.copy() for n in ("spine_03", "neck_01", "head")}
+        self.rest_q = {n: bones[n].matrix_local.to_quaternion()
+                       for n in ("clavicle_l", "clavicle_r", "neck_01", "head", "spine_01", "spine_02", "spine_03")}
+        self.blade = 0.0
+        self.eye_local = bones["head"].matrix_local.inverted() @ eye_rest
+        self.hand_len = bones[HAND_BONE].length
+        self.offset = self._hand_offset(info["world"])
+        self.head_prev = (0.0, 0.0)
+
+    # -- the right hand carries the item: item = hand tail @ offset, whatever the item's pose ---------
+    def _hand_offset(self, m):
+        grip_w, support_w, d, dn = self.points(m)
+        palm, basis = _hand_targets(grip_w, support_w, d, dn)["r"]
+        r = self.rest["r"]
+        h = (basis @ r["basis"].transposed() @ r["hand_mat"]).to_4x4()
+        h.translation = _wrist_target(self.rest, "r", palm, basis)
+        return (h @ Matrix.Translation((0.0, self.hand_len, 0.0))).inverted() @ m
+
+    def mix(self, clip, t):
+        """(aim weight, overhead weight) for a clip at time t."""
+        if clip == RAISE_CLIP:
+            u = min(max(t / RAISE_S, 0.0), 1.0)
+            a = u * u * (3 - 2 * u)
+        else:
+            a = 1.0 if self.stance == "aim" else 0.0
+        return a, (release("hands_up", t) if clip == "hands_up" else 0.0)
+
+    def _ready_matrix(self, arm):
+        pb = arm.pose.bones[PARENT_BONE]
+        return pb.matrix @ Matrix.Translation((0.0, pb.bone.length, 0.0)) @ self.ready_basis
+
+    def _chest_axes(self, arm):
+        r = arm.pose.bones["spine_03"].matrix.to_3x3() @ self.rest_m["spine_03"].to_3x3().inverted()
+        return r @ Vector((1.0, 0.0, 0.0)), r @ Vector((0.0, 0.0, 1.0))
+
+    def aim_matrix(self, arm):
+        pb = arm.pose.bones
+        fwd, up = self._chest_axes(arm)
+        butt_w = pocket(pb["clavicle_r"].head, pb["upperarm_r"].head) + fwd * self.aim["pocket_fwd"] + up * POCKET_UP_M
+        d, dn = _aim_axes(fwd, self.blade)
+        rot = _basis(d, dn, d.cross(dn)) @ self.aim["local"].transposed()
+        return _compose(rot, self.aim["butt"], butt_w, self.aim["scale"])
+
+    def overhead_matrix(self, arm, u):
+        """hands_up: the item lifted level over the head, pointing to the character's left, held at
+        the grip and the support (its underside facing forward, so its thin side is up)."""
+        pb = arm.pose.bones
+        fwd, _ = self._chest_axes(arm)
+        h, _ = _aim_axes(fwd, self.blade)
+        d = Vector((0.0, 0.0, 1.0)).cross(h).normalized()          # the character's left
+        top = pb["head"].tail.copy()
+        span = (self.info["support"] - self.info["grip"]) * u
+        span_w = Vector([span[i] * self.aim["scale"][i] for i in range(3)]).length
+        grip_w = top + h * 0.03 + Vector((0.0, 0.0, OVERHEAD_CLEAR_M)) - d * (span_w / 2)
+        rot = _basis(d, h, d.cross(h)) @ self.aim["local"].transposed()
+        grip_local = Vector([self.info["grip"][i] * self.aim["scale"][i] for i in range(3)])
+        return _compose(rot, grip_local, grip_w, self.aim["scale"])
+
+    def _blend(self, a, b, w):
+        if w <= 0.0:
+            return a
+        if w >= 1.0:
+            return b
+        g = self.info["grip"]
+        ga, gb = a @ g, b @ g
+        ra, rb = a.decompose()[1], b.decompose()[1]
+        rot = ra.slerp(rb, w).to_matrix()
+        grip_local = Vector([g[i] * self.aim["scale"][i] for i in range(3)])
+        return _compose(rot, grip_local, ga.lerp(gb, w), self.aim["scale"])
+
+    def target(self, arm, a, o, u):
+        m = self._ready_matrix(arm)
+        if a > 0:
+            m = self._blend(m, self.aim_matrix(arm), a)
+        if o > 0:
+            m = self._blend(m, self.overhead_matrix(arm, u), o)
+        return m
+
+    # -- the head: cheek on the stock, the right eye behind the sights --------------------------------
+    def _eye(self, arm, roll, pitch):
+        pb = arm.pose.bones
+        e = _char_quat(roll, pitch)
+        m = pb["spine_03"].matrix
+        parent_rest = self.rest_m["spine_03"]
+        for name in ("neck_01", "head"):
+            k = HEAD_SPLIT[name]
+            ek = Quaternion().slerp(e, k)
+            mq = self.rest_q[name]
+            q = (mq.inverted() @ ek @ mq) @ pb[name].rotation_quaternion
+            m = m @ (parent_rest.inverted() @ self.rest_m[name]) @ q.to_matrix().to_4x4()
+            parent_rest = self.rest_m[name]
+        return m @ self.eye_local
+
+    def _head_error(self, arm, roll, pitch, butt, d, up):
+        e = self._eye(arm, roll, pitch) - butt
+        e = e - d * e.dot(d) - up * SIGHT_M
+        return e
+
+    def solve_head(self, arm, m, weight):
+        """Gauss-Newton on (roll, pitch) so the right eye sits SIGHT_M above the bore line; the result
+        is applied scaled by weight (0 = the clip's own head)."""
+        _, rot, _ = m.decompose()
+        butt = m @ self.aim["butt_m"]
+        d = (rot @ self.info["axis"]).normalized()
+        up = -(rot @ self.info["down"]).normalized()
+        x = list(self.head_prev)
+        lim = (HEAD_LIMITS["roll"], HEAD_LIMITS["pitch"])
+        for _ in range(8):
+            r0 = self._head_error(arm, x[0], x[1], butt, d, up)
+            cols = []
+            for i in range(2):
+                x2 = list(x)
+                x2[i] += 0.5
+                cols.append((self._head_error(arm, x2[0], x2[1], butt, d, up) - r0) / 0.5)
+            a11, a12, a22 = cols[0].dot(cols[0]), cols[0].dot(cols[1]), cols[1].dot(cols[1])
+            b1, b2 = -cols[0].dot(r0), -cols[1].dot(r0)
+            det = a11 * a22 - a12 * a12 + 1e-12
+            step = ((a22 * b1 - a12 * b2) / det, (a11 * b2 - a12 * b1) / det)
+            x = [min(max(x[i] + step[i], lim[i][0]), lim[i][1]) for i in range(2)]
+            if abs(step[0]) + abs(step[1]) < 0.05:
+                break
+        self.head_prev = tuple(x)
+        e = _char_quat(x[0] * weight, x[1] * weight)
+        pb = arm.pose.bones
+        for name, k in HEAD_SPLIT.items():
+            mq = self.rest_q[name]
+            pb[name].rotation_quaternion = (mq.inverted() @ Quaternion().slerp(e, k) @ mq) @ pb[name].rotation_quaternion
+
+    # -- per frame ------------------------------------------------------------------------------------
+    def apply(self, arm, clip, t, view_layer):
+        a, o = self.mix(clip, t)
+        pbones = arm.pose.bones
+        # Bladed: the chest turns right, the neck and head turn back (a, so it comes in with the raise).
+        self.blade = AIM_BLADE_DEG * a
+        if self.blade:
+            for name, k in BLADE_SPLIT.items():
+                mq = self.rest_q[name]
+                yaw = Quaternion((0.0, 0.0, 1.0), math.radians(self.blade * k))
+                pbones[name].rotation_quaternion = (mq.inverted() @ yaw @ mq) @ pbones[name].rotation_quaternion
+        aim_prot = self.aim["protract"]
+        ready_prot = self.info.get("protract", {})
+        for s in "lr":
+            deg = (1 - a) * ready_prot.get(s, 0) + a * aim_prot.get(s, 0)
+            if deg:
+                m = self.rest_q["clavicle_" + s]
+                q = m.inverted() @ _protraction(s, deg).to_quaternion() @ m
+                c = pbones["clavicle_" + s].rotation_quaternion.copy()
+                pbones["clavicle_" + s].rotation_quaternion = c @ q
+        view_layer.update()
+        u = (1 - a) + a * self.aim["u"]
+        target = self.target(arm, a, o, u)
+        head_w = a * (1 - o)
+        if head_w > 0:
+            self.solve_head(arm, target, head_w)
+        poles = {s: (POLE[s].lerp(AIM_POLE[s], a)) for s in "lr"}
+        g, sup, d, dn = self.points(target)
+        tg = _hand_targets(g, g + (sup - g) * u, d, dn)
+        _solve_arm(arm, self.rest["r"], "r", *tg["r"], view_layer, pole=poles["r"])
+        # The item is where the right hand really put it (a short reach leaves it short, in the hand).
+        m = arm.matrix_world.inverted() @ self.item_matrix(arm)
+        g, sup, d, dn = self.points(m)
+        tg = _hand_targets(g, g + (sup - g) * u, d, dn)
+        _solve_arm(arm, self.rest["l"], "l", *tg["l"], view_layer, pole=poles["l"])
+        for s in "lr":
+            for b in ("upperarm", "lowerarm", "hand"):
+                pbones["%s_%s" % (b, s)].location = Vector()
+        for name, q in self.curl.items():
+            pbones[name].rotation_quaternion = q.copy()
+        view_layer.update()

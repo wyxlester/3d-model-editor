@@ -16,7 +16,7 @@ import { GEAR_SWATCHES, HAIR_SWATCHES, hexToLinear, madeSomethingNew, removeItem
 import {
   ACCESSORIES, HAIR_STYLES, accessoryName, presetPatch, HATS, MODULES, PANTS_STYLES, PANTS_SWATCHES, placesFor, SHIRT_STYLES, SHIRT_SWATCHES, SHOE_SWATCHES, SKIN_TONES,
   changedModules, equipmentName, garmentColorPatch, garmentStylePatch, itemsInModule, moduleMessage, moduleSummary, outfitPatch,
-  outfitWouldRemove, placePatch, equipmentRows, shoeLabel, suitLabel, suitsFor, toggleAccessory, toggleEquipment, type ModuleDef,
+  outfitWouldRemove, placePatch, equipmentRows, shoeLabel, STANCES, stancePatch, suitLabel, suitsFor, toggleAccessory, toggleEquipment, type ModuleDef,
 } from '../lib/modules';
 import { undoHint } from '../lib/undo';
 import type { Attachment, CrewSpec, CustomItem, ModuleId, Vec3 } from '../types';
@@ -312,6 +312,11 @@ export function CrewWorkshop() {
                     {r.place !== 'fixed' && (
                       <div className="picks" role="group" aria-label={`Where ${r.label} is carried`}>
                         {placesFor(r).map((pl) => chip(pl.label, r.place === pl.id, () => edit(placePatch(spec, r, pl.id)), pl.id))}
+                      </div>
+                    )}
+                    {r.stance && (
+                      <div className="picks" role="group" aria-label={`How ${r.label} is held`}>
+                        {STANCES.map((st) => chip(st.label, r.stance === st.id, () => edit(stancePatch(spec, r.ref, st.id)), `stance-${st.id}`))}
                       </div>
                     )}
                   </div>
