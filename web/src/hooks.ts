@@ -72,7 +72,9 @@ export function useJobs() {
   const [jobs, setJobs] = useState<RunningJob[]>([]);
   const keyRef = useRef(0);
   const alive = useRef(true);
-  useEffect(() => () => { alive.current = false; }, []);
+  // Set on every mount: StrictMode's dev-only unmount/remount would otherwise leave it false, and a
+  // job started at mount (Research watching the first research turn) would never update its line.
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
   const run = useCallback(async <R,>(
     label: string,

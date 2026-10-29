@@ -74,7 +74,23 @@ export interface VersionInfo {
 }
 
 export type ProjectKind = 'ship' | 'crew';
-export type ProjectBase = 'container' | 'sampan' | 'tanker' | 'male_default';
+/** `custom` = a ship of any type, made from a brief (CONTRACT §5 `type: "custom"`). */
+export type ProjectBase = 'container' | 'sampan' | 'tanker' | 'male_default' | 'custom';
+
+/** §5 `type: "custom"`: what will be built, approved by the user before anything builds. */
+export interface DesignPlan {
+  status: 'draft' | 'approved' | 'stale';
+  /** Plain-English lines: size, hull form, each superstructure tier, colours, details, assumptions. */
+  summary: string[];
+  /** The full custom ship spec it would build. */
+  spec?: Record<string, unknown>;
+  /** The research revision it was drafted against. */
+  research_rev: number;
+  at: string;
+  /** Server extras: when it was approved, and why an approved plan failed to build (back to draft). */
+  approved_at?: string;
+  build_error?: string;
+}
 
 export interface ShipSpec {
   schema: 'me3d.ship_spec/1';
@@ -138,6 +154,16 @@ export interface Project {
   pins: Pin[];
   messages: Message[];
   research: Research | null;
+  /** Bumped by every research save (custom ships, §5). */
+  research_rev?: number;
+  /** Custom ships only (§5): null until the AI drafts one. */
+  design_plan?: DesignPlan | null;
+  /** The words the ship was created from (custom ships). */
+  brief?: string | null;
+  /** Custom ships: an approved plan has been built at least once, so Build works normally (server extra). */
+  plan_built?: boolean;
+  /** Set on creation when something the user should know happened (e.g. no placeholder model). */
+  note?: string;
   /** Server extra: whether POST /undo has something to undo. */
   can_undo?: boolean;
 }

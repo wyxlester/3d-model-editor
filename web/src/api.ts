@@ -5,6 +5,7 @@ import type {
   Attachment, Catalog, ExportResult, Health, Job, Part, Pin, Project, ProjectBase, ProjectKind, ProjectSummary,
   RouteResult, Scene, SceneSpec, UnrealReport, Vec3,
 } from './types';
+import { httpErrorText } from './lib/designPlan';
 
 export const MOCK = import.meta.env.VITE_MOCK === '1';
 
@@ -37,7 +38,7 @@ const httpTransport: Transport = async (method, path, body) => {
   }
   if (!res.ok) {
     const detail = (data && typeof data === 'object' && 'detail' in data) ? (data as { detail: unknown }).detail : text;
-    throw new ApiError(res.status, `${method} ${path} failed (${res.status}): ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`, data);
+    throw new ApiError(res.status, httpErrorText(method, path, res.status, detail), data);
   }
   return data;
 };
@@ -61,8 +62,11 @@ export const api = {
     call<RouteResult>('POST', '/api/route', attachments.length ? { message, attachments } : { message }),
 
   projects: () => call<ProjectSummary[]>('GET', '/api/projects'),
-  createProject: (kind: ProjectKind, base: ProjectBase, name?: string) =>
-    call<{ project: Project; job_id: string }>('POST', '/api/projects', name ? { kind, base, name } : { kind, base }),
+  /** `brief` is the user's description of a custom ship (§5 `type: "custom"`). */
+  createProject: (kind: ProjectKind, base: ProjectBase, name?: string, brief?: string) =>
+    call<{ project: Project; job_id: string }>('POST', '/api/projects', { kind, base, ...(name ? { name } : {}), ...(brief ? { brief } : {}) }),
+  /** Approve a custom ship's current draft plan and build it (§5). 409 with a sentence when it can't be. */
+  approvePlan: (id: string) => call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/design-plan/approve`),
   project: (id: string) => call<Project>('GET', `/api/projects/${enc(id)}`),
   parts: (id: string, n: number) => call<Part[]>('GET', `/api/projects/${enc(id)}/versions/${n}/parts.json`),
   patchSpec: (id: string, patch: Record<string, unknown>) => call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/spec`, { patch }),
