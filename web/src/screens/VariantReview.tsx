@@ -149,7 +149,7 @@ export function VariantReview() {
 
   return (
     <>
-      <TopBar title={`Variant review: ${v.name}`}>
+      <TopBar title={`Variant review: ${v.name}`} back={v.kind}>
         <div className="topbar-right" style={{ gap: 8 }}>
           {status}
           {draft && !v.discarded && <>

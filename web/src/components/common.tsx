@@ -16,8 +16,10 @@ export function Logo() {
   );
 }
 
-/** Top bar: brand, the four workshops, then whatever the screen adds. */
-export function TopBar({ title, children, home }: { title?: string; children?: ReactNode; home?: boolean }) {
+/** Top bar: an optional way back to a list, brand, the four workshops, then whatever the screen adds. */
+export function TopBar({ title, children, home, back }: {
+  title?: string; children?: ReactNode; home?: boolean; back?: 'ship' | 'crew';
+}) {
   const loc = useLocation();
   const ship = recall('ship');
   const crew = recall('crew');
@@ -25,6 +27,12 @@ export function TopBar({ title, children, home }: { title?: string; children?: R
   const on = (prefix: string) => (loc.pathname.startsWith(prefix) ? 'active' : '');
   return (
     <header className="topbar">
+      {back && (
+        <Link to={back === 'ship' ? '/ship' : '/crew'} className="btn sm" style={{ flexShrink: 0 }}
+          title={back === 'ship' ? 'Back to the list of ships' : 'Back to the list of crew'}>
+          ← {back === 'ship' ? 'All ships' : 'All crew'}
+        </Link>
+      )}
       <Link to="/" className="brand"><Logo />{title ?? '3D model editor'}</Link>
       <nav className="nav" aria-label="Workshops">
         {home && <NavLink to="/" className={loc.pathname === '/' ? 'active' : ''} end>Home</NavLink>}

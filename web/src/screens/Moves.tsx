@@ -65,7 +65,7 @@ export function Moves() {
 
   return (
     <>
-      <TopBar title={p?.name ?? 'Crew'}>
+      <TopBar title={p?.name ?? 'Crew'} back="crew">
         <span style={{ fontSize: 13, color: 'var(--text-2)' }}><Link to={paths.crew(id)}>Crew workshop</Link> › Animation</span>
       </TopBar>
       <div className="workspace">

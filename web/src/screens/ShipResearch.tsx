@@ -38,7 +38,7 @@ export function ShipResearch() {
   const r = project?.research ?? null;
   return (
     <>
-      <TopBar title={project?.name}>
+      <TopBar title={project?.name} back="ship">
         <ModeSwitch id={id!} mode="research" />
         <div className="topbar-right" style={{ gap: 8 }}>
           {r ? <span className="chip green" style={{ fontSize: 12, padding: '4px 10px' }}>Research assembled</span>

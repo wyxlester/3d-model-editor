@@ -144,7 +144,7 @@ export function ShipBuild() {
 
   return (
     <>
-      <TopBar title={project?.name}>
+      <TopBar title={project?.name} back="ship">
         {id && <ModeSwitch id={id} mode="build" />}
         <div className="topbar-right">
           <span>{project ? `${project.name} · ${current ? `v${current}` : 'not built yet'} · ${busy ? 'working…' : 'saved'}` : ''}</span>

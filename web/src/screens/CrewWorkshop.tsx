@@ -175,7 +175,7 @@ export function CrewWorkshop() {
 
   return (
     <>
-      <TopBar title={name}>
+      <TopBar title={name} back="crew">
         <div className="topbar-right" style={{ gap: 6, flexWrap: 'wrap', fontSize: 13 }}>
           {people.map((x) => (
             <Link key={x.id} to={paths.crew(x.id)} onClick={() => remember('crew', x.id)}
