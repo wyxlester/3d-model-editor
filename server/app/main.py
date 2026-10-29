@@ -813,7 +813,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
                 entry = catalog.entry("ship", "custom")
             except CatalogError:
                 entry = {}
-            prompt = (custom_research_context(project, spec_now, entry) +
+            prompt = (excluded_note(project) + custom_research_context(project, spec_now, entry) +
                       "The research has changed since the design plan was drafted. Redraft the design plan with "
                       "save_design_plan so it matches the research as it stands. Change nothing in the research. "
                       "Reply in one sentence saying what changed in the plan, or that nothing did.")

@@ -44,6 +44,23 @@ def test_crossing_a_source_out_puts_the_plan_out_of_date_and_tells_the_ai(make_c
     assert c.patch(f"/api/projects/{pid}/research/excluded", json={"excluded_sources": ["S99"]}).status_code == 400
 
 
+def test_the_redraft_after_a_research_change_is_told_what_was_crossed_out(make_client, with_custom, settings):
+    settings.plan_follow_up = True
+    c, pid, agent = with_two_sources(make_client)
+    c.patch(f"/api/projects/{pid}/research/excluded", json={"excluded_sources": ["S02"]})
+    turns = iter([[("save_research", {"research": TWO_SOURCES})],                  # the user's turn
+                  [("save_design_plan", {"summary": SUMMARY, "spec": YACHT})]])    # the redraft
+    real_run = agent.run
+
+    def run(session, prompt, mode, log):
+        agent.steps = next(turns, [])
+        return real_run(session, prompt, mode, log)
+    agent.run = run
+    job = research_turn(c, pid, "the beam is 6.9 m")
+    assert "• Redrafting the design plan to match the research" in job["log"]
+    assert "S02 (Forum post)" in str(agent.prompts[-1]) and "crossed out" in str(agent.prompts[-1])
+
+
 def test_excluded_note_is_empty_until_something_is_crossed_out():
     assert excluded_note({"research": RESEARCH}) == ""
     assert "P01 (User photo)" in excluded_note({"research": RESEARCH, "excluded_sources": ["P01"]})
