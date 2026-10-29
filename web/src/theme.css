@@ -73,6 +73,9 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .toolbar-hint { flex: 1 1 0; min-width: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .statusbar { display: flex; gap: 20px; flex-wrap: wrap; padding: 10px 16px; border-top: 1px solid var(--border); background: var(--panel-2); font-size: 13px; }
 .scroll { overflow-y: auto; }
+/* The top edge of a panel the user drags to resize (Review's export console). */
+.resize-row { height: 6px; flex-shrink: 0; cursor: row-resize; touch-action: none; background: var(--panel); border-top: 1px solid var(--border); }
+.resize-row:hover, .resize-row:focus-visible, .resize-row.on { background: var(--accent-bg); border-top-color: var(--accent); outline: none; }
 
 /* Buttons */
 .btn {

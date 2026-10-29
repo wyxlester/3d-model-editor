@@ -1,11 +1,13 @@
 // Review and export: compare two versions side by side, pin customer feedback on the model,
-// export the scene's package and test it in Unreal. Recreates Review.dc.html (CONTRACT §8–10).
-import { useEffect, useRef, useState } from 'react';
+// export the scene's package, and build it in Unreal (checked) and open it there.
+// Recreates Review.dc.html (CONTRACT §8–10).
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, errorText, fileUrl, modelUrl } from '../api';
 import { ChatPanel, ErrorNote, JobLines, Loading, TopBar } from '../components/common';
 import { remember, useJobs, useLoad, useProject } from '../hooks';
 import type { ViewName } from '../lib/frames';
+import { PANEL_KEEP, PANEL_MIN, dragHeight } from '../lib/panel';
 import { partLabel } from '../lib/parts';
 import { paths } from '../lib/routing';
 import type { Attachment, ExportResult, Pin, Scene, UnrealReport, Vec3 } from '../types';
@@ -13,7 +15,19 @@ import { PIN_COLORS, ShipViewer, ViewButtons } from '../viewer/Viewer';
 import { ScenePicker } from './AssemblyScenePicker';
 import { specOf } from './Assembly';
 
-const STATUS_TEXT: Record<string, string> = { open: 'Open', working: 'AI working', waiting: 'Waiting for you', resolved: 'Done' };
+const CONSOLE_KEY = 'me3d-review-console-height';
+const CONSOLE_DEFAULT = 220;
+
+function readConsoleH(): number {
+  try {
+    const v = Number(localStorage.getItem(CONSOLE_KEY));
+    return Number.isFinite(v) && v >= PANEL_MIN ? v : CONSOLE_DEFAULT;
+  } catch {
+    return CONSOLE_DEFAULT;
+  }
+}
+
+const STATUS_TEXT: Record<string, string> ={ open: 'Open', working: 'AI working', waiting: 'Waiting for you', resolved: 'Done' };
 const STATUS_CHIP: Record<string, string> = { open: 'amber', working: 'blue', waiting: 'blue', resolved: 'green' };
 
 export function Review() {
@@ -40,6 +54,29 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
   const [exported, setExported] = useState<ExportResult | null>(null);
   const [makNote, setMakNote] = useState(false);
   const [report, setReport] = useState<UnrealReport | null>(null);
+  const [opening, setOpening] = useState(false);
+  const [openedLevel, setOpenedLevel] = useState<string | null>(null);
+  // The export console under the viewers: its own height, dragged at its top edge, remembered.
+  const stageRef = useRef<HTMLElement>(null);
+  const [consoleH, setConsoleH] = useState(readConsoleH);
+  const [resizing, setResizing] = useState(false);
+  const stageHeight = () => stageRef.current?.clientHeight ?? window.innerHeight;
+  const keepConsoleH = (h: number) => {
+    setConsoleH(h);
+    try { localStorage.setItem(CONSOLE_KEY, String(h)); } catch { /* per-viewer nicety only */ }
+  };
+  const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const el = e.currentTarget, startY = e.clientY, startH = consoleH, total = stageHeight();
+    el.setPointerCapture(e.pointerId);
+    setResizing(true);
+    let last = startH;
+    const move = (ev: PointerEvent) => { last = dragHeight(startH, startY, ev.clientY, total); setConsoleH(last); };
+    const up = () => {
+      el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up);
+      setResizing(false); keepConsoleH(last);
+    };
+    el.addEventListener('pointermove', move); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+  };
   const [feedback, setFeedback] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const compareRef = useRef<HTMLDivElement>(null);
@@ -101,9 +138,22 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
     if (target === 'mak') { setMakNote(true); return; }
     void run<ExportResult>('Exporting the package', () => api.exportScene(s.id), (r) => setExported(r));
   };
-  const doUnreal = () => {
-    setReport(null);
-    void run<UnrealReport>('Testing in Unreal 5.8', () => api.unrealTest(s.id), (r) => setReport(r));
+  // One click: build the level (the Unreal test, with its checks), then open it in the editor.
+  const buildAndOpen = () => {
+    setReport(null); setOpenedLevel(null);
+    void run<UnrealReport>('Building the scene in Unreal 5.8, then opening it', () => api.unrealTest(s.id),
+      async (r) => { setReport(r); await openInUnreal(r.level); });
+  };
+  const openInUnreal = async (level: string) => {
+    setOpening(true); setErr(null);
+    try {
+      await api.unrealOpen(level);
+      setOpenedLevel(level);
+    } catch (e) {
+      setErr(errorText(e));
+    } finally {
+      setOpening(false);
+    }
   };
   const adoptVersion = async (n: number) => {
     try {
@@ -196,7 +246,7 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
           </div>
         </aside>
 
-        <section className="stage">
+        <section className="stage" ref={stageRef}>
           <div className="toolbar">
             <button className={`btn ${pinMode ? 'primary' : 'selected'}`} onClick={() => { setPinMode(!pinMode); setDraft(null); }}>
               {pinMode ? 'Placing a pin…' : 'Pin customer feedback'}
@@ -208,46 +258,75 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
             {pane(a, false)}
             {pane(b, true)}
           </div>
-          <div style={{ borderTop: '1px solid var(--border)', background: 'var(--panel)', padding: '14px 16px', display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', fontSize: 13 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 360px', minWidth: 0 }}>
-              <span style={{ fontWeight: 500 }}>Export package</span>
-              <span className="mono muted" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{layout}</span>
-            </div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button className={`btn lg ${target === 'unreal' ? 'selected' : 'muted'}`} onClick={() => { setTarget('unreal'); setMakNote(false); }}>Unreal 5.8</button>
-              <button className={`btn lg ${target === 'mak' ? 'selected' : 'muted'}`} onClick={() => { setTarget('mak'); setExported(null); }}>MAK (planned)</button>
-            </div>
-            <button className="btn primary lg" onClick={doExport} disabled={busy}>Export v{exportVersion}</button>
-            <button className="btn lg" onClick={doUnreal} disabled={busy || target === 'mak'}>Test in Unreal</button>
-            {b !== null && b !== exportVersion && (
-              <span className="warn" style={{ flexBasis: '100%', display: 'flex', gap: 10, alignItems: 'center' }}>
-                The scene uses v{exportVersion}, so that is what exports. You are looking at v{b} on the right.
-                <button className="btn sm" onClick={() => void adoptVersion(b)}>Use v{b} in the scene</button>
-              </span>
-            )}
-            {makNote && <span className="ok" style={{ flexBasis: '100%' }}>MAK export isn’t built yet. The same folder will feed it when it is.</span>}
-            {exported && (
-              <span className="ok" style={{ flexBasis: '100%', display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                Exported v{exportVersion}, with the research inside, to <span className="mono">{exported.package_dir}</span>.
-                <a className="btn sm" href={fileUrl(exported.zip_url)} download>Download zip</a>
-              </span>
-            )}
-            {report && (
-              <div style={{ flexBasis: '100%', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <span className={report.ok ? 'ok' : 'bad'} style={{ fontWeight: 500 }}>
-                  {report.ok ? '✓ Unreal imported it and every check passed' : '✗ Unreal import has failing checks'} · Unreal {report.engine} · <span className="mono" style={{ fontWeight: 400 }}>{report.level}</span>
-                </span>
-                {report.checks.map((c, i) => (
-                  <span key={i} style={{ display: 'flex', gap: 8 }}>
-                    <span className={c.pass ? 'ok' : 'bad'}>{c.pass ? '✓' : '✗'}</span>
-                    <span>{c.name}</span>
-                    <span className="muted">{c.detail}</span>
-                  </span>
-                ))}
+          <div className={`resize-row${resizing ? ' on' : ''}`} role="separator" aria-orientation="horizontal"
+            aria-label="Resize the export panel" aria-valuenow={consoleH} tabIndex={0} title="Drag to resize; double-click to reset"
+            onPointerDown={startResize} onDoubleClick={() => keepConsoleH(CONSOLE_DEFAULT)}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                keepConsoleH(dragHeight(consoleH, 0, e.key === 'ArrowUp' ? -24 : 24, stageHeight()));   // up = taller
+              }
+            }} />
+          <div style={{ height: consoleH, minHeight: PANEL_MIN, maxHeight: `calc(100% - ${PANEL_KEEP}px)`, flexShrink: 0,
+            display: 'flex', flexDirection: 'column', background: 'var(--panel)', fontSize: 13 }}>
+            <div style={{ padding: '12px 16px', display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', flexShrink: 0 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 360px', minWidth: 0 }}>
+                <span style={{ fontWeight: 500 }}>Export package</span>
+                <span className="mono muted" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{layout}</span>
               </div>
-            )}
-            <div style={{ flexBasis: '100%' }}><JobLines jobs={jobs} dismiss={dismiss} /></div>
-            <div style={{ flexBasis: '100%' }}><ErrorNote error={err ?? ship.error} /></div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button className={`btn lg ${target === 'unreal' ? 'selected' : 'muted'}`} onClick={() => { setTarget('unreal'); setMakNote(false); }}>Unreal 5.8</button>
+                <button className={`btn lg ${target === 'mak' ? 'selected' : 'muted'}`} onClick={() => { setTarget('mak'); setExported(null); }}>MAK (planned)</button>
+              </div>
+              <button className="btn primary lg" onClick={doExport} disabled={busy}>Export v{exportVersion}</button>
+              <button className="btn lg" onClick={buildAndOpen} disabled={busy || opening || target === 'mak'}
+                title="Builds a level with the ship and crew in Unreal 5.8, checks it, and opens it in the Unreal editor on this computer">
+                Build and Open in Unreal
+              </button>
+            </div>
+            <div className="scroll" style={{ flex: 1, minHeight: 0, padding: '0 16px 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {b !== null && b !== exportVersion && (
+                <span className="warn" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  The scene uses v{exportVersion}, so that is what exports. You are looking at v{b} on the right.
+                  <button className="btn sm" onClick={() => void adoptVersion(b)}>Use v{b} in the scene</button>
+                </span>
+              )}
+              {makNote && <span className="ok">MAK export isn’t built yet. The same folder will feed it when it is.</span>}
+              {exported && (
+                <span className="ok" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                  Exported v{exportVersion}, with the research inside, to <span className="mono">{exported.package_dir}</span>.
+                  <a className="btn sm" href={fileUrl(exported.zip_url)} download>Download zip</a>
+                </span>
+              )}
+              <JobLines jobs={jobs} dismiss={dismiss} />
+              <ErrorNote error={err ?? ship.error} />
+              {report && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span className={report.ok ? 'ok' : 'bad'} style={{ fontWeight: 500 }}>
+                      {report.ok ? '✓ Unreal built it and every check passed' : '✗ Unreal built it with failing checks'} · Unreal {report.engine} · <span className="mono" style={{ fontWeight: 400 }}>{report.level}</span>
+                    </span>
+                    <button className="btn sm" onClick={() => void openInUnreal(report.level)} disabled={opening || busy}
+                      title="Opens this level again in the Unreal editor, without rebuilding it">
+                      {opening ? 'Starting Unreal…' : 'Open again'}
+                    </button>
+                  </span>
+                  {openedLevel === report.level && (
+                    <span className="faint">
+                      Unreal is starting with this level: sky, sea and the ship with its crew. The first time takes a few minutes while it
+                      prepares shaders. Press Simulate to see the crew move. Close Unreal before building again, which rebuilds this level.
+                    </span>
+                  )}
+                  {report.checks.map((c, i) => (
+                    <span key={i} style={{ display: 'flex', gap: 8 }}>
+                      <span className={c.pass ? 'ok' : 'bad'}>{c.pass ? '✓' : '✗'}</span>
+                      <span>{c.name}</span>
+                      <span className="muted">{c.detail}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </section>
 

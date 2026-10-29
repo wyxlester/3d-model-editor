@@ -14,16 +14,18 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-RUN = ROOT / "unreal" / "run_import_test.sh"
-UE_CMD = Path("/Users/Shared/Epic Games/UE_5.8/Engine/Binaries/Mac/UnrealEditor-Cmd")
-BLENDER = Path("/Applications/Blender.app/Contents/MacOS/Blender")
+RUN = ROOT / "unreal" / "run_import_test.py"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(ROOT / "server"))
 import make_fixture_package  # noqa: E402
+from app.config import Settings  # noqa: E402  (finds Unreal 5.8 as the server does)
 
+SETTINGS = Settings()
 pytestmark = [
     pytest.mark.slow,
-    pytest.mark.skipif(not (UE_CMD.exists() and BLENDER.exists()), reason="needs UE 5.8 and Blender"),
+    pytest.mark.skipif(not (SETTINGS.unreal_cmd.exists() and Path(make_fixture_package.BLENDER).exists()),
+                       reason="needs UE 5.8 and Blender"),
 ]
 
 
@@ -33,7 +35,8 @@ def good_package(tmp_path_factory):
 
 
 def run_harness(pkg):
-    proc = subprocess.run([str(RUN), str(pkg)], capture_output=True, text=True, timeout=3600)
+    proc = subprocess.run([sys.executable, str(RUN), str(pkg), "--engine", str(SETTINGS.unreal_dir)],
+                          capture_output=True, text=True, timeout=3600)
     report = json.loads((pkg / "unreal_import_report.json").read_text(encoding="utf-8"))
     return proc, report, {c["name"]: c for c in report["checks"]}
 
@@ -50,9 +53,16 @@ def test_good_package_imports_and_passes(good_package):
                  "articulated_part:Deck__Crane__Jib",
                  "crew_skeleton:crew_worker", "crew_animation:crew_worker:idle",
                  "crew_animation:crew_worker_b:walk",
-                 "crew_actor:0:station__helm", "crew_actor:1:station__crane"):
+                 "crew_actor:0:station__helm", "crew_actor:1:station__crane",
+                 "import_phase_completed", "crew_one_mesh:crew_worker", "crew_one_mesh:crew_worker_b",
+                 "crew_equipment:0:Equipment__life_vest", "crew_equipment:1:Equipment__life_vest",
+                 # a crew member used at two stations: the second is a copy of the first import
+                 "crew_actor:2:station__crane", "crew_equipment:2:Equipment__life_vest"):
         assert checks[name]["pass"], (name, checks.get(name))
     assert "6 mesh nodes" in checks["ship_parts_imported"]["detail"]
+    # the fixture crew really is in parts with a bone-hung item, so these checks are not vacuous
+    assert "2 skinned mesh(es)" in checks["crew_one_mesh:crew_worker"]["detail"]
+    assert "bone Chest" in checks["crew_equipment:0:Equipment__life_vest"]["detail"]
 
 
 def test_broken_package_fails_with_the_failing_checks_named(good_package, tmp_path):

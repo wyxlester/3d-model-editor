@@ -4,22 +4,29 @@ Runs INSIDE Unreal 5.8, headless, as a commandlet:
 
     UnrealEditor-Cmd Harness.uproject -run=pythonscript -script=<this file> -unattended -nullrhi
 
-in two separate processes, chosen by environment variables (set by run_import_test.sh):
+in separate processes, chosen by environment variables (set by run_import_test.py):
 
-    ME3D_PACKAGE=<package dir>  ME3D_PHASE=import   build everything and save it
-    ME3D_PACKAGE=<package dir>  ME3D_PHASE=verify   load the saved level from disk, check it,
+    ME3D_PACKAGE=<package dir>  ME3D_PHASE=import   new level, the ship, saved
+    ME3D_PHASE=crew  ME3D_CREW_ID=<id>               one distinct crew member, at each of its
+                                                    stations, saved (one process per crew id)
+    ME3D_PHASE=verify                               load the saved level from disk, check it,
                                                     write <package>/unreal_import_report.json
-    ME3D_IMPORT_LOG=<phase-1 log>                   scanned for Error: lines by the verify phase
+    ME3D_IMPORT_LOG=<log>[<pathsep><log>...]        the import processes' logs, scanned for
+                                                    Error: lines by the verify phase
 
-The checks run in the second process on purpose: everything they look at has come back from
-disk, so "the actors survived the save" is proved rather than assumed (library:
-unreal-58-landscape-creation-has-no-python-path - Python-spawned actors may not survive save).
+One import per process because, headless, an Interchange import after an Import Into Level
+starts and never finishes (5.8). The checks run in the last process on purpose: everything they
+look at has come back from disk, so "the actors survived the save" is proved rather than assumed
+(library: unreal-58-landscape-creation-has-no-python-path - Python-spawned actors may not survive
+save).
 
 Ship: Interchange *scene* import of the GLB (default glTF scene pipelines). It makes one
 StaticMesh asset per glTF mesh and one StaticMeshActor per node, attached in the glTF
 hierarchy, with each node's origin as the actor origin - so parts stay separate and pivots
-are kept. Crew: Interchange *asset* import (SkeletalMesh + Skeleton + AnimSequences), later
-crew reusing the first crew's Skeleton.
+are kept. Crew: Import Into Level, as a user does once install_import_hook.py has set up their
+project - the skinned parts combined into one SkeletalMesh (later crew on the first crew's
+Skeleton) and the hook (me3d_import_hook.py) putting each item of equipment back on its bone -
+then moved to its station.
 """
 import json
 import math
@@ -32,9 +39,12 @@ import unreal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import me3d_frames as fr  # noqa: E402
+import me3d_import_hook as hook  # noqa: E402
+from install_import_hook import combining_pipeline  # noqa: E402
 
 PKG_DIR = Path(os.environ["ME3D_PACKAGE"]).resolve()
 PHASE = os.environ.get("ME3D_PHASE", "import")
+CREW_ID = os.environ.get("ME3D_CREW_ID", "")
 IMPORT_LOG = os.environ.get("ME3D_IMPORT_LOG", "")
 STATE_FILE = PKG_DIR / ".unreal_import_state.json"
 REPORT_FILE = PKG_DIR / "unreal_import_report.json"
@@ -143,12 +153,6 @@ def assets_of(path, cls):
     return out
 
 
-def anim_name_matches(asset_name, anim, glb_stem):
-    """Interchange names a glTF clip '<file stem><clip>' (seen on 5.8.3); accept the plain and
-    separator forms too so a naming change in a later engine does not read as a missing clip."""
-    return asset_name in (anim, glb_stem + anim, f"{glb_stem}_{anim}", f"{glb_stem}_Anim_{anim}")
-
-
 def axes_close(rot_a, rot_b):
     xa = (rot_a.get_forward_vector(), rot_a.get_right_vector(), rot_a.get_up_vector())
     xb = (rot_b.get_forward_vector(), rot_b.get_right_vector(), rot_b.get_up_vector())
@@ -172,33 +176,100 @@ def import_ship_scene(dest, glb):
     return ok
 
 
-def import_crew_assets(dest, glb, skeleton=None):
-    """AssetImportTask, which is synchronous. InterchangeManager.import_asset is NOT: in a
-    commandlet its skeletal-mesh import never finished (5.8.3). To reuse a skeleton the task
-    options must be an InterchangePipelineStackOverride; a bare pipeline in task.options is
-    silently ignored and a new skeleton is made."""
-    task = unreal.AssetImportTask()
-    task.filename = str(glb)
-    task.destination_path = dest
-    task.automated = True
-    task.replace_existing = True
-    task.save = False
-    if skeleton is not None:
-        assets = unreal.InterchangeGenericAssetsPipeline()
-        skp = assets.get_editor_property("common_skeletal_meshes_and_animations_properties")
-        skp.set_editor_property("skeleton", skeleton)
-        stack = unreal.InterchangePipelineStackOverride()
-        stack.add_pipeline(assets)
-        stack.add_pipeline(unreal.InterchangeGLTFPipeline())
-        task.options = stack
-    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
-    return [str(p) for p in task.imported_object_paths]
+def crew_pipeline(base, cid, skeleton=None):
+    """The combining pipeline install_import_hook.py sets up for a user's project (one
+    SkeletalMesh per crew member) and, for every crew after the first, the first crew's skeleton.
+    Its own asset per crew: overrides must be saved assets."""
+    return combining_pipeline("/Interchange/Pipelines/DefaultGLTFSceneAssetsPipeline",
+                              f"{base}/Pipelines/P_Crew_{cid}", skeleton)
+
+
+def import_crew_scene(dest, glb, pipeline):
+    """Import Into Level of one crew GLB, as a user does once install_import_hook.py has set up
+    their project: the combining pipeline above, Epic's glTF and level pipelines, then our hook
+    (unreal/me3d_import_hook.py), which puts each item of equipment back on its bone. Returns the
+    actors it made. One per process: see run_import_test.py."""
+    hook_path = hook.ME3DCrewEquipmentPipeline.get_default_object().get_path_name()
+    before = set(all_actors())
+    mgr = unreal.InterchangeManager.get_interchange_manager_scripted()
+    params = unreal.ImportAssetParameters()
+    params.is_automated = True
+    params.replace_existing = True
+    ov = params.get_editor_property("override_pipelines")
+    for p in (pipeline, "/Interchange/Pipelines/DefaultGLTFPipeline.DefaultGLTFPipeline",
+              "/Interchange/Pipelines/DefaultSceneLevelPipeline.DefaultSceneLevelPipeline", hook_path):
+        ov.append(unreal.SoftObjectPath(p))
+    params.set_editor_property("override_pipelines", ov)
+    mgr.import_scene(dest, unreal.InterchangeManager.create_source_data(str(glb)), params)
+    mgr.wait_until_all_tasks_done(True)
+    return [a for a in all_actors() if a not in before]
+
+
+def clone_crew(rig, items):
+    """Another crew member like `rig`: same mesh, each item on the same bone at the same offset."""
+    xf = rig.get_actor_transform()
+    r = actors_ss.spawn_actor_from_class(unreal.SkeletalMeshActor, xf.translation, xf.rotation.rotator())
+    r.skeletal_mesh_component.set_skeletal_mesh_asset(rig.skeletal_mesh_component.get_skeletal_mesh_asset())
+    out = []
+    for it in items:
+        ixf = it.get_actor_transform()
+        a = actors_ss.spawn_actor_from_class(unreal.StaticMeshActor, ixf.translation, ixf.rotation.rotator())
+        a.static_mesh_component.set_mobility(it.static_mesh_component.mobility)
+        a.static_mesh_component.set_static_mesh(it.static_mesh_component.static_mesh)
+        if it.get_attach_parent_actor() == rig:
+            hook.attach_to_bone(a, r, it.root_component.get_attach_socket_name(),
+                                it.root_component.get_relative_transform())
+        out.append(a)
+    return r, out
+
+
+VIEW_PREFIX = "ME3D_View_"   # actors only for a person looking at the level; no check counts them
+
+
+def add_viewing_set(base):
+    """Sun, sky and a sea at the waterline (z = 0, contract section 1), so the level makes sense
+    when the app's "Open in Unreal" opens it in the editor. Nothing here is part of the package."""
+    sun = actors_ss.spawn_actor_from_class(unreal.DirectionalLight, unreal.Vector(0, 0, 2000),
+                                           unreal.Rotator(roll=0, pitch=-35, yaw=-50))
+    sun.light_component.set_mobility(unreal.ComponentMobility.MOVABLE)   # live light: nothing to bake
+    sun.light_component.set_atmosphere_sun_light(True)
+    sky = actors_ss.spawn_actor_from_class(unreal.SkyLight, unreal.Vector(0, 0, 2000), unreal.Rotator(0, 0, 0))
+    sky.light_component.set_mobility(unreal.ComponentMobility.MOVABLE)
+    sky.light_component.set_real_time_capture(True)
+    air = actors_ss.spawn_actor_from_class(unreal.SkyAtmosphere, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
+    fog = actors_ss.spawn_actor_from_class(unreal.ExponentialHeightFog, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
+    tools = unreal.AssetToolsHelpers.get_asset_tools()
+    water = tools.create_asset("MI_Sea", f"{base}/View", unreal.MaterialInstanceConstant,
+                               unreal.MaterialInstanceConstantFactoryNew())
+    water.set_editor_property("parent", unreal.load_asset("/Engine/BasicShapes/BasicShapeMaterial"))
+    unreal.MaterialEditingLibrary.set_material_instance_vector_parameter_value(
+        water, "Color", unreal.LinearColor(0.02, 0.09, 0.16, 1.0))
+    unreal.MaterialEditingLibrary.set_material_instance_scalar_parameter_value(water, "Roughness", 0.15)
+    sea = actors_ss.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
+    sea.static_mesh_component.set_static_mesh(unreal.load_asset("/Engine/BasicShapes/Plane"))
+    sea.static_mesh_component.set_material(0, water)
+    sea.set_actor_scale3d(unreal.Vector(400, 400, 1))   # the plane is 1 m: 400 m of sea
+    for actor, name in ((sun, "Sun"), (sky, "SkyLight"), (air, "Sky"), (fog, "Haze"), (sea, "Sea")):
+        actor.set_actor_label(VIEW_PREFIX + name)
+
+
+def load_state():
+    return json.loads(STATE_FILE.read_text(encoding="utf-8")) if STATE_FILE.is_file() else {}
+
+
+def save_level(state):
+    saved_level = les.save_current_level()
+    saved_all = unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True, True)
+    state.setdefault("saved", []).append({"level": bool(saved_level), "dirty_packages": bool(saved_all)})
+    state["actors_before_save"] = sorted(labelled(all_actors()))
 
 
 # ------------------------------------------------------------------------------------ phase 1
 def phase_import():
+    """The level and the ship."""
     checks = Checks()
-    state = {"checks": [], "completed": False}
+    state = {"checks": [], "ship_done": False, "crew_done": [], "crew_assets": {}, "crew_actors": [],
+             "reuse_notes": []}
     m = read_manifest()
     problems = validate_manifest(m)
     checks.add("manifest_valid", not problems, "; ".join(problems) or
@@ -212,109 +283,119 @@ def phase_import():
         checks.add("level_created", False, f"new_level({level}) returned False")
         state["checks"] = checks.items
         return state
+    add_viewing_set(base)
     unreal.log(BEGIN)
-
-    # crew: one import per distinct id; later ones reuse the first skeleton
-    crew_assets = {}
-    shared_skeleton = None
-    reuse_notes = []
-    for c in m["crew"]:
-        cid = c["id"]
-        if cid in crew_assets:
-            continue
-        dest = f"{base}/Crew/{cid}/"
-        import_crew_assets(dest, PKG_DIR / c["glb"], skeleton=shared_skeleton)
-        meshes = assets_of(dest, unreal.SkeletalMesh)
-        if not meshes and shared_skeleton is not None:
-            reuse_notes.append(f"{cid}: import onto the shared skeleton produced nothing; "
-                               "retried with its own skeleton")
-            import_crew_assets(dest, PKG_DIR / c["glb"])
-            meshes = assets_of(dest, unreal.SkeletalMesh)
-        crew_assets[cid] = [x.get_path_name() for x in meshes]
-        if meshes and shared_skeleton is None:
-            shared_skeleton = meshes[0].get_editor_property("skeleton")
-    state["crew_assets"] = crew_assets
-    state["reuse_notes"] = reuse_notes
-
-    # Ship AFTER crew, on purpose: on 5.8.3 an AssetImportTask issued right after an
-    # Interchange scene import starts, never finishes, and returns nothing - the first crew
-    # simply went missing while the second imported fine.
-    ship_glb = PKG_DIR / m["ship"]["glb"]
-    if not import_ship_scene(f"{base}/Ship/", ship_glb):
+    if not import_ship_scene(f"{base}/Ship/", PKG_DIR / m["ship"]["glb"]):
         checks.add("ship_scene_import", False, "InterchangeManager.import_scene returned False")
+    save_level(state)
+    unreal.log(END)
+    state["checks"] = checks.items
+    state["ship_done"] = True
+    return state
 
 
-    # crew actors at their stations
+# ------------------------------------------------------------------------------------ phase 1b
+def phase_crew(state, cid):
+    """One distinct crew member: import it, then put a copy at each station that uses it."""
+    m = read_manifest()
+    base, level = paths_for(m)
+    if not les.load_level(level):
+        raise RuntimeError(f"load_level({level}) failed")
+    entries = [(i, c) for i, c in enumerate(m["crew"]) if c["id"] == cid]
+    unreal.log(BEGIN)
+    shared = state.get("shared_skeleton")
+    skeleton = unreal.load_asset(shared) if shared else None
+    new = import_crew_scene(f"{base}/Crew/{cid}/", PKG_DIR / entries[0][1]["glb"],
+                            crew_pipeline(base, cid, skeleton))
+    rigs = [a for a in new if isinstance(a, unreal.SkeletalMeshActor)]
+    if not rigs:
+        state["reuse_notes"].append(f"{cid}: Import Into Level made no skeletal mesh actor"
+                                    + (" (on the shared skeleton)" if skeleton else ""))
+        unreal.log(END)
+        return
+    rig = rigs[0]
+    mesh = rig.skeletal_mesh_component.get_skeletal_mesh_asset()
+    state["crew_assets"][cid] = [x.get_path_name() for x in assets_of(f"{base}/Crew/{cid}/", unreal.SkeletalMesh)]
+    if not shared and mesh is not None:
+        state["shared_skeleton"] = mesh.get_editor_property("skeleton").get_path_name()
+    items = [a for a in new if isinstance(a, unreal.StaticMeshActor)]
+    names = [a.get_actor_label() for a in items]
+    # The import hangs the crew off empties for the glTF scene and armature nodes; the crew stands
+    # at its station instead, so they go.
+    keep = unreal.AttachmentRule.KEEP_WORLD
+    loose = unreal.DetachmentRule.KEEP_WORLD
+    rig.detach_from_actor(loose, loose, loose)
+    for a in new:
+        if a not in rigs and a not in items:
+            actors_ss.destroy_actor(a)
+    copies = [(rig, items)] + [clone_crew(rig, items) for _ in entries[1:]]
+
     stations = labelled(all_actors())
-    placed = []
-    for i, c in enumerate(m["crew"]):
-        label = f"Crew__{i}_{c['id']}"
-        meshes = crew_assets.get(c["id"]) or []
-        loc = fr.blender_to_ue_location_cm(c["location_m"])
-        rot = fr.blender_to_ue_rotator(c["rotation_deg"])
-        actor = actors_ss.spawn_actor_from_class(unreal.SkeletalMeshActor, ue_vec(loc), ue_rot(rot))
-        actor.set_actor_label(label)
-        comp = actor.get_editor_property("skeletal_mesh_component")
-        anim_path = None
-        if meshes:
-            mesh = unreal.load_asset(meshes[0])
-            comp.set_skeletal_mesh_asset(mesh)
-            stem = Path(c["glb"]).stem
-            skel = mesh.get_editor_property("skeleton")
-            for a in assets_of(f"{base}/Crew/{c['id']}/", unreal.AnimSequence):
-                if anim_name_matches(a.get_name(), c["animation"], stem) and \
-                        a.get_editor_property("skeleton") == skel:
-                    anim_path = a.get_path_name()
-            if anim_path:
-                comp.set_animation_mode(unreal.AnimationMode.ANIMATION_SINGLE_NODE)
-                comp.override_animation_data(unreal.load_asset(anim_path), True, True, 0.0, 1.0)
+    anims = assets_of(f"{base}/Crew/{cid}/", unreal.AnimSequence)
+    stem = Path(entries[0][1]["glb"]).stem
+    for (i, c), (r, its) in zip(entries, copies):
+        label = f"Crew__{i}_{cid}"
+        r.set_actor_label(label)
+        for a, name in zip(its, names):
+            a.set_actor_label(f"{label}__{name}")
+        r.set_actor_location_and_rotation(ue_vec(fr.blender_to_ue_location_cm(c["location_m"])),
+                                          ue_rot(fr.blender_to_ue_rotator(c["rotation_deg"])), False, True)
+        comp = r.skeletal_mesh_component
+        anim = next((a for a in anims if fr.anim_name_matches(a.get_name(), c["animation"], stem)
+                     and mesh is not None and a.get_editor_property("skeleton") == mesh.get_editor_property("skeleton")), None)
+        if anim is not None:
+            comp.set_animation_mode(unreal.AnimationMode.ANIMATION_SINGLE_NODE)
+            comp.override_animation_data(anim, True, True, 0.0, 1.0)
         station = stations.get(c["station"])
         if station is not None:
             # ride with the part the station is on (a crane operator slews with the crane)
-            actor.attach_to_actor(station, "", unreal.AttachmentRule.KEEP_WORLD,
-                                  unreal.AttachmentRule.KEEP_WORLD, unreal.AttachmentRule.KEEP_WORLD, False)
-        placed.append({"label": label, "station_found": station is not None, "anim": anim_path})
-    state["crew_actors"] = placed
-
-    saved_level = les.save_current_level()
-    saved_all = unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True, True)
-    state["saved"] = {"level": bool(saved_level), "dirty_packages": bool(saved_all)}
-    ours = labelled(all_actors())
-    state["actors_before_save"] = sorted(ours)
+            r.attach_to_actor(station, "", keep, keep, keep, False)
+        state["crew_actors"].append({"label": label, "station_found": station is not None,
+                                     "anim": anim.get_path_name() if anim else None})
+    save_level(state)
     unreal.log(END)
-    state["checks"] = checks.items
-    state["completed"] = True
-    return state
+    state["crew_done"].append(cid)
 
 
 # ------------------------------------------------------------------------------------ phase 2
 def check_log(checks):
-    if not IMPORT_LOG or not Path(IMPORT_LOG).is_file():
-        return checks.add("import_log_clean", False, f"import log not found: {IMPORT_LOG!r}")
-    lines = Path(IMPORT_LOG).read_text(errors="replace").splitlines()
-    inside, errors = False, []
-    for line in lines:
-        if BEGIN in line and "ME3D_CHECK" not in line:
-            inside = True
-        elif END in line:
-            inside = False
-        elif inside and "Error:" in line:
-            errors.append(line.split("]", 2)[-1].strip())
-    seen_end = any(END in ln for ln in lines)
-    detail = f"{len(errors)} Error: line(s) during import" + (": " + " | ".join(errors[:5]) if errors else "")
-    if not seen_end:
-        detail += "; import never reached its end marker"
-    return checks.add("import_log_clean", not errors and seen_end, detail)
+    """Error: lines between the markers in every import process's log (ship, then each crew)."""
+    logs = [Path(p) for p in IMPORT_LOG.split(os.pathsep) if p]
+    if not logs or not all(p.is_file() for p in logs):
+        return checks.add("import_log_clean", False, f"import log(s) not found: {IMPORT_LOG!r}")
+    errors, unfinished = [], []
+    for log in logs:
+        lines = log.read_text(errors="replace").splitlines()
+        inside = False
+        for line in lines:
+            if BEGIN in line and "ME3D_CHECK" not in line:
+                inside = True
+            elif END in line:
+                inside = False
+            elif inside and "Error:" in line:
+                errors.append(f"{log.name}: " + line.split("]", 2)[-1].strip())
+        if not any(END in ln for ln in lines):
+            unfinished.append(log.name)
+    detail = f"{len(errors)} Error: line(s) in {len(logs)} import log(s)" + (": " + " | ".join(errors[:5]) if errors else "")
+    if unfinished:
+        detail += f"; never reached the end marker: {', '.join(unfinished)}"
+    return checks.add("import_log_clean", not errors and not unfinished, detail)
 
 
 def phase_verify():
-    state = json.loads(STATE_FILE.read_text(encoding="utf-8")) if STATE_FILE.is_file() else {}
+    state = load_state()
     checks = Checks(state.get("checks", []))
     m = read_manifest()
-    if not state.get("completed"):
+    if not state.get("ship_done"):
         checks.add("import_phase_completed", False,
-                   "the import process did not finish (see unreal_import.log)")
+                   "the ship import did not finish (see unreal_import.log)" + "; ".join(state.get("errors", [])))
         return checks, state.get("level")
+    wanted = list(dict.fromkeys(c["id"] for c in m["crew"]))
+    missing_crew = [cid for cid in wanted if cid not in state.get("crew_done", [])]
+    checks.add("import_phase_completed", not missing_crew,
+               f"ship and {len(wanted)} crew import(s) finished" if not missing_crew else
+               f"crew import did not finish for {missing_crew} (see unreal_crew_<id>.log); "
+               + "; ".join(state.get("errors", []) + state.get("reuse_notes", [])))
     base, level = paths_for(m)
     check_log(checks)
 
@@ -396,13 +477,18 @@ def phase_verify():
         skeletons[cid] = skel
         checks.add(f"crew_skeleton:{cid}", bool(meshes) and skel is not None,
                    f"{len(meshes)} SkeletalMesh, skeleton {skel.get_path_name() if skel else None}")
+        crew_gltf = fr.read_glb_json(PKG_DIR / next(c["glb"] for c in m["crew"] if c["id"] == cid))
+        skinned = [n.get("name") for n in crew_gltf.get("nodes", []) if "mesh" in n and "skin" in n]
+        on_disk = assets_of(f"{base}/Crew/{cid}/", unreal.SkeletalMesh)
+        checks.add(f"crew_one_mesh:{cid}", len(on_disk) == 1,
+                   f"{len(on_disk)} SkeletalMesh asset(s) from the GLB's {len(skinned)} skinned mesh(es) "
+                   f"{skinned}; one means a placed crew member is whole, not just its first part")
         stem = next(Path(c["glb"]).stem for c in m["crew"] if c["id"] == cid)
         anims = [x for x in assets_of(f"{base}/Crew/{cid}/", unreal.AnimSequence)]
         wanted = sorted({c["animation"] for c in m["crew"] if c["id"] == cid})
-        glb_clips = fr.glb_animation_names(fr.read_glb_json(PKG_DIR / next(
-            c["glb"] for c in m["crew"] if c["id"] == cid)))
+        glb_clips = fr.glb_animation_names(crew_gltf)
         for anim in wanted:
-            hit = [x for x in anims if anim_name_matches(x.get_name(), anim, stem)
+            hit = [x for x in anims if fr.anim_name_matches(x.get_name(), anim, stem)
                    and x.get_editor_property("skeleton") == skel]
             checks.add(f"crew_animation:{cid}:{anim}", bool(hit),
                        f"AnimSequence {hit[0].get_path_name()} on {skel.get_name() if skel else None}"
@@ -431,7 +517,7 @@ def phase_verify():
         anim = data.get_editor_property("anim_to_play")
         looping = data.get_editor_property("saved_looping")
         anim_ok = (anim is not None and mode == unreal.AnimationMode.ANIMATION_SINGLE_NODE and looping
-                   and anim_name_matches(anim.get_name(), c["animation"], Path(c["glb"]).stem))
+                   and fr.anim_name_matches(anim.get_name(), c["animation"], Path(c["glb"]).stem))
         parent = a.get_attach_parent_actor()
         # Independent cross-check: the station empty that Epic's glTF importer placed from the
         # ship GLB. The manifest-vs-actor comparison above uses our own frame conversion both
@@ -451,7 +537,52 @@ def phase_verify():
                    f"and {ang:.2f} deg from the manifest, {st_note}; playing "
                    f"{anim.get_name() if anim else None} (looping={looping}, mode={mode.name}); "
                    f"attached to {parent.get_actor_label() if parent else None}")
+        check_equipment(checks, actors, i, c, a)
     return checks, level
+
+
+def rest_centre(rig, item):
+    """Centre of an attached item's mesh in the crew's own frame with the skeleton in its rest
+    pose: the item's saved offset from its bone, then each bone's rest transform up to the root.
+    A crew member with an animation set is posed at that clip's first frame even in the editor,
+    so its live position would differ from the GLB's rest pose by however the clip moves."""
+    comp = rig.skeletal_mesh_component
+    xf, bone = item.root_component.get_relative_transform(), item.root_component.get_attach_socket_name()
+    while str(bone) not in ("None", ""):
+        xf = unreal.MathLibrary.compose_transforms(xf, comp.get_ref_pose_transform(comp.get_bone_index(bone)))
+        bone = comp.get_parent_bone(bone)
+    box = item.static_mesh_component.static_mesh.get_bounding_box()
+    return vtuple(xf.transform_location((box.min + box.max) * 0.5))
+
+
+def check_equipment(checks, actors, i, c, rig):
+    """Each item the GLB hangs on a bone: its own actor, Movable, attached to the crew member at
+    that bone, and where the GLB puts it. The place is worked out from the GLB alone
+    (me3d_frames.glb_item_centres_cm), not from Interchange's or the hook's conversion, and
+    compared in the crew member's own frame and rest pose (rest_centre), so it holds at any
+    station and whatever clip is set; the bone carries the item from there."""
+    gltf = fr.read_glb_json(PKG_DIR / c["glb"])
+    want = fr.glb_item_centres_cm(gltf)
+    for item, bone in fr.glb_bone_attachments(gltf).items():
+        name = f"crew_equipment:{i}:{item}"
+        a = actors.get(f"Crew__{i}_{c['id']}__{item}")
+        if not isinstance(a, unreal.StaticMeshActor):
+            checks.add(name, False, f"no actor for {item} (the GLB hangs it on {bone})")
+            continue
+        parent = a.get_attach_parent_actor()
+        socket = str(a.root_component.get_attach_socket_name())
+        mobility = a.static_mesh_component.mobility
+        if parent != rig:
+            checks.add(name, False, f"attached to {parent.get_actor_label() if parent else None}, not to "
+                                    f"{rig.get_actor_label()} (the GLB hangs it on {bone})")
+            continue
+        got = rest_centre(rig, a)
+        err = fr.distance(got, want[item])
+        ok = socket == bone and mobility == unreal.ComponentMobility.MOVABLE and err <= TOL_CM
+        checks.add(name, ok,
+                   f"on {rig.get_actor_label()} bone {socket} (GLB: {bone}), {mobility.name}; rest-pose centre "
+                   f"({got[0]:.1f}, {got[1]:.1f}, {got[2]:.1f}) cm in the crew's frame, {err:.2f} cm from where "
+                   f"the GLB puts it")
 
 
 def main():
@@ -461,9 +592,19 @@ def main():
         try:
             state = phase_import()
         except Exception:
-            state = {"completed": False, "error": traceback.format_exc()}
-            unreal.log_error("ME3D import failed:\n" + state["error"])
+            state = {"ship_done": False, "errors": [traceback.format_exc().strip().splitlines()[-1]]}
+            unreal.log_error("ME3D import failed:\n" + traceback.format_exc())
         STATE_FILE.write_text(json.dumps(state, indent=1))
+        return
+    if PHASE == "crew":
+        state = load_state()
+        if state.get("ship_done"):
+            try:
+                phase_crew(state, CREW_ID)
+            except Exception:
+                state.setdefault("errors", []).append(f"{CREW_ID}: " + traceback.format_exc().strip().splitlines()[-1])
+                unreal.log_error(f"ME3D crew import {CREW_ID} failed:\n" + traceback.format_exc())
+            STATE_FILE.write_text(json.dumps(state, indent=1))
         return
     level = None
     try:

@@ -1052,3 +1052,19 @@ describe('updating the model from the research', () => {
     expect(researchUpdate(null)).toBe('none');
   });
 });
+
+import { PANEL_KEEP, PANEL_MIN, dragHeight } from './panel';
+
+describe('a panel resized by dragging its top edge', () => {
+  it('grows when dragged up and shrinks when dragged down', () => {
+    expect(dragHeight(220, 500, 450, 900)).toBe(270);
+    expect(dragHeight(220, 500, 560, 900)).toBe(160);
+  });
+  it('keeps the buttons row and always leaves the viewers room above it', () => {
+    expect(dragHeight(220, 500, 900, 900)).toBe(PANEL_MIN);
+    expect(dragHeight(220, 500, -400, 900)).toBe(900 - PANEL_KEEP);
+  });
+  it('a window too small for both gives the panel its minimum, not a negative height', () => {
+    expect(dragHeight(220, 500, 0, 150)).toBe(PANEL_MIN);
+  });
+});

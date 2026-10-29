@@ -305,12 +305,18 @@ frame**, taken from their station at the moment of export.
 ## 9. Unreal import harness
 
 ```
-unreal/run_import_test.sh <package_dir>
+python unreal/run_import_test.py <package_dir> [--engine <UE_5.8 folder>]
 ```
 
 This imports the package into a throwaway UE 5.8 project (`unreal/HarnessProject`), builds a
 level with the ship and its crew at their stations, saves it, reloads it, and writes
-`<package_dir>/unreal_import_report.json`:
+`<package_dir>/unreal_import_report.json`. It runs on Windows and macOS. Crew come in the way a
+user's project does once `unreal/install_import_hook.py` has set it up: Import Into Level, the
+skinned parts combined into one SkeletalMesh, and every item of equipment (section 6) attached
+to its bone by the hook `unreal/me3d_import_hook.py`. Besides the ship and placement checks, the
+report has, per crew: `crew_one_mesh:<crew_id>` (one SkeletalMesh) and, per item,
+`crew_equipment:<n>:<Equipment__name>` (attached to its bone, Movable, and within 1 cm of where
+the GLB alone puts it in the rest pose). *(Proposed 29 Oct; awaiting Lester.)*
 
 ```json
 {"ok": bool, "engine": "5.8", "level": "/Game/ME3D/<id>/L_<id>",
@@ -378,7 +384,8 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | GET `/api/scenes/{id}` | | `Scene` with `stations` from the ship's parts |
 | PUT `/api/scenes/{id}` | `SceneSpec` | `{"scene"}` |
 | POST `/api/scenes/{id}/export` | | `{"job_id"}` → result `{"package_dir","zip_url"}` |
-| POST `/api/scenes/{id}/unreal-test` | | `{"job_id"}` → result: the Unreal report |
+| POST `/api/scenes/{id}/unreal-test` | | `{"job_id"}` → result: the Unreal report. 409 while an editor opened by `/api/unreal/open` is still open (a test rebuilds that level) |
+| POST `/api/unreal/open` | `{"level"}`: a report's `level` (`/Game/ME3D/<id>/L_<id>`) | `{"opened","level","project"}`: the Unreal editor, with its window, on this computer, showing the test project at that level (sun, sky and sea added by the harness; not part of the package). 400 not such a level, 404 no longer on disk, 409 a test is running or the editor is already open, 503 no Unreal 5.8. *(Proposed 29 Oct; awaiting Lester.)* |
 | GET `/api/files/{path}` | | serves files under the data folder (zips, packages) |
 
 `Project`:

@@ -116,6 +116,8 @@ export const api = {
   updateScene: (id: string, spec: SceneSpec) => call<{ scene: Scene }>('PUT', `/api/scenes/${enc(id)}`, spec),
   exportScene: (id: string) => call<{ job_id: string }>('POST', `/api/scenes/${enc(id)}/export`),
   unrealTest: (id: string) => call<{ job_id: string }>('POST', `/api/scenes/${enc(id)}/unreal-test`),
+  /** Open the level a Unreal test built in the Unreal editor, with its window, on this computer. */
+  unrealOpen: (level: string) => call<{ opened: boolean; level: string; project: string }>('POST', '/api/unreal/open', { level }),
 };
 
 export type ExportJobResult = ExportResult;

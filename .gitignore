@@ -9,6 +9,8 @@ unreal/HarnessProject/Intermediate/
 unreal/HarnessProject/Saved/
 unreal/HarnessProject/DerivedDataCache/
 unreal/HarnessProject/Content/ME3D/
+# written by the editor the first time "Open in Unreal" shows a test level
+unreal/HarnessProject/Config/DefaultInput.ini
 unreal/out/
 *.blend1
 .DS_Store
