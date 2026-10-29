@@ -7,8 +7,8 @@ import { AiWorking, ChatPanel, ErrorNote, JobLines, Loading, TopBar, useCarried 
 import { remember, useCatalog, useJobs, useProject, useProjects } from '../hooks';
 import { paths } from '../lib/routing';
 import { assetLabel, groupClothes, mergePatch, toggleIn } from '../lib/spec';
-import { GEAR_SWATCHES, HAIR_SWATCHES, describeMessage, hexToLinear, itemsFor, removeItemPatch, selectedSwatch, type DescribeSlot, type Swatch } from '../lib/describe';
-import type { CrewSpec, CustomItem, Vec3 } from '../types';
+import { GEAR_SWATCHES, HAIR_SWATCHES, describeMessage, hexToLinear, itemsFor, madeSomethingNew, removeItemPatch, selectedSwatch, type DescribeSlot, type Swatch } from '../lib/describe';
+import type { Attachment, CrewSpec, CustomItem, Vec3 } from '../types';
 import { CrewViewer } from '../viewer/Viewer';
 import { useCrewChat, useSpecEditor } from './CrewShared';
 
@@ -78,6 +78,7 @@ export function CrewWorkshop() {
   const [pickerName, setPickerName] = useState('');
   const [pickerSlot, setPickerSlot] = useState('Equipment');
   const [answeredAt, setAnsweredAt] = useState<number | null>(null);
+  const [itemsAtSend, setItemsAtSend] = useState<string[] | null>(null);
   const [said, setSaid] = useState<Partial<Record<DescribeSlot, string>>>({});
   const [describing, setDescribing] = useState<{ slot: DescribeSlot; since: number } | null>(null);
   const [blank, setBlank] = useState<DescribeSlot | null>(null);
@@ -127,6 +128,8 @@ export function CrewWorkshop() {
   }
 
   const customItems = spec.custom_items ?? [];
+  // Remember which items existed when the user asked, so the picker offer follows something new.
+  const sendTracked = (text: string, atts: Attachment[] = []) => { setItemsAtSend(customItems.map((i) => i.id)); return sendChat(text, atts); };
   // A description goes through the same chat as the panel on the left, prefixed with its slot, so
   // the AI knows where it belongs and the conversation stays one thread.
   const describe = async (slot: DescribeSlot) => {
@@ -135,7 +138,7 @@ export function CrewWorkshop() {
     setBlank(null);
     setSaid((d) => ({ ...d, [slot]: '' }));
     setDescribing({ slot, since: Date.now() });
-    try { await sendChat(text); } finally { setDescribing(null); }
+    try { await sendTracked(text); } finally { setDescribing(null); }
   };
   const describeBox = (slot: DescribeSlot, placeholder: string) => (
     <DescribeBox slot={slot} placeholder={placeholder} value={said[slot] ?? ''} busy={busy} blank={blank === slot}
@@ -149,7 +152,7 @@ export function CrewWorkshop() {
 
   const msgs = p?.messages ?? [];
   const last = msgs[msgs.length - 1];
-  const offerPicker = last?.who === 'AI' && msgs.length > 1 && answeredAt !== msgs.length;
+  const offerPicker = last?.who === 'AI' && answeredAt !== msgs.length && madeSomethingNew(itemsAtSend, customItems);
 
   const confirmPicker = () => {
     const n = pickerName.trim() || 'the new item';
@@ -184,7 +187,7 @@ export function CrewWorkshop() {
             label="Describe a new item or move"
             placeholder="Animation: brace as we come alongside"
             empty="Ask for anything the pickers don't have: a life vest like the boarding team wears, a beard, a move."
-            onSend={sendChat}
+            onSend={sendTracked}
             projectId={id}
             footer={describing ? <AiWorking text="AI is making what you described…" since={describing.since} /> : undefined}
             afterLastAi={offerPicker ? (

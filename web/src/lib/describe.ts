@@ -82,3 +82,12 @@ export function itemsFor(items: CustomItem[] | undefined, tab: 'Clothes' | 'Head
 export function removeItemPatch(items: CustomItem[] | undefined, id: string): { custom_items: CustomItem[] } {
   return { custom_items: (items ?? []).filter((i) => i.id !== id) };
 }
+
+/**
+ * Offer "Add as a picker" only when the AI's last turn actually made a new item: comparing the
+ * item ids from when the user sent with the ids now. Unknown "before" (page just opened) → no offer.
+ */
+export function madeSomethingNew(before: string[] | null, items: CustomItem[] | undefined): boolean {
+  if (!before) return false;
+  return (items ?? []).some((i) => !before.includes(i.id));
+}

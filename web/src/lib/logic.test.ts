@@ -229,7 +229,7 @@ describe('chat attachments', () => {
   });
 });
 
-import { HAIR_SWATCHES, describeMessage, hexToLinear, itemKind, itemsFor, removeItemPatch, selectedSwatch } from './describe';
+import { HAIR_SWATCHES, describeMessage, hexToLinear, itemKind, itemsFor, madeSomethingNew, removeItemPatch, selectedSwatch } from './describe';
 
 describe('made by description', () => {
   const item = (id: string, code: string, description = 'thing') => ({ id, code, description });
@@ -271,5 +271,15 @@ describe('made by description', () => {
     expect(removeItemPatch(items, 'a')).toEqual({ custom_items: [items[1]] });
     expect(removeItemPatch(items, 'zzz').custom_items).toHaveLength(2);
     expect(removeItemPatch(undefined, 'a')).toEqual({ custom_items: [] });
+  });
+});
+
+describe('picker offer', () => {
+  const item = (id: string) => ({ id, description: 'x', code: "crew.garment('Clothes__X', ['torso'], (1, 1, 1))" });
+  it('follows only a newly made item', () => {
+    expect(madeSomethingNew(['item_1'], [item('item_1')])).toBe(false);   // a reply that made nothing
+    expect(madeSomethingNew(['item_1'], [item('item_1'), item('item_2')])).toBe(true);
+    expect(madeSomethingNew(null, [item('item_1')])).toBe(false);         // page just opened
+    expect(madeSomethingNew([], undefined)).toBe(false);
   });
 });
