@@ -138,9 +138,9 @@ export function ShipResearch() {
             <>
               <SectionNav r={r} sec={sec} setSec={(s) => { setSec(s); setSel(null); }} />
               {sec === 'summary' && <Summary r={r} />}
-              {sec === 'photos' && <PhotosTab r={r} subject={subject} selected={sel?.kind === 'photo' ? selectedId : null} onSelect={selPhoto} onInspect={openInspect} onAsk={(m) => void ask(m)} busy={busy} />}
+              {sec === 'photos' && <PhotosTab r={r} subject={subject} selected={sel?.kind === 'photo' ? selectedId : null} onSelect={selPhoto} onInspect={openInspect} onAsk={(m) => void ask(m)} busy={anyWork} />}
               {sec === 'platform' && <Claims r={r} sel={sel} setSel={setSel} />}
-              {sec === 'closeups' && <CloseupsTab r={r} subject={subject} selected={sel?.kind === 'closeup' ? selectedId : null} onSelect={selCrop} onInspect={openInspect} onAsk={(m) => void ask(m)} busy={busy} />}
+              {sec === 'closeups' && <CloseupsTab r={r} subject={subject} selected={sel?.kind === 'closeup' ? selectedId : null} onSelect={selCrop} onInspect={openInspect} onAsk={(m) => void ask(m)} busy={anyWork} />}
               {sec === 'articulation' && <Articulation r={r} id={id!} />}
               {sec === 'plan' && <NotInContract what="The build plan with acceptance checks" have={(r.plan ?? []).length > 0}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>

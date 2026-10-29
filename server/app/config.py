@@ -39,6 +39,8 @@ class Settings:
     unreal_timeout_s: float = float(os.environ.get("ME3D_UNREAL_TIMEOUT_S", "3600"))
     agent_model: str = os.environ.get("ME3D_AGENT_MODEL", "claude-opus-5-5")
     route_model: str = os.environ.get("ME3D_ROUTE_MODEL", "claude-haiku-5-5")
+    # After a research turn with too few photographs, run a photo-finding turn in the same job.
+    photo_follow_up: bool = os.environ.get("ME3D_PHOTO_FOLLOW_UP", "1") != "0"
 
     @property
     def projects_dir(self) -> Path:

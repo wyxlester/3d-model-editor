@@ -19,13 +19,20 @@ function Head({ n, eyebrow, title, sub }: { n: string; eyebrow: string; title: s
   );
 }
 
+// Lester, 29 Oct: "whenever user prompt, ai should already start finding and populating relevant
+// photos". Every research request gathers photographs itself (the server follows a research turn
+// with a photo turn when there are too few), so these are small secondary links, not the way in.
 function Ask({ label, message, onAsk, busy }: { label: string; message: string; onAsk: (m: string) => void; busy: boolean }) {
   return (
-    <>
-      <button className="btn primary lg" disabled={busy} onClick={() => onAsk(message)}>{label}</button>
-      <span className="faint" style={{ fontSize: 12 }}>Sends to the research AI: “{message}”</span>
-    </>
+    <button className="btn sm" style={{ alignSelf: 'flex-start' }} disabled={busy} onClick={() => onAsk(message)}
+      title={`Sends to the research AI: “${message}”`}>{label}</button>
   );
+}
+
+function Gathering({ busy, what }: { busy: boolean; what: string }) {
+  return busy
+    ? <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span className="spinner" aria-hidden="true" />Finding {what}… they appear here as the research runs.</span>
+    : <span className="muted">The AI gathers {what} with every research request. Ask it anything in the chat and they arrive with the answer.</span>;
 }
 
 export function PhotosTab({ r, subject, selected, onSelect, onInspect, onAsk, busy }: {
@@ -49,12 +56,11 @@ export function PhotosTab({ r, subject, selected, onSelect, onInspect, onAsk, bu
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 12 }}>
         {head}
         <div className="card ph-empty">
-          <span style={{ fontWeight: 500 }}>No photographs recorded yet</span>
-          <span className="muted">
-            The research AI finds photographs; the server downloads each one, measures it and fingerprints it, so a copy is kept even if the
-            web page changes. They appear here with their credit, date, source and rights.
-          </span>
-          <Ask label="Find photographs" message={findPhotosPrompt(subject)} onAsk={onAsk} busy={busy} />
+          <span style={{ fontWeight: 500 }}>No photographs yet</span>
+          <Gathering busy={busy} what="photographs" />
+          <span className="faint" style={{ fontSize: 12 }}>Each one is downloaded, measured and fingerprinted, so a copy is kept even if the web page
+            changes, and shown with its credit, date, source and rights.</span>
+          {!busy && <Ask label="Look for photographs now" message={findPhotosPrompt(subject)} onAsk={onAsk} busy={busy} />}
         </div>
       </div>
     );
@@ -70,6 +76,8 @@ export function PhotosTab({ r, subject, selected, onSelect, onInspect, onAsk, bu
       <div className="ph-count">
         <b>{line.count}</b>
         <span className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>Counted by: {line.method}</span>
+        {busy ? <span className="faint" style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}><span className="spinner" aria-hidden="true" />Research running: new photographs appear here when it finishes.</span>
+          : <Ask label="Find more photographs" message={findPhotosPrompt(subject)} onAsk={onAsk} busy={busy} />}
       </div>
       <Coverage r={r} onOpen={(id) => open(id, photos.map((p) => p.id))} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -171,13 +179,14 @@ export function CloseupsTab({ r, selected, onSelect, onInspect, onAsk, busy, sub
           <span style={{ fontWeight: 500 }}>No close-ups yet</span>
           {photos.length ? (
             <>
-              <span className="muted">The research AI marks the part of a recorded photograph worth a closer look; the server cuts that crop from the stored file. Nothing is redrawn.</span>
-              <Ask label="Crop close-ups" message={CROP_PROMPT} onAsk={onAsk} busy={busy} />
+              <Gathering busy={busy} what="close-ups" />
+              <span className="faint" style={{ fontSize: 12 }}>Each is cut from a stored photograph; nothing is redrawn.</span>
+              {!busy && <Ask label="Crop close-ups now" message={CROP_PROMPT} onAsk={onAsk} busy={busy} />}
             </>
           ) : (
             <>
-              <span className="muted">Close-ups are cut from recorded photographs, and this research has none yet. Find photographs first.</span>
-              <Ask label="Find photographs" message={findPhotosPrompt(subject)} onAsk={onAsk} busy={busy} />
+              <Gathering busy={busy} what="photographs and close-ups" />
+              {!busy && <Ask label="Look for photographs now" message={findPhotosPrompt(subject)} onAsk={onAsk} busy={busy} />}
             </>
           )}
         </div>

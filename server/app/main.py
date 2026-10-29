@@ -588,6 +588,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             except Exception as e:
                 store.add_message(pid, "AI", f"Sorry, I hit a problem and changed nothing: {e}")
                 raise JobError(f"AI run failed: {e}")
+            if mode == "research":
+                reply = photo_follow_up(pid, reply, log)
             store.add_message(pid, "AI", reply)
             version = store.load(pid)["version"]
             result = {"reply": reply, "version": version,
@@ -606,6 +608,37 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         else:
             label = f"{'Research' if mode == 'research' else 'Chat'}: {short(message)}"
         return {"job_id": jobs.submit("chat", work, project=pid, label=label)}
+
+    MIN_PHOTOS = 3
+
+    def usable_photos(pid: str) -> int:
+        research = store.load(pid).get("research") or {}
+        return sum(1 for ph in research.get("photos") or [] if ph.get("status") != "excluded")
+
+    def photo_follow_up(pid: str, reply: str, log) -> str:
+        """Lester, 29 Oct: "whenever user prompt, ai should already start finding and populating
+        relevant photos". Pictures are the visual reference, so a research turn that ends with fewer
+        than MIN_PHOTOS usable photographs is followed, in the same job, by a turn that only finds
+        photographs and crops close-ups. Its reply is added to the first one."""
+        if not settings.photo_follow_up or usable_photos(pid) >= MIN_PHOTOS:
+            return reply
+        project = store.load(pid)
+        subject = (project.get("research") or {}).get("subject") or project.get("name") or "this vessel"
+        log("• Finding photographs")
+        prompt = (f"{research_media_context(project)}Find real photographs of {subject} and add them with "
+                  "add_photo, each with full provenance (credit, date, source page, rights, what it is useful for). "
+                  f"Add at least {MIN_PHOTOS}, aiming for 6 to 10, covering port, starboard, bow, stern, a top or "
+                  "elevated view, and details. Prefer the exact vessel or class; similar boats are 'comparison'. "
+                  "Then crop close-ups with add_closeup of the fittings that change the model, and record what "
+                  "the photographs cover and miss with set_coverage. Change nothing else in the research. "
+                  "Reply in one or two plain sentences: how many photographs and close-ups you added, and "
+                  "which views are still missing.")
+        try:
+            _session, more = run_agent(pid, prompt, "research", log)
+        except Exception as e:  # the research itself is saved; say what didn't happen
+            log(f"Finding photographs failed: {e}")
+            return reply + f"\n\n(I couldn't add photographs this time: {e}. Ask again and I'll retry.)"
+        return f"{reply}\n\n{more}".strip()
 
     def pin_prompt(pid: str, pin: dict) -> str:
         parts = store.parts(pid, store.load(pid)["version"])

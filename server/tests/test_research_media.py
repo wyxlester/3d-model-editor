@@ -480,3 +480,38 @@ def test_preview_of_a_big_photo_stays_small_enough_for_the_ai_connection():
     assert mime == "image/jpeg" and len(look) <= rm.PREVIEW_MAX_BYTES
     w, h = Image.open(io.BytesIO(look)).size
     assert max(w, h) <= 1024 and abs(scale - 4032 / w) < 0.01  # boxes still convert back to the photo
+
+
+def test_every_research_request_goes_on_to_find_photographs(make_client, settings):
+    # Lester, 29 Oct: "whenever user prompt, ai should already start finding and populating relevant
+    # photos" -- no button needed. Too few photos after a research turn -> a photo turn follows.
+    from app.agent import ScriptedAgent
+    from conftest import create_ready, wait_job
+    settings.photo_follow_up = True
+    agent = ScriptedAgent(reply="Researched.")
+    c = make_client(agent=agent)
+    p = create_ready(c)
+    job = wait_job(c, c.post(f"/api/projects/{p['id']}/chat", json={"message": "fishing sampans", "mode": "research"}).json()["job_id"])
+    assert job["status"] == "done", job
+    assert len(agent.prompts) == 2 and "add_photo" in str(agent.prompts[1]) and "Find real photographs" in str(agent.prompts[1])
+    assert "• Finding photographs" in job["log"]
+    assert job["result"]["reply"] == "Researched.\n\nResearched."  # both replies kept
+
+
+def test_no_photo_turn_when_there_are_enough_photos(make_client, settings, monkeypatch):
+    from app.agent import ScriptedAgent
+    from conftest import create_ready, wait_job
+    settings.photo_follow_up = True
+    agent = ScriptedAgent(reply="Researched.")
+    c = make_client(agent=agent)
+    p = create_ready(c)
+    import app.main as m
+    real = m.ProjectStore.load
+    def load(self, pid):
+        out = real(self, pid)
+        out["research"] = {"photos": [{"id": f"P0{i}", "status": "baseline"} for i in range(1, 4)]}
+        return out
+    monkeypatch.setattr(m.ProjectStore, "load", load)
+    job = wait_job(c, c.post(f"/api/projects/{p['id']}/chat", json={"message": "more detail", "mode": "research"}).json()["job_id"])
+    assert job["status"] == "done", job
+    assert len(agent.prompts) == 1
