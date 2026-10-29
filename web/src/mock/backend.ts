@@ -6,10 +6,11 @@ import { httpErrorText } from '../lib/designPlan';
 import { mergePatch } from '../lib/spec';
 import { MODULES, isModuleId, moduleOfItem } from '../lib/modules';
 import type {
-  Attachment, Catalog, CustomItem, Job, Message, ModuleId, Part, Pin, Project, ProjectSummary, RouteResult, Scene, SceneSpec, UnrealReport, VersionInfo,
+  Attachment, Catalog, CustomItem, Job, Message, ModuleId, Part, Pin, Project, ProjectSummary, Research, RouteResult, Scene, SceneSpec, UnrealReport, VersionInfo,
 } from '../types';
 import shipPartsJson from '../../public/mock/ship_parts.json';
 import { mockResearch } from './research';
+import { addMockPhotos, mentionsPhotos } from './photos';
 import { planState } from '../lib/designPlan';
 
 const shipParts = shipPartsJson as unknown as Part[];
@@ -221,7 +222,7 @@ function createCustom(body: { name?: string; brief?: string }) {
 
 function customResearchTurn(p: Store['projects'][string], message: string) {
   const big = message.match(/(\d{2,3})\s*m\b/);
-  const prev = p.research as { _loa?: number } | null;
+  const prev = p.research as (Research & { _loa?: number }) | null;
   const loa = big ? Number(big[1]) : prev?._loa ?? 36;
   const beam = Math.round(loa * 0.2 * 10) / 10;
   p.research = {
@@ -239,7 +240,15 @@ function customResearchTurn(p: Store['projects'][string], message: string) {
       { question: 'Should the tender garage in the stern open?', meanwhile: 'Closed, not articulated' },
     ],
     articulation: [],
+    // Photographs and close-ups carry over: a research turn amends the record, it does not restart it.
+    ...(prev?.photos ? { photos: prev.photos, closeups: prev.closeups, coverage: prev.coverage, photo_count: prev.photo_count, count_method: prev.count_method } : {}),
   };
+  let photoNote = '';
+  if (mentionsPhotos(message)) {
+    const got = addMockPhotos(p.research, p.name);
+    p.research = { ...got.research, _loa: loa } as Research;
+    photoNote = ` ${got.reply.replace(/^\(mock\) /, '')}`;
+  }
   p.research_rev = (p.research_rev ?? 0) + 1;
   const plan = p.design_plan;
   const asked = /plan/i.test(message);
@@ -262,7 +271,7 @@ function customResearchTurn(p: Store['projects'][string], message: string) {
       spec: { schema: 'me3d.ship_spec/1', type: 'custom', params: { loa_m: loa, beam_m: beam, draught_m: 2.1 } },
     };
   }
-  const reply: Message = { who: 'AI', text: `(mock) ${note}`, at: now() };
+  const reply: Message = { who: 'AI', text: `(mock) ${note}${photoNote}`, at: now() };
   p.messages = [...p.messages, reply];
   return { message: reply, research_saved: true, plan_saved: p.design_plan?.status === 'draft' };
 }
@@ -385,7 +394,13 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
     const research = body.mode === 'research';
     if (research && p.base === 'custom') return startJob(['Reading your description and photos', 'Searching sources', 'Updating the research', 'Drafting the design plan'], () => customResearchTurn(p, String(body.message)));
     return startJob(research ? ['Reading the research', 'Searching sources', 'Updating the research'] : ['Reading the request', ...buildSteps], () => {
-      const reply: Message = { who: 'AI', text: research ? `(mock) Noted for the research: “${body.message}”. No real search runs in mock mode.` : `(mock) Done: “${body.message}”. Rebuilt as a new version.`, at: now() };
+      let said = research ? `(mock) Noted for the research: “${body.message}”. No real search runs in mock mode.` : `(mock) Done: “${body.message}”. Rebuilt as a new version.`;
+      if (research && mentionsPhotos(String(body.message))) {
+        const got = addMockPhotos(p.research, p.name);
+        p.research = got.research;
+        said = got.reply;
+      }
+      const reply: Message = { who: 'AI', text: said, at: now() };
       p.messages = [...p.messages, reply];
       const changed = research ? [] : mockDescribed(p, String(body.message), body.module);
       if (!research) newVersion(p, String(body.message).slice(0, 60));
