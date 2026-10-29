@@ -220,7 +220,7 @@ Every body is JSON. Long work returns `{"job_id"}`; poll `GET /api/jobs/{id}`, w
 |---|---|---|
 | GET `/api/health` | | `{"blender":bool,"mpfb":bool,"ai":bool,"unreal":bool}` |
 | GET `/api/catalog` | | `{"ships":[{"type","name","description"}],"crew":[{"id","name"}],"clothes":[str],"equipment":[str],"animations":[str]}` |
-| POST `/api/route` | `{"message"}` | `{"destination":"ship_research|ship_build|crew|animation|assembly|review|clarify","reason","project_id":str|null}` |
+| POST `/api/route` | `{"message","attachments"?:[file name]}` (names only; the files go with the carried message) | `{"destination":"ship_research|ship_build|crew|animation|assembly|review|clarify","reason","project_id":str|null}` |
 | GET `/api/projects` | | `[ProjectSummary]` |
 | POST `/api/projects` | `{"kind":"ship|crew","base":"container|sampan|tanker|male_default","name"?}` | `{"project", "job_id"}` (first build) |
 | GET `/api/projects/{id}` | | `Project` (below) |

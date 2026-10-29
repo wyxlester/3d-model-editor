@@ -67,3 +67,14 @@ def test_route_endpoint(make_client):
     assert c.post("/api/route", json={"message": "put a gunner on the bow"}).json() == {
         "destination": "assembly", "reason": "Crew on a ship.", "project_id": None}
     assert c.post("/api/route", json={"message": ""}).status_code == 400
+
+
+def test_route_is_told_which_files_are_attached(make_client):
+    # Lester's yacht photo: the router only reads text, saw "the image attached", and said none came.
+    seen = []
+    c = make_client(llm=lambda p, s: seen.append(p) or '{"destination": "ship_research", "reason": "Opening research."}')
+    c.post("/api/route", json={"message": "a yacht like the image attached", "attachments": ["yacht.jpg"]})
+    assert "Attached files: yacht.jpg" in seen[-1]
+    c.post("/api/route", json={"message": "a yacht"})
+    assert "Attached files" not in seen[-1]
+    assert c.post("/api/route", json={"message": "x", "attachments": "yacht.jpg"}).status_code == 400

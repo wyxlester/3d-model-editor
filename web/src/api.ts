@@ -57,7 +57,8 @@ const enc = encodeURIComponent;
 export const api = {
   health: () => call<Health>('GET', '/api/health'),
   catalog: () => call<Catalog>('GET', '/api/catalog'),
-  route: (message: string) => call<RouteResult>('POST', '/api/route', { message }),
+  route: (message: string, attachments: string[] = []) =>
+    call<RouteResult>('POST', '/api/route', attachments.length ? { message, attachments } : { message }),
 
   projects: () => call<ProjectSummary[]>('GET', '/api/projects'),
   createProject: (kind: ProjectKind, base: ProjectBase, name?: string) =>

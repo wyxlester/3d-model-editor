@@ -1,6 +1,8 @@
 """Home-screen routing (POST /api/route): one small, tool-less model call that classifies the
 message. Anything unparseable or out of vocabulary becomes "clarify" — a misroute should cost the
-user one question, never a wrong action (the user confirms the destination anyway)."""
+user one question, never a wrong action. Home opens the destination at once when it is sure
+(Lester, 29 Oct: "the web page should redirect url to either ship or crew"); the screen only opens,
+nothing is changed, so a misroute costs a click on the top bar."""
 from __future__ import annotations
 
 import asyncio
@@ -19,6 +21,8 @@ Destinations:
 - assembly: putting crew on a ship, stations, crew acting on a ship.
 - review: a customer meeting, presenting, exporting, Unreal.
 - clarify: you are not sure.
+Attached files are listed by name only; you cannot see them, and they travel with the message to the screen you pick. Never say a file is missing.
+"reason" is one short plain sentence spoken to the user ("you", never "the user"), saying what you are opening and why.
 Answer with ONLY a JSON object: {"destination": "...", "reason": "<one short plain sentence>", "project_id": "<id from the list or null>"}"""
 
 LLM = Callable[[str, str], str]
@@ -46,9 +50,10 @@ def parse_route(text: str, project_ids: set[str]) -> dict:
             "project_id": pid if pid in project_ids else None}
 
 
-def route(message: str, projects: list[dict], llm: LLM) -> dict:
+def route(message: str, projects: list[dict], llm: LLM, attachments: list[str] | None = None) -> dict:
     listing = "\n".join(f"- {p['id']}: {p['kind']} '{p['name']}'" for p in projects) or "(none)"
-    prompt = f"Existing projects:\n{listing}\n\nMessage: {message}"
+    files = f"\nAttached files: {', '.join(attachments)}" if attachments else ""
+    prompt = f"Existing projects:\n{listing}\n\nMessage: {message}{files}"
     try:
         text = llm(prompt, ROUTE_SYSTEM)
     except Exception as e:  # the model being unreachable must not break Home

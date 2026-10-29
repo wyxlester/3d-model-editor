@@ -124,8 +124,11 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         msg = body.get("message")
         if not isinstance(msg, str) or not msg.strip():
             raise HTTPException(400, "message is required")
+        names = body.get("attachments") or []
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+            raise HTTPException(400, "attachments must be a list of file names")
         projects = [store.api_summary(pid) for pid in store.ids()]
-        return route(msg, projects, llm)
+        return route(msg, projects, llm, names[:10])
 
     # ---- projects -----------------------------------------------------------------------
     @app.get("/api/projects")

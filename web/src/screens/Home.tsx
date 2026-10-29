@@ -34,6 +34,11 @@ const NEW: { kind: ProjectKind; base: ProjectBase; label: string }[] = [
   { kind: 'crew', base: 'male_default', label: 'Default male crew' },
 ];
 
+const toCarried = (turns: Turn[]): Message[] => turns.filter((t) => !t.pending).map((t) => ({
+  who: t.who === 'me' ? 'You' : 'AI', text: t.text, at: new Date().toISOString(),
+  ...(t.attachments?.length ? { attachments: t.attachments } : {}),
+}));
+
 export function Home() {
   const nav = useNavigate();
   const { health, error: healthErr } = useHealth();
@@ -55,18 +60,22 @@ export function Home() {
     setDraft(''); setEmpty(false); setErr(null); files.clear();
     setThread((t) => [...t, { who: 'me', text, attachments }, { who: 'ai', text: 'Working out where this belongs…', pending: true }]);
     try {
-      const r = await api.route(text);
+      const r = await api.route(text, attachments.map((a) => a.name));
       const target = targetFor(r.destination, r.project_id);
-      setThread((t) => [...t.slice(0, -1), target
-        ? { who: 'ai', text: r.reason, route: target }
-        : { who: 'ai', text: r.reason || 'I’m not sure which this is. What do you want to change?', clarify: true }]);
+      if (target) {
+        // Sure of the workshop: open it straight away (Lester, 29 Oct), carrying the conversation and files.
+        const turns: Turn[] = [...thread, { who: 'me', text, attachments }, { who: 'ai', text: r.reason }];
+        nav(target.path, { state: { carried: toCarried(turns) } });
+        return;
+      }
+      setThread((t) => [...t.slice(0, -1), { who: 'ai', text: r.reason || 'I’m not sure which this is. What do you want to change?', clarify: true }]);
     } catch (e) {
       setThread((t) => t.slice(0, -1));
       setErr(errorText(e));
     }
   };
 
-  const carried = (): Message[] => thread.filter((t) => !t.pending).map((t) => ({ who: t.who === 'me' ? 'You' : 'AI', text: t.text, at: new Date().toISOString(), ...(t.attachments?.length ? { attachments: t.attachments } : {}) }));
+  const carried = (): Message[] => toCarried(thread);
 
   const create = (kind: ProjectKind, base: ProjectBase, label: string) => {
     let id = '';
