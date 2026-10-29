@@ -113,6 +113,9 @@ export function ShipBuild() {
 
   const report = project?.build_report ?? {};
   const building = !!project && !project.model_url;
+  const hint = viewing ? `Viewing older v${viewing}, read-only. Commenting takes you back to the current version.`
+    : pinMode ? (hover ? `Pointing at ${partLabel(hover)}. Click to comment. Esc to cancel.` : 'Click any part of the model. Esc to cancel.')
+      : 'Or click a pin to open its thread.';
 
   return (
     <>
@@ -154,11 +157,7 @@ export function ShipBuild() {
               onClick={() => { if (viewing) { setViewing(null); setPinMode(true); } else setPinMode(!pinMode); setSelPin(null); setDraft(null); }}>
               {pinMode ? 'Placing a comment…' : 'Comment on a part'}
             </button>
-            <span className="faint" style={{ fontSize: 12 }}>
-              {viewing ? `Viewing older v${viewing}, read-only. Commenting takes you back to the current version.`
-                : pinMode ? (hover ? `Pointing at ${partLabel(hover)}. Click to comment. Esc to cancel.` : 'Click any part of the model. Esc to cancel.')
-                  : 'Or click a pin to open its thread.'}
-            </span>
+            <span className="faint toolbar-hint" title={hint}>{hint}</span>
             {viewing && <button className="btn primary sm" onClick={() => setViewing(null)}>Back to current v{current}</button>}
             <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
               <ViewButtons view={view} onView={(v) => { setView(v); setViewNonce((n) => n + 1); }} />

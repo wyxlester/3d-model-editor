@@ -200,7 +200,7 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
             <button className={`btn ${pinMode ? 'primary' : 'selected'}`} onClick={() => { setPinMode(!pinMode); setDraft(null); }}>
               {pinMode ? 'Placing a pin…' : 'Pin customer feedback'}
             </button>
-            <span className="faint" style={{ fontSize: 12 }}>{pinMode ? 'Click the part they point at, on the right-hand model.' : 'Pins show on the right-hand version.'}</span>
+            <span className="faint toolbar-hint">{pinMode ? 'Click the part they point at, on the right-hand model.' : 'Pins show on the right-hand version.'}</span>
             <span style={{ marginLeft: 'auto' }}><ViewButtons view={view} onView={setView} /></span>
           </div>
           <div ref={compareRef} style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1, background: 'var(--border)' }}>

@@ -178,7 +178,7 @@ function AssemblyScene({ sceneId }: { sceneId: string }) {
         <section className="stage">
           <div className="toolbar">
             <ViewButtons view={view} onView={setView} />
-            <span className="faint" style={{ marginLeft: 8, fontSize: 12 }}>
+            <span className="faint toolbar-hint" style={{ marginLeft: 8 }}>
               {picked ? 'Now click a point on the deck.' : 'Walk routes are not built yet.'}
             </span>
             <span style={{ marginLeft: 'auto', display: 'flex', gap: 14 }} className="muted">

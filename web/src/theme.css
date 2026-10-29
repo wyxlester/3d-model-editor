@@ -69,6 +69,8 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .side.left { border-right: 1px solid var(--border); }
 .side.right { border-left: 1px solid var(--border); }
 .toolbar { display: flex; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
+/* Takes only the space left over and truncates, so a long hint never wraps the toolbar and resizes the viewport. */
+.toolbar-hint { flex: 1 1 0; min-width: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .statusbar { display: flex; gap: 20px; flex-wrap: wrap; padding: 10px 16px; border-top: 1px solid var(--border); background: var(--panel-2); font-size: 13px; }
 .scroll { overflow-y: auto; }
 
