@@ -4,6 +4,7 @@
  "id": "sampan_boat",
  "name": "Sampan",
  "description": "An 8 m open wooden Singapore/Malay sampan (bumboat-style) with a raised bow, painted eyes, floorboards and thwarts, an awning on four posts and a tiller outboard that steers and tilts.",
+ "category": "Fishing and small craft",
  "params": {
   "loa_m": 8.0,
   "beam_m": 1.9,

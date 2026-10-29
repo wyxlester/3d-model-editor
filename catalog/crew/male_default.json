@@ -3,6 +3,7 @@
  "id": "crew_male_default",
  "name": "Default male crew",
  "description": "A deck crew member: MPFB2 (MakeHuman) body on the shared game_engine skeleton (53 bones, Unreal mannequin names), CC0 MakeHuman work suit and shoes, an orange life vest, and five keyed animations. Built by blender/build_crew.py; about 34k triangles.",
+ "category": "Merchant crew",
  "body": {"gender": "male", "height_cm": 178, "weight": 0.5, "muscle": 0.5, "age_years": 30, "skin": "medium"},
  "clothes": {"suit": "male_worksuit01", "shoes": "shoes01", "hat": null, "suit_color": null},
  "equipment": ["life_vest"],

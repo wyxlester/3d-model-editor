@@ -1,0 +1,5 @@
+{
+  "ship": ["Commercial vessels", "Military vessels", "Law enforcement and coast guard", "Fishing and small craft",
+           "Passenger and leisure", "Service and harbour craft", "Other"],
+  "crew": ["Navy", "Coast guard and police", "Merchant crew", "Fishermen", "Civilians and passengers", "Other"]
+}

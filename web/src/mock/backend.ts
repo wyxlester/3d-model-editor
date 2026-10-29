@@ -25,7 +25,7 @@ const jobs: Record<string, MockJob> = {};
 
 function seed(): Store {
   const ship: Store['projects'][string] = {
-    id: 'p_pc303', kind: 'ship', name: 'PCG 3-Series · PC 303', base: 'sampan', version: 2,
+    id: 'p_pc303', kind: 'ship', name: 'PCG 3-Series · PC 303', base: 'sampan', version: 2, category: 'Law enforcement and coast guard',
     spec: {
       schema: 'me3d.ship_spec/1', type: 'sampan', id: 'pcg_pc303', name: 'PCG 3-Series · PC 303',
       params: { loa_m: 16, beam_m: 4.2, draught_m: 0.8, depth_m: 1.6, hull_color: [0.6, 0.64, 0.68] },
@@ -190,11 +190,15 @@ function route(message: string): RouteResult {
 
 const catalog: Catalog = {
   ships: [
-    { type: 'container', name: 'Container ship', description: 'Box-hulled cargo ship with cranes' },
-    { type: 'sampan', name: 'Sampan', description: 'Small open boat with an outboard' },
-    { type: 'tanker', name: 'Tanker', description: 'Crude oil tanker' },
+    { type: 'container', name: 'Container ship', description: 'Box-hulled cargo ship with cranes', category: 'Commercial vessels' },
+    { type: 'sampan', name: 'Sampan', description: 'Small open boat with an outboard', category: 'Fishing and small craft' },
+    { type: 'tanker', name: 'Tanker', description: 'Crude oil tanker', category: 'Commercial vessels' },
   ],
-  crew: [{ id: 'male_default', name: 'Default male crew' }],
+  crew: [{ id: 'male_default', name: 'Default male crew', category: 'Merchant crew' }],
+  categories: {
+    ship: ['Commercial vessels', 'Military vessels', 'Law enforcement and coast guard', 'Fishing and small craft', 'Passenger and leisure', 'Service and harbour craft', 'Other'],
+    crew: ['Navy', 'Coast guard and police', 'Merchant crew', 'Fishermen', 'Civilians and passengers', 'Other'],
+  },
   clothes: ['male_worksuit01', 'male_casualsuit02', 'navy_coverall', 'shoes01', 'boots02', 'navy_cap', 'combat_helmet'],
   equipment: ['life_vest', 'binoculars', 'radio'],
   animations: ['idle', 'walk', 'run', 'brace', 'hands_up', 'squat', 'binocular_look'],
@@ -212,7 +216,8 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
   if (method === 'GET' && path === '/api/catalog') return catalog;
   if (method === 'POST' && path === '/api/route') return route(String(body?.message ?? ''));
   if (method === 'GET' && path === '/api/projects') {
-    return Object.values(store.projects).filter((p) => !p.discarded).map((p): ProjectSummary => ({ id: p.id, kind: p.kind, name: p.name, base: p.base, version: p.version, ok: p.build_report.ok, updated: p.versions[p.versions.length - 1]?.at, model_url: p.model_url, open_pins: p.pins.filter((x) => x.status !== 'resolved').length, derived_from: p.derived_from ?? null, draft: p.draft ?? null }));
+    return Object.values(store.projects).filter((p) => !p.discarded).map((p): ProjectSummary => ({ id: p.id, kind: p.kind, name: p.name, base: p.base, version: p.version, ok: p.build_report.ok, updated: p.versions[p.versions.length - 1]?.at, model_url: p.model_url, open_pins: p.pins.filter((x) => x.status !== 'resolved').length, derived_from: p.derived_from ?? null, draft: p.draft ?? null,
+      category: p.category ?? (p.kind === 'crew' ? 'Coast guard and police' : catalog.ships.find((s) => s.type === p.base)?.category ?? null) }));
   }
   if (method === 'POST' && path === '/api/projects') {
     const id = `${body.kind === 'ship' ? 'p' : 'c'}_${++store.seq}`;
@@ -227,6 +232,18 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
     return { project: strip(p), ...job };
   }
   if ((r = m(/^\/api\/projects\/([^/]+)$/)) && method === 'GET') return strip(proj(r[1]));
+  if ((r = m(/^\/api\/projects\/([^/]+)$/)) && method === 'PATCH') {
+    const p = proj(r[1]);
+    for (const key of ['category', 'name'] as const) {
+      if (key in (body ?? {})) {
+        const v = String(body[key] ?? '').trim();
+        if (!v || v.length > 60) throw new HttpErr(400, `${key} must be text of 1 to 60 characters`);
+        p[key] = v;
+      }
+    }
+    save();
+    return { project: strip(p) };
+  }
   if ((r = m(/^\/api\/projects\/([^/]+)\/versions\/(\d+)\/parts\.json$/))) return proj(r[1]).parts;
   if ((r = m(/^\/api\/projects\/([^/]+)\/spec$/)) && method === 'POST') {
     const p = proj(r[1]);

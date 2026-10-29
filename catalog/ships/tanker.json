@@ -4,6 +4,7 @@
  "id": "tanker_ship",
  "name": "Tanker",
  "description": "A 250 m crude / product tanker (Aframax-like) with the house aft, long flat deck, pipelines, a manifold amidships, a raised catwalk and a provision crane.",
+ "category": "Commercial vessels",
  "params": {
   "loa_m": 250.0,
   "beam_m": 44.0,

@@ -87,8 +87,11 @@ the exit code**: Blender returns 0 even when a script raises an error, unless th
   StraitsSim's list; a sampan uses `fishing`, the closest), speeds, propulsion, `rcs_class`,
   notes, source. Length, beam, draught and depth in `ship/<id>.json` always come from `params`,
   because that is what was built.
-- A catalog file is a default spec plus documentation keys: `description`, and `param_docs`
-  mapping each param to `{"doc", "min", "max"}` (or `{"doc", "options": [...]}`).
+- A catalog file is a default spec plus documentation keys: `description`, `param_docs`
+  mapping each param to `{"doc", "min", "max"}` (or `{"doc", "options": [...]}`), and
+  `category`, the category a project made from it starts in (crew catalog files have it too).
+  It is never copied into a spec. `catalog/categories.json` lists the default categories:
+  `{"ship": [label], "crew": [label]}`.
 - `overrides` are applied after the build, to parts by path.
 - `custom_ops` run last, inside Blender, with the helper module `me3d` (from `blender/common.py`)
   in scope. This is how the AI adds geometry no builder knob covers. Every object a custom op
@@ -237,7 +240,7 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | Method and path | Body | Returns |
 |---|---|---|
 | GET `/api/health` | | `{"blender":bool,"mpfb":bool,"ai":bool,"unreal":bool}` |
-| GET `/api/catalog` | | `{"ships":[{"type","name","description"}],"crew":[{"id","name"}],"clothes":[str],"equipment":[str],"animations":[str]}` |
+| GET `/api/catalog` | | `{"ships":[{"type","name","description","category"}],"crew":[{"id","name","category"}],"clothes":[str],"equipment":[str],"animations":[str],"categories":{"ship":[str],"crew":[str]}}` |
 | POST `/api/route` | `{"message","attachments"?:[file name]}` (names only; the files go with the carried message) | `{"destination":"ship_research|ship_build|ship_variant|crew|crew_variant|animation|assembly|review|clarify","reason","project_id":str|null}` |
 | GET `/api/projects` | | `[ProjectSummary]` |
 | POST `/api/projects` | `{"kind":"ship|crew","base":"container|sampan|tanker|male_default","name"?}` | `{"project", "job_id"}` (first build) |
@@ -252,6 +255,7 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | POST `/api/projects/{id}/pins/{pin_id}/reply` | `{"text"}` | `{"job_id"}` |
 | PATCH `/api/projects/{id}/pins/{pin_id}` | `{"status":"open|resolved"}` | `{"pin"}` |
 | POST `/api/projects/{id}/undo` | | `{"project"}` |
+| PATCH `/api/projects/{id}` | `{"category"?,"name"?}` (1–60 characters each) | `{"project"}`; no new version |
 | POST `/api/projects/{id}/variants` | `{"name"?,"version"?,"brief"?,"research"?:bool,"scene"?}` | `{"project","job_id"}` (below) |
 | POST `/api/projects/{id}/approve` | | `{"project","scene":{"id","missing_stations"}|null}` |
 | POST `/api/projects/{id}/discard` | | `{"project"}` |
@@ -287,6 +291,11 @@ it on every page, so work carries on, and is reported, while the user is on anot
 approved, `"draft": {"stage": "copying|researching|changing|ready|failed", "job_id", "research":
 bool, "scene": str|null, "error": str|null}`; otherwise `draft` is null. `discarded` is true for
 a discarded draft. `ProjectSummary` carries `derived_from`, `draft` and `discarded` too.
+
+`category` (on `Project` and `ProjectSummary`) is a label for finding things: a new project takes
+its catalog base's category, a variant its source's, and a project with none is shown in its
+base's. Any label is allowed, not only the defaults. `PATCH` sets it, or renames the project;
+neither changes the spec (whose `name` and `id` go into exports) or makes a version.
 
 **Variants.** `POST /api/projects/{id}/variants` makes a new project of the same kind and base
 from one version of project `{id}`:

@@ -98,12 +98,14 @@ class ProjectStore:
 
     # ---- projects ---------------------------------------------------------------------
     def create(self, kind: str, base: str, name: str, *, derived_from: dict | None = None,
-               brief: str | None = None, research: dict | None = None, draft: dict | None = None) -> dict:
+               brief: str | None = None, research: dict | None = None, draft: dict | None = None,
+               category: str | None = None) -> dict:
         pid = "p_" + uuid.uuid4().hex[:8]
         project = {"id": pid, "kind": kind, "name": name, "base": base, "version": 0,
                    "versions": [], "undo_stack": [], "pins": [], "messages": [],
                    "research": copy.deepcopy(research), "derived_from": derived_from, "brief": brief,
-                   "draft": draft, "discarded": False, "created": now_iso(), "updated": now_iso()}
+                   "draft": draft, "discarded": False, "category": category,
+                   "created": now_iso(), "updated": now_iso()}
         self._dir(pid).mkdir(parents=True, exist_ok=False)
         self.save(project)
         return project
@@ -114,7 +116,7 @@ class ProjectStore:
         undo history do not."""
         return self.create(source["kind"], source["base"], name, brief=brief, research=source.get("research"),
                            derived_from={"project": source["id"], "version": version, "name": source["name"]},
-                           draft=draft)
+                           draft=draft, category=source.get("category"))
 
     def set_draft(self, pid: str, **fields: Any) -> dict:
         """Update a variant's review state (stage, error, job_id…)."""
@@ -202,7 +204,7 @@ class ProjectStore:
             "build_report": self.report(pid, n) or {},
             "pins": p["pins"], "messages": p["messages"], "research": p["research"],
             "derived_from": p.get("derived_from"), "brief": p.get("brief"),
-            "draft": p.get("draft"), "discarded": bool(p.get("discarded")),
+            "draft": p.get("draft"), "discarded": bool(p.get("discarded")), "category": p.get("category"),
             "can_undo": bool(p["undo_stack"]),
         }
 
@@ -214,7 +216,7 @@ class ProjectStore:
                 "model_url": f"/api/projects/{pid}/versions/{n}/model.glb" if n else None,
                 "open_pins": sum(1 for pin in p["pins"] if pin["status"] != "resolved"),
                 "derived_from": p.get("derived_from"), "draft": p.get("draft"),
-                "discarded": bool(p.get("discarded"))}
+                "discarded": bool(p.get("discarded")), "category": p.get("category")}
 
     # ---- messages, pins, research -----------------------------------------------------
     def add_message(self, pid: str, who: str, text: str, attachments: list[dict] | None = None) -> dict:

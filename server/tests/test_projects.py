@@ -69,8 +69,9 @@ def test_crew_project_and_catalog(make_client):
     assert p["kind"] == "crew" and p["spec"]["body"]["height_cm"] == 178
     assert c.builder.calls[-1][0] == "crew"
     cat = c.get("/api/catalog").json()
-    assert cat["ships"] == [{"type": "container", "name": "Container ship", "description": "A feeder container ship"}]
-    assert cat["crew"] == [{"id": "male_default", "name": "Default male crew"}]
+    assert cat["ships"] == [{"type": "container", "name": "Container ship", "description": "A feeder container ship",
+                             "category": None}]
+    assert cat["crew"] == [{"id": "male_default", "name": "Default male crew", "category": None}]
     assert "binoculars" in cat["equipment"] and "squat" in cat["animations"] and "cap01" in cat["clothes"]
 
 

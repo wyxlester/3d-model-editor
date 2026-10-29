@@ -145,6 +145,8 @@ export interface Project {
   /** Set on a variant until it is approved. */
   draft?: Draft | null;
   discarded?: boolean;
+  /** A label for finding it (CONTRACT §10); null when neither it nor its catalog base has one. */
+  category?: string | null;
   /** Server extra: whether POST /undo has something to undo. */
   can_undo?: boolean;
 }
@@ -202,11 +204,14 @@ export interface ProjectSummary {
   derived_from?: DerivedFrom | null;
   draft?: Draft | null;
   discarded?: boolean;
+  category?: string | null;
 }
 
 export interface Catalog {
-  ships: { type: string; name: string; description: string }[];
-  crew: { id: string; name: string }[];
+  ships: { type: string; name: string; description: string; category?: string | null }[];
+  crew: { id: string; name: string; category?: string | null }[];
+  /** The default categories (catalog/categories.json). */
+  categories?: { ship: string[]; crew: string[] };
   clothes: string[];
   equipment: string[];
   animations: string[];

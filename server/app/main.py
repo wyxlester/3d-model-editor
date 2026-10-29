@@ -148,9 +148,15 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         return route(msg, listed_projects(), llm, names[:10])
 
     # ---- projects -----------------------------------------------------------------------
+    def with_category(p: dict) -> dict:
+        """A project made before categories existed is in its catalog base's category."""
+        if not p.get("category"):
+            p["category"] = catalog.category(p["kind"], p["base"])
+        return p
+
     def listed_projects() -> list[dict]:
         """Every project except discarded variants."""
-        return [s for s in (store.api_summary(pid) for pid in store.ids()) if not s["discarded"]]
+        return [with_category(s) for s in (store.api_summary(pid) for pid in store.ids()) if not s["discarded"]]
 
     @app.get("/api/projects")
     def list_projects():
@@ -163,7 +169,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             raise HTTPException(400, "kind must be ship or crew")
         spec = catalog.default_spec(kind, base)
         name = body.get("name") or spec.get("name") or base
-        project = store.create(kind, base, name)
+        project = store.create(kind, base, name, category=catalog.category(kind, base))
         n, d = start_project(project, spec)
         job_id = jobs.submit("build", project=project["id"], label=f"First build of {name}", fn=lambda log: first_build(
             project, n, d, f"Created from the {base} catalog default", log))
@@ -292,7 +298,24 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
     @app.get("/api/projects/{pid}")
     def get_project(pid: str):
         need_project(pid)
-        return store.api_project(pid)
+        return with_category(store.api_project(pid))
+
+    @app.patch("/api/projects/{pid}")
+    def patch_project(pid: str, body: dict = Body(...)):
+        """Rename a project or file it under a category. Neither touches the spec or makes a version."""
+        need_project(pid)
+        fields = {}
+        for key in ("category", "name"):
+            if key in body:
+                value = body[key]
+                if not isinstance(value, str) or not value.strip() or len(value.strip()) > 60:
+                    raise HTTPException(400, f"{key} must be text of 1 to 60 characters")
+                fields[key] = " ".join(value.split())
+        if not fields or set(body) - {"category", "name"}:
+            raise HTTPException(400, "Send category and/or name, nothing else")
+        with store.edit(pid) as p:
+            p.update(fields)
+        return {"project": with_category(store.api_project(pid))}
 
     def version_file(pid: str, n: int, name: str) -> Path:
         need_project(pid)
