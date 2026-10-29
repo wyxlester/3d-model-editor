@@ -1,17 +1,19 @@
-// Review and export: compare two versions side by side, pin customer feedback on the model,
+// Review and export: show the version the user picks, pin customer feedback on the model,
 // export the scene's package, and build it in Unreal (checked) and open it there.
 // Recreates Review.dc.html (CONTRACT §8–10).
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Suspense, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import type * as THREE from 'three';
 import { useParams } from 'react-router-dom';
 import { api, errorText, fileUrl, modelUrl } from '../api';
 import { ChatPanel, ErrorNote, JobLines, Loading, TopBar } from '../components/common';
-import { remember, useJobs, useLoad, useProject } from '../hooks';
+import { remember, useJobs, useLoad, useProject, useProjects } from '../hooks';
+import { crewOnVersion, stationWords } from '../lib/sceneCrew';
 import type { ViewName } from '../lib/frames';
 import { PANEL_KEEP, PANEL_MIN, dragHeight } from '../lib/panel';
 import { partLabel } from '../lib/parts';
 import { paths } from '../lib/routing';
 import type { Attachment, ExportResult, Pin, Scene, UnrealReport, Vec3 } from '../types';
-import { PIN_COLORS, ShipViewer, ViewButtons } from '../viewer/Viewer';
+import { AttachTo, CrewModel, PIN_COLORS, ShipViewer, ViewButtons, stationObjects } from '../viewer/Viewer';
 import { ScenePicker } from './AssemblyScenePicker';
 import { specOf } from './Assembly';
 
@@ -27,7 +29,15 @@ function readConsoleH(): number {
   }
 }
 
-const STATUS_TEXT: Record<string, string> ={ open: 'Open', working: 'AI working', waiting: 'Waiting for you', resolved: 'Done' };
+/** Inside the viewer: tells the page which crew points the loaded version has (they can differ
+ * between versions), so it can say which crew members it could not place. */
+function StationsSeen({ root, onSeen }: { root: THREE.Object3D; onSeen: (names: string[]) => void }) {
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- once per loaded model
+  useEffect(() => { onSeen(stationObjects(root).map((n) => n.name)); }, [root]);
+  return null;
+}
+
+const STATUS_TEXT: Record<string, string> = { open: 'Open', working: 'AI working', waiting: 'Waiting for you', resolved: 'Done' };
 const STATUS_CHIP: Record<string, string> = { open: 'amber', working: 'blue', waiting: 'blue', resolved: 'green' };
 
 export function Review() {
@@ -43,8 +53,10 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
   const s = scene.data;
   const ship = useProject(s?.ship.project);
   const { jobs, run, dismiss, busy } = useJobs();
-  const [a, setA] = useState<number | null>(null);
-  const [b, setB] = useState<number | null>(null);
+  const [shown, setShown] = useState<number | null>(null);   // the one version on screen
+  // The scene's crew stand on whichever version is shown; these are the crew points it has.
+  const [stationsSeen, setStationsSeen] = useState<{ version: number | null; names: string[] } | null>(null);
+  const projects = useProjects();
   const [view, setView] = useState<ViewName>('port');
   const [pinMode, setPinMode] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -79,29 +91,27 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
   };
   const [feedback, setFeedback] = useState('');
   const [err, setErr] = useState<string | null>(null);
-  const compareRef = useRef<HTMLDivElement>(null);
-  const rightRef = useRef<HTMLDivElement>(null);
+  const presentRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { remember('scene', sceneId); }, [sceneId]);
 
   const p = ship.data;
   const versions = p?.versions ?? [];
-  // Default: the two latest versions, latest on the right.
+  // Default: the latest version.
   useEffect(() => {
-    if (!p || b !== null) return;
+    if (!p || shown !== null) return;
     const ns = p.versions.map((v) => v.n);
-    setB(ns[ns.length - 1] ?? p.version);
-    setA(ns.length > 1 ? ns[ns.length - 2] : ns[ns.length - 1] ?? p.version);
-  }, [p, b]);
+    setShown(ns[ns.length - 1] ?? p.version);
+  }, [p, shown]);
 
   if (scene.error) return <><TopBar /><div style={{ padding: 24 }}><ErrorNote error={scene.error} retry={scene.reload} /></div></>;
   if (!s) return <><TopBar /><div className="viewer"><Loading what="the scene" /></div></>;
 
-  const pick = (n: number) => {
-    if (n === a || n === b) return;
-    setA(b); setB(n);
-  };
-  const vInfo = (n: number | null) => versions.find((v) => v.n === n);
+  const info = versions.find((v) => v.n === shown);
+  const crewName = (project: string) => projects.data?.find((x) => x.id === project)?.name ?? project;
+  const seen = stationsSeen?.version === shown ? stationsSeen.names : null;   // null until this version has loaded
+  const onCrew = seen ? crewOnVersion(s.crew, seen) : null;
   const pins = p?.pins ?? [];
   const partPaths = (p?.parts ?? []).map((x) => x.path);
 
@@ -127,8 +137,8 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
       void run('Sending to the AI', async () => { const r = await api.replyPin(p.id, pin.id, 'Please make this change.'); reloadShip(); return r; }, reloadShip, reloadShip);
     } else if (pin.status === 'waiting') {
       api.setPinStatus(p.id, pin.id, 'resolved').then(reloadShip, (e) => setErr(errorText(e)));
-    } else if (pin.status === 'resolved' && pin.before_version != null && pin.after_version != null) {
-      setA(pin.before_version); setB(pin.after_version);
+    } else if (pin.status === 'resolved' && pin.after_version != null) {
+      setShown(pin.after_version);   // the version the change made
     }
   };
   const actionLabel = (pin: Pin) => ({ open: 'Send to AI', working: 'Working…', waiting: 'Keep it', resolved: 'View change' } as Record<string, string>)[pin.status] ?? 'Open';
@@ -163,7 +173,7 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
   };
 
   const present = () => {
-    const el = compareRef.current;
+    const el = presentRef.current;
     if (!el) return;
     if (document.fullscreenElement) void document.exitFullscreen();
     else void el.requestFullscreen?.();
@@ -173,48 +183,70 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
   const crewIds = Array.from(new Set(s.crew.map((c) => c.project)));
   const layout = `<package_id>/ · manifest.json · ship/${shipId}.glb · ship/${shipId}.json · ship/articulation.json · ${crewIds.map((c) => `crew/${c}.glb`).join(', ') || 'crew/ (none placed)'} · research/research.json`;
 
-  const pane = (n: number | null, right: boolean) => {
-    const info = vInfo(n);
-    return (
-      <div style={{ background: 'var(--stage)', display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 13, padding: '12px 16px 8px' }}>
-          <span style={{ fontWeight: 500 }}>v{n ?? '–'}</span>
-          <span className="muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{info?.summary ?? ''}</span>
-        </div>
-        <div ref={right ? rightRef : undefined} style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex' }}>
-          {n !== null && p ? (
-            <ShipViewer
-              url={modelUrl(p.id, n)} view={view} partPaths={partPaths}
-              pins={right ? pins : undefined} selectedPinId={right ? selPin : null}
-              selectedPart={right ? (draft?.part ?? pins.find((x) => x.id === selPin)?.part ?? null) : null}
-              pickMode={right && pinMode}
-              onPinClick={(pin) => { setSelPin(pin.id); setDraft(null); }}
-              onPick={(r) => {
-                if (!r.part) return;
-                const box = rightRef.current?.getBoundingClientRect();
-                const left = box ? Math.min(Math.max(8, r.clientX - box.left + 12), box.width - 290) : 12;
-                const top = box ? Math.min(Math.max(8, r.clientY - box.top - 20), box.height - 220) : 12;
-                setDraft({ part: r.part, point: r.point, left, top }); setDraftText('');
-              }}
-              overlay={right && draft ? (
-                <div className="popover" role="dialog" aria-label="Customer comment" style={{ left: draft.left, top: draft.top, width: 280 }}>
-                  <span className="faint" style={{ fontSize: 12 }}>The customer is pointing at</span>
-                  <span className="tag" style={{ alignSelf: 'flex-start', fontSize: 13 }}>{partLabel(draft.part)}</span>
-                  <label htmlFor="cust-text" className="sr-only">What they said</label>
-                  <textarea id="cust-text" className="field dark" rows={2} autoFocus value={draftText}
-                    placeholder="Type what they said" onChange={(e) => setDraftText(e.target.value)} />
-                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                    <button className="btn sm" onClick={() => setDraft(null)}>Cancel</button>
-                    <button className="btn sm primary" disabled={!draftText.trim()} onClick={sendPin}>Pin it</button>
-                  </div>
-                </div>
-              ) : undefined}
-            />
-          ) : <Loading what="the ship" />}
-        </div>
+  const viewer = (
+    <div ref={presentRef} style={{ flex: 1, minHeight: 0, background: 'var(--stage)', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 13, padding: '12px 16px 8px' }}>
+        <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>
+          v{shown ?? '–'}
+          {onCrew && <span className="muted" style={{ fontWeight: 400 }}> · {onCrew.placed.length ? `${onCrew.placed.length} crew from the scene` : 'no crew in the scene'}</span>}
+        </span>
+        <span className="muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{info?.summary ?? ''}</span>
       </div>
-    );
-  };
+      {!!onCrew?.missing.length && (
+        <div className="warn" style={{ fontSize: 12, padding: '0 16px 8px' }}>
+          Not shown on v{shown}, which has no crew point for them:{' '}
+          {onCrew.missing.map((c) => `${crewName(c.project)} (${stationWords(c.station)})`).join(', ')}
+        </div>
+      )}
+      <div ref={viewRef} style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex' }}>
+        {shown !== null && p ? (
+          <ShipViewer
+            url={modelUrl(p.id, shown)} view={view} partPaths={partPaths}
+            pins={pins} selectedPinId={selPin}
+            selectedPart={draft?.part ?? pins.find((x) => x.id === selPin)?.part ?? null}
+            pickMode={pinMode}
+            onPinClick={(pin) => { setSelPin(pin.id); setDraft(null); }}
+            onPick={(r) => {
+              if (!r.part) return;
+              const box = viewRef.current?.getBoundingClientRect();
+              const left = box ? Math.min(Math.max(8, r.clientX - box.left + 12), box.width - 290) : 12;
+              const top = box ? Math.min(Math.max(8, r.clientY - box.top - 20), box.height - 220) : 12;
+              setDraft({ part: r.part, point: r.point, left, top }); setDraftText('');
+            }}
+            overlay={draft ? (
+              <div className="popover" role="dialog" aria-label="Customer comment" style={{ left: draft.left, top: draft.top, width: 280 }}>
+                <span className="faint" style={{ fontSize: 12 }}>The customer is pointing at</span>
+                <span className="tag" style={{ alignSelf: 'flex-start', fontSize: 13 }}>{partLabel(draft.part)}</span>
+                <label htmlFor="cust-text" className="sr-only">What they said</label>
+                <textarea id="cust-text" className="field dark" rows={2} autoFocus value={draftText}
+                  placeholder="Type what they said" onChange={(e) => setDraftText(e.target.value)} />
+                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                  <button className="btn sm" onClick={() => setDraft(null)}>Cancel</button>
+                  <button className="btn sm primary" disabled={!draftText.trim()} onClick={sendPin}>Pin it</button>
+                </div>
+              </div>
+            ) : undefined}
+          >
+            {(root) => (
+              <>
+                <StationsSeen root={root} onSeen={(names) => setStationsSeen({ version: shown, names })} />
+                {stationObjects(root).map((node) => {
+                  const c = s.crew.find((x) => x.station === node.name);
+                  return c ? (
+                    <AttachTo key={node.uuid} node={node}>
+                      <Suspense fallback={null}>
+                        <CrewModel url={modelUrl(c.project, c.version)} animation={c.animation} playing />
+                      </Suspense>
+                    </AttachTo>
+                  ) : null;
+                })}
+              </>
+            )}
+          </ShipViewer>
+        ) : <Loading what="the ship" />}
+      </div>
+    </div>
+  );
 
   const exportVersion = s.ship.version;
 
@@ -225,15 +257,17 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
       </TopBar>
       <div className="workspace">
         <aside className="side left" style={{ width: 260, padding: 16, gap: 8, fontSize: 13 }}>
-          <div className="faint">Versions. Click two to compare.</div>
+          <div className="faint">Versions. Click one to show it.</div>
           <div className="scroll" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: '40%' }}>
             {versions.map((v) => {
-              const on = v.n === a || v.n === b;
+              const on = v.n === shown;
               return (
-                <button key={v.n} className={`row-btn ${on ? 'on' : ''}`} style={{ flexDirection: 'column', gap: 4, padding: '10px 12px' }} onClick={() => pick(v.n)}>
-                  <span style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                <button key={v.n} className={`row-btn ${on ? 'on' : ''}`} aria-pressed={on} style={{ flexDirection: 'column', gap: 4, padding: '10px 12px' }} onClick={() => setShown(v.n)}>
+                  <span style={{ display: 'flex', justifyContent: 'space-between', gap: 8, width: '100%' }}>
                     <span style={{ fontWeight: 500 }}>v{v.n}{v.ok ? '' : ' · build failed'}</span>
-                    <span style={{ fontSize: 11, color: 'var(--accent-link)' }}>{v.n === a ? 'Left' : v.n === b ? 'Right' : ''}</span>
+                    <span style={{ fontSize: 11, color: 'var(--accent-link)', textAlign: 'right' }}>
+                      {[on ? 'Showing' : '', v.n === exportVersion ? 'In the scene' : ''].filter(Boolean).join(' · ')}
+                    </span>
                   </span>
                   <span className="muted" style={{ fontSize: 12 }}>{v.summary}</span>
                 </button>
@@ -251,13 +285,10 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
             <button className={`btn ${pinMode ? 'primary' : 'selected'}`} onClick={() => { setPinMode(!pinMode); setDraft(null); }}>
               {pinMode ? 'Placing a pin…' : 'Pin customer feedback'}
             </button>
-            <span className="faint toolbar-hint">{pinMode ? 'Click the part they point at, on the right-hand model.' : 'Pins show on the right-hand version.'}</span>
+            <span className="faint toolbar-hint">{pinMode ? 'Click the part they point at.' : `Pins show on the version shown, v${shown ?? '–'}.`}</span>
             <span style={{ marginLeft: 'auto' }}><ViewButtons view={view} onView={setView} /></span>
           </div>
-          <div ref={compareRef} style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1, background: 'var(--border)' }}>
-            {pane(a, false)}
-            {pane(b, true)}
-          </div>
+          {viewer}
           <div className={`resize-row${resizing ? ' on' : ''}`} role="separator" aria-orientation="horizontal"
             aria-label="Resize the export panel" aria-valuenow={consoleH} tabIndex={0} title="Drag to resize; double-click to reset"
             onPointerDown={startResize} onDoubleClick={() => keepConsoleH(CONSOLE_DEFAULT)}
@@ -285,10 +316,10 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
               </button>
             </div>
             <div className="scroll" style={{ flex: 1, minHeight: 0, padding: '0 16px 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {b !== null && b !== exportVersion && (
+              {shown !== null && shown !== exportVersion && (
                 <span className="warn" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                  The scene uses v{exportVersion}, so that is what exports. You are looking at v{b} on the right.
-                  <button className="btn sm" onClick={() => void adoptVersion(b)}>Use v{b} in the scene</button>
+                  The scene uses v{exportVersion}, so that is what exports. You are looking at v{shown}.
+                  <button className="btn sm" onClick={() => void adoptVersion(shown)}>Use v{shown} in the scene</button>
                 </span>
               )}
               {makNote && <span className="ok">MAK export isn’t built yet. The same folder will feed it when it is.</span>}
@@ -333,7 +364,7 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
         <aside className="side right" style={{ width: 340, fontSize: 13 }}>
           <div style={{ padding: '16px 16px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 15, fontWeight: 500 }}>Pinned comments</span>
-            <span className="faint">{p?.name ?? 'Ship'} · shown on v{b ?? '–'} · each pin is a task</span>
+            <span className="faint">{p?.name ?? 'Ship'} · shown on v{shown ?? '–'} · each pin is a task</span>
           </div>
           <div className="scroll" style={{ flex: 1, padding: '8px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
             {!pins.length && <span className="faint">No pins yet. In the meeting, press “Pin customer feedback” and click where they point.</span>}

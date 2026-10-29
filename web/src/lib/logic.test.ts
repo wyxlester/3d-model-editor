@@ -1117,3 +1117,20 @@ describe('a panel resized by dragging its top edge', () => {
     expect(dragHeight(220, 500, 0, 150)).toBe(PANEL_MIN);
   });
 });
+
+import { crewOnVersion, stationWords } from './sceneCrew';
+
+describe('the scene crew on the version shown in Review', () => {
+  const cox = { project: 'p_cox', version: 2, station: 'station__helm', animation: 'idle' };
+  const look = { project: 'p_look', version: 1, station: 'station__bow', animation: 'walk' };
+  it('stands each crew member at their station when that version has it', () => {
+    expect(crewOnVersion([cox, look], ['station__helm', 'station__bow', 'station__stern'])).toEqual({ placed: [cox, look], missing: [] });
+  });
+  it('lists the ones whose station that version does not have, rather than dropping them silently', () => {
+    expect(crewOnVersion([cox, look], ['station__helm'])).toEqual({ placed: [cox], missing: [look] });
+    expect(crewOnVersion([cox], [])).toEqual({ placed: [], missing: [cox] });
+  });
+  it('names a station in words', () => {
+    expect(stationWords('station__passenger_1')).toBe('passenger 1');
+  });
+});
