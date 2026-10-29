@@ -915,3 +915,32 @@ describe('reviewing research before a ship is built', () => {
     expect(claimUsed({ sources: [] }, ['S2'])).toBe(true);
   });
 });
+
+import { headline, researchProgress, tally } from './researchProgress';
+
+describe('research progress', () => {
+  const log = [
+    'Researching', 'AI → WebSearch', '• Searching the web: USS Abraham Lincoln CVN-72 dimensions',
+    '• AI: The first results give the length.', 'AI → WebFetch', '• Reading en.wikipedia.org',
+    '• Adding a photograph: starboard bow from the air', '• Searching the web: CVN-72 island',
+  ];
+  it('reads each step and what is under way now', () => {
+    const p = researchProgress(log);
+    expect(p.steps.map((s) => s.kind)).toEqual(['search', 'ai', 'read', 'photo', 'search']);
+    expect(p.now?.detail).toBe('CVN-72 island');
+    expect(headline(p.now)).toBe('Searching the web for “CVN-72 island”');
+    expect(tally(p)).toBe('2 searches · 1 page read · 1 photograph');
+  });
+  it('the AI talking is not the step under way unless nothing else has happened', () => {
+    expect(researchProgress([...log, '• AI: Now the island.']).now?.kind).toBe('search');
+    expect(headline(researchProgress(['• AI: Let me look.']).now)).toBe('Thinking it over');
+    expect(headline(researchProgress([]).now)).toBe('Starting the research');
+    expect(tally(researchProgress([]))).toBe('');
+  });
+  it('counts the photographs kept, not every one added', () => {
+    const p = researchProgress([...log, '• Removing photograph P01', '• Adding a photograph: the same, retitled', '• Removing photograph P02']);
+    expect(p.steps.filter((s) => s.kind === 'photo')).toHaveLength(4);
+    expect(p.photos).toBe(0);
+    expect(tally(p)).toBe('2 searches · 1 page read');
+  });
+});
