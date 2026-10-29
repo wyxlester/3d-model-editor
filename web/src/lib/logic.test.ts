@@ -4,7 +4,7 @@ import { hiddenParts, isPartName, jointsOf, levelsFor, ownNodes, partLabel, reso
 import { MAX_POLL_FAILURES, describe as describePoll, nextDelayMs, pollReducer, type PollState } from './jobs';
 import { blenderToGltf, cameraFor, gltfToBlender, jointAxisGltf } from './frames';
 import { assetLabel, clothesSlot, mergePatch, toggleIn } from './spec';
-import { targetFor } from './routing';
+import { startsNewResearch, targetFor } from './routing';
 import { fileType, refuse, sizeText } from './attachments';
 import {
   boxText, boxToPercent, clampPan, countLine, coverageSummary, filterPhotos, fitSize, hostOf, photoIdsIn, photoStatus, provenanceRows,
@@ -171,6 +171,12 @@ describe('routing', () => {
     expect(targetFor('ship_variant', null)?.path).toBe('/ship');
     expect(targetFor('crew_variant', 'c1')?.path).toBe('/crew/c1?variant=1');
     expect(targetFor('crew_variant', null)?.path).toBe('/crew');
+  });
+  it('starts the research itself only for a ship that has no project yet', () => {
+    expect(startsNewResearch('ship_research', null)).toBe(true);
+    expect(startsNewResearch('ship_research', 'p1')).toBe(false);
+    expect(startsNewResearch('ship_build', null)).toBe(false);
+    expect(startsNewResearch('crew', null)).toBe(false);
   });
 });
 
@@ -933,5 +939,31 @@ describe('undo last change (ship and crew)', () => {
     expect(undoHint({ version: 1, versions: [v(1, 'First build')] })).toBe('Nothing to undo');
     expect(undoHint({ version: 0, versions: [], can_undo: undefined })).toBe('Nothing to undo');
     expect(undoTarget({ version: 2, versions, can_undo: false, undo_to: 1 })).toBeNull();
+  });
+});
+
+import { claimUsed, linearToHex, planRows } from './planValues';
+import { hexToLinear as toLinearColour } from './describe';
+
+describe('reviewing research before a ship is built', () => {
+  it('turns Blender colours into screen colours and back', () => {
+    expect(linearToHex([1, 1, 1])).toBe('#ffffff');
+    expect(linearToHex([0, 0, 0])).toBe('#000000');
+    expect(linearToHex(toLinearColour('#d8b878'))).toBe('#d8b878');
+  });
+  it('offers the dimensions and colours first, other numbers after, and never text or lists', () => {
+    const planned = { loa_m: 24, beam_m: 6, depth_m: 3, draught_m: 1.6, bow_form: 'raked', hull_color: [1, 1, 1], sheer_m: 0.4, tiers: [{ x_aft_m: -6 }] };
+    const { key, more } = planRows(planned, { beam_m: 6.5 }, { loa_m: { doc: 'Length overall' } });
+    expect(key.map((r) => r.name)).toEqual(['loa_m', 'beam_m', 'draught_m', 'depth_m', 'hull_color']);
+    expect(more.map((r) => r.name)).toEqual(['sheer_m']);
+    expect([key[0].label, key[0].value, key[0].from, key[0].doc]).toEqual(['Length overall', 24, 'plan', 'Length overall']);
+    expect([key[1].value, key[1].from]).toEqual([6.5, 'yours']);
+    expect(key[4].kind).toBe('colour');
+  });
+  it('drops a claim once every source it cites is crossed out', () => {
+    expect(claimUsed({ sources: ['S1', 'S2'] }, ['S2'])).toBe(true);
+    expect(claimUsed({ sources: ['S2'] }, ['S2'])).toBe(false);
+    expect(claimUsed({ sources: 'S2' }, ['S2'])).toBe(true);
+    expect(claimUsed({ sources: [] }, ['S2'])).toBe(true);
   });
 });

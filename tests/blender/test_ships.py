@@ -608,3 +608,12 @@ def test_custom_variants_build_true_to_size(tmp_path, v):
     assert ("Hull__Rail" in paths) == (prm["rail_m"] > 0)
     assert ("Hull__Bulb" in paths) == (prm["bow_form"] == "bulbous")
     assert ("Arch__Radar" in paths) == prm["radar_arch"]
+
+
+def test_container_ship_with_an_empty_deck_builds(tmp_path):
+    """No bays and no cranes: a cleared deck, as a plan for a hull that is not a container ship may set."""
+    spec = copy.deepcopy(catalog("container"))
+    spec["params"].update({"bays": 0, "cranes": 0, "tiers": 0})
+    proc, report, parts = run_build(spec, tmp_path)
+    assert report["ok"], report["errors"]
+    assert not [p for p in parts if p["path"].startswith("Cargo__")]

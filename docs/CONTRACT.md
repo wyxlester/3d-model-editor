@@ -346,6 +346,14 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | GET `/api/projects` | | `[ProjectSummary]` |
 | POST `/api/projects` | `{"kind":"ship|crew","base":"container|sampan|tanker|custom|male_default","name"?,"brief"?}` | `{"project", "job_id"}` (first build; `custom` takes a `brief`, see §5) |
 | POST `/api/projects/{id}/design-plan/approve` | | `{"job_id"}`: builds a `custom` ship from its draft plan; 409 with a sentence when there is no current draft |
+| PATCH `/api/projects/{id}/design-plan` | `{"params":{param: value or null}}` | `{"project"}`: the user's own plan values (§12, Review); 409 unless the plan is a draft |
+| PATCH `/api/projects/{id}/research/excluded` | `{"excluded_sources":[source id]}` | `{"project"}`: sources the user crossed out (§12, Review) |
+| GET `/api/projects/{id}/research/history` | | `[{"n","at","subject","verdict","sources","claims"}]` |
+| GET `/api/projects/{id}/research/history/{n}` | | `{"n","at","research"}` |
+| GET `/api/projects/{id}/materials` | | `[{"id","kind":"search\|page","title","at","chars","source"}]` |
+| GET `/api/projects/{id}/materials/{mid}` | | the same with `"text"` |
+| GET `/api/projects/{id}/logs` | | `[{"id","kind","label","status","error","created","finished","log"}]` |
+| GET `/api/projects/{id}/research/export.pdf\|pptx\|json` | | the research report as a download (§12, Export) |
 | GET `/api/projects/{id}` | | `Project` (below) |
 | GET `/api/projects/{id}/versions/{n}/model.glb` | | the GLB |
 | GET `/api/projects/{id}/versions/{n}/parts.json` | | the parts list |
@@ -495,6 +503,9 @@ happened; `part` is the clicked mesh's node name.
 ```
 data/projects/<id>/project.json
 data/projects/<id>/v<n>/{spec.json, model.glb, model.blend, parts.json, build_report.json}
+data/projects/<id>/research/versions/r<n>.json  every saved version of the research
+data/projects/<id>/materials/m<n>.json          each web search and page the research AI read, with its text
+data/projects/<id>/logs/<job id>.json           each finished job's log
 data/projects/<id>/uploads/<upload id>.<ext>   and <upload id>.json (name, type, size)
 data/uploads/<upload id>.<ext>                 attached on Home, before a project exists
 data/scenes/<id>.json
@@ -560,3 +571,25 @@ Optional keys on the research record, modelled on the dossier's `references.json
 `status` is one of: Official, Photographed, Photo reading, Inference, Comparison only,
 Secondary lead, Unverified (a claim may combine two with " + "). The server validates this
 shape and returns errors to the AI rather than saving a malformed record.
+
+### Review (the user's say before a ship is built)
+
+- **Crossing sources out.** `project.excluded_sources` lists sources the user crossed out. They stay
+  in the research, marked; every research turn is told not to rest any claim, number or design-plan
+  value on them alone. Changing the list counts as a research change: `research_rev` goes up, so a
+  draft plan must be redrafted and an approved one goes stale (§5).
+- **The user's own plan values.** `design_plan.user_params` holds values the user set for the draft
+  plan's params: lengths in metres (more than 0), other numbers, and `[r, g, b]` 0-1 colours, within
+  the custom builder's documented ranges. Text choices and lists (bow form, tiers) are changed by
+  chatting. A redraft keeps them; approval builds the plan with them on top, and the build AI is told
+  to keep them exactly.
+
+### Kept for review, and Export
+
+Every save of the research is kept as the next version in its history. Every web search and page the
+research AI reads is kept as a material, with the text it saw. Every finished job's log is kept with
+its project. `export.pdf` and `export.pptx` carry the verdict, the design plan with the user's
+values, the research photographs (not those marked excluded), every source with its link (crossed-out
+ones marked "Excluded by you"), every claim (those resting only on crossed-out sources marked "Not
+used"), the open questions, what moves, and the record: the research's versions and every search
+and page. `export.json` is the research record itself.

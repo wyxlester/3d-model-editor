@@ -90,7 +90,18 @@ export interface DesignPlan {
   /** Server extras: when it was approved, and why an approved plan failed to build (back to draft). */
   approved_at?: string;
   build_error?: string;
+  /** The user's own values for the plan's params: they win when it is built (CONTRACT §12, Review). */
+  user_params?: Record<string, unknown>;
 }
+
+/** A saved version of the research, as listed (the research itself is fetched by number). */
+export interface ResearchVersion { n: number; at: string; subject?: string | null; verdict?: string | null; sources: number; claims: number }
+
+/** Something the research AI searched for or read, kept for review (`text` only when fetched one by one). */
+export interface Material { id: string; kind: 'search' | 'page' | string; title: string; at: string; chars: number; source: Record<string, unknown>; text?: string }
+
+/** A finished job's log, kept with its project. */
+export interface JobLogRecord { id: string; kind: string; label: string; status: string; error: string | null; created: string; finished: string | null; log: string[] }
 
 export interface ShipSpec {
   schema: 'me3d.ship_spec/1';
@@ -183,6 +194,8 @@ export interface Project {
   research_rev?: number;
   /** Custom ships only (§5): null until the AI drafts one. */
   design_plan?: DesignPlan | null;
+  /** Research sources the user crossed out: the AI rests nothing on them. */
+  excluded_sources?: string[];
   /** The request the project was made from: a custom ship's description, or what a variant was asked to change. */
   brief?: string | null;
   /** Custom ships: an approved plan has been built at least once, so Build works normally (server extra). */
@@ -419,7 +432,7 @@ export interface Research {
   subject?: string;
   summary?: { verdict?: string; existing_work?: string };
   sources?: { id: string; title: string; url?: string; status: EvidenceStatus; what_it_proves?: string }[];
-  claims?: { claim: string; sources?: string[] | string; status: EvidenceStatus; consequence_for_model?: string }[];
+  claims?: { claim: string; value?: string | number | null; unit?: string | null; sources?: string[] | string; status: EvidenceStatus; consequence_for_model?: string }[];
   open_questions?: { question: string; meanwhile?: string }[];
   articulation?: { part: string; motion: string; priority: string }[];
   /** Distinct exposures only (crops and republished copies do not count), and how they were counted. */

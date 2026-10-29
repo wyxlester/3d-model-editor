@@ -18,6 +18,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -32,6 +33,19 @@ ID_RE = re.compile(r"^[a-z0-9_]+$")
 UPLOAD_ID_RE = re.compile(r"^u_[a-f0-9]{8}$")
 
 
+def _replace(tmp: str, path: Path, tries: int = 50) -> None:
+    """os.replace, retried briefly on Windows, where it fails while another thread has the target
+    open (a request reading project.json as a job saves it). The read ends within milliseconds."""
+    for attempt in range(tries):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(0.01)
+
+
 def atomic_write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
@@ -40,7 +54,7 @@ def atomic_write_json(path: Path, data: Any) -> None:
             json.dump(data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        _replace(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -49,11 +63,16 @@ def atomic_write_json(path: Path, data: Any) -> None:
         raise
 
 
-def read_json(path: Path, default: Any = None) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return default
+def read_json(path: Path, default: Any = None, tries: int = 50) -> Any:
+    for attempt in range(tries):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return default
+        except PermissionError:  # Windows: the file is being replaced this instant (see _replace)
+            if attempt == tries - 1:
+                raise
+            time.sleep(0.01)
 
 
 class NotFound(Exception):
@@ -232,6 +251,7 @@ class ProjectStore:
             "build_report": self.report(pid, n) or {},
             "pins": p["pins"], "messages": p["messages"], "research": p["research"],
             "research_rev": p.get("research_rev", 0), "design_plan": p.get("design_plan"),
+            "excluded_sources": list(p.get("excluded_sources") or []),
             "plan_built": bool(p.get("plan_built")),
             "derived_from": p.get("derived_from"), "brief": p.get("brief"),
             "draft": p.get("draft"), "discarded": bool(p.get("discarded")), "category": p.get("category"),
@@ -340,7 +360,85 @@ class ProjectStore:
             research.update({k: old[k] for k in MEDIA_KEYS if k in old})
             project["research"] = research
             on_research_saved(project)
+            # Every save is kept as the next version, so the research can be reviewed as it was.
+            d = self._dir(pid) / "research" / "versions"
+            n = 1 + max((int(f.stem[1:]) for f in d.glob("r*.json") if f.stem[1:].isdigit()), default=0)
+            atomic_write_json(d / f"r{n}.json", {"n": n, "at": now_iso(), "research": research})
             return project["research_rev"]
+
+    def research_history(self, pid: str) -> list[dict]:
+        """Every saved version of the research, oldest first, without the research itself."""
+        out = []
+        for f in (self._dir(pid) / "research" / "versions").glob("r*.json"):
+            rec = read_json(f)
+            if isinstance(rec, dict):
+                r = rec.get("research") or {}
+                out.append({"n": rec["n"], "at": rec["at"], "subject": r.get("subject"),
+                            "verdict": (r.get("summary") or {}).get("verdict"),
+                            "sources": len(r.get("sources") or []), "claims": len(r.get("claims") or [])})
+        return sorted(out, key=lambda h: h["n"])
+
+    def research_version(self, pid: str, n: int) -> dict:
+        rec = read_json(self._dir(pid) / "research" / "versions" / f"r{int(n)}.json")
+        if rec is None:
+            raise NotFound(f"{pid} research version {n}")
+        return rec
+
+    def set_excluded_sources(self, pid: str, ids: list[str]) -> int:
+        """Sources the user crossed out. It changes what the plan may rest on, so like a research save
+        it bumps the revision (a draft plan must be redrafted, an approved one goes stale)."""
+        with self.edit(pid) as project:
+            project["excluded_sources"] = list(ids)
+            on_research_saved(project)
+            return project["research_rev"]
+
+    def set_plan_params(self, pid: str, params: dict) -> dict:
+        """The user's own values for the draft design plan's params; they win when it is built."""
+        with self.edit(pid) as project:
+            plan = project.get("design_plan")
+            if not isinstance(plan, dict) or plan.get("status") != "draft":
+                raise PlanRefused("Only a draft design plan can be changed.")
+            plan["user_params"] = params
+        return plan
+
+    # ---- research materials and job logs ----------------------------------------------
+    def add_material(self, pid: str, kind: str, title: str, text: str, source: dict) -> dict:
+        """Something the research AI read: a web search's results or a fetched page, as it saw them."""
+        with self.lock(pid):
+            d = self._dir(pid) / "materials"
+            n = 1 + max((int(f.stem[1:]) for f in d.glob("m*.json") if f.stem[1:].isdigit()), default=0)
+            rec = {"id": f"m{n}", "kind": kind, "title": title, "at": now_iso(), "source": source,
+                   "chars": len(text), "text": text}
+            atomic_write_json(d / f"m{n}.json", rec)
+        return rec
+
+    def materials(self, pid: str) -> list[dict]:
+        out = [{k: v for k, v in rec.items() if k != "text"}
+               for rec in (read_json(f) for f in (self._dir(pid) / "materials").glob("m*.json")) if isinstance(rec, dict)]
+        return sorted(out, key=lambda m: int(m["id"][1:]))
+
+    def material(self, pid: str, mid: str) -> dict:
+        if not re.match(r"^m\d+$", mid or ""):
+            raise NotFound(mid)
+        rec = read_json(self._dir(pid) / "materials" / f"{mid}.json")
+        if rec is None:
+            raise NotFound(mid)
+        return rec
+
+    def save_job_log(self, pid: str, job: dict) -> None:
+        """Keep a finished job's log with its project. Checks the folder, never project.json: on Windows
+        even a stat of a file opens it, and that can make a concurrent save of it fail."""
+        try:
+            if not self._dir(pid).is_dir():
+                return
+        except NotFound:
+            return
+        atomic_write_json(self._dir(pid) / "logs" / f"{job['id']}.json",
+                          {k: job.get(k) for k in ("id", "kind", "label", "status", "error", "created", "finished", "log")})
+
+    def job_logs(self, pid: str) -> list[dict]:
+        logs = [rec for rec in (read_json(f) for f in (self._dir(pid) / "logs").glob("*.json")) if isinstance(rec, dict)]
+        return sorted(logs, key=lambda j: j.get("created") or "")
 
     def research_dir(self, pid: str) -> Path:
         """data/projects/<id>/research/{photos,closeups}/: files the research tools store."""
@@ -351,6 +449,9 @@ class ProjectStore:
         with self.edit(pid) as project:
             plan = {"status": "draft", "summary": summary, "spec": spec,
                     "research_rev": int(project.get("research_rev") or 0), "at": now_iso()}
+            old = project.get("design_plan")
+            if isinstance(old, dict) and old.get("user_params"):
+                plan["user_params"] = old["user_params"]  # the user's values outlive a redraft
             project["design_plan"] = plan
         return plan
 
