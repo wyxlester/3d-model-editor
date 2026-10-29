@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, errorText, modelUrl } from '../api';
+import { undoHint } from '../lib/undo';
 import { AiWorking, ChatPanel, ErrorNote, JobLines, PRIORITY, TopBar, useCarried } from '../components/common';
 import { DerivedFromLink, useVariantDialog } from '../components/VariantDialog';
 import { OtherWork, useProjectWork } from '../components/JobCenter';
@@ -189,7 +190,7 @@ export function ShipBuild() {
           <button className="btn" style={{ flexShrink: 0 }} onClick={() => id && variant.show(id)} disabled={!current || !!project?.draft || waiting}
             title={waiting ? 'Approve its design plan first' : 'A new ship copied from this one, changed as you describe; this one stays as it is'}>Make a variant</button>
           <button className="btn" style={{ flexShrink: 0 }} onClick={() => void undo()} disabled={!project || project.can_undo === false || busy || !!viewing}
-            title={project?.can_undo === false ? 'Nothing to undo' : 'Go back to the previous version'}>Undo last change</button>
+            title={undoHint(project)}>Undo last change</button>
         </div>
       </TopBar>
       <div className="workspace">

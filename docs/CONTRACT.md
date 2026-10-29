@@ -166,7 +166,7 @@ by catalog equipment. A failing item is reported as a build error naming its id 
 
 ### Modules (Lester, 29 Oct: "separate out the various parts … in modules that could be configurable by user prompts"; "if the user chooses to describe a particular module … it works and render the particular module, without reseting the entire human")
 
-A crew member is ten **modules**. Each owns a fixed set of spec keys; changing one module never
+A crew member is nine **modules**. Each owns a fixed set of spec keys; changing one module never
 touches another's keys. Every module has presets, colours where they matter, and can be described
 in words (the AI then writes a custom item **tagged with that module**).
 
@@ -179,8 +179,7 @@ in words (the AI then writes a custom item **tagged with that module**).
 | `pants` | `clothes.pants`; custom items `module: "pants"` | `{"style": "shorts"|"trousers"|"cargo", "color": [r,g,b]}` or null |
 | `outfit` | `clothes.suit`, `clothes.suit_color` | catalog suits (textured, fill shirt *and* pants) or null |
 | `shoes` | `clothes.shoes`, `clothes.shoes_color`; custom items `module: "shoes"` | catalog shoes, or null = barefoot |
-| `equipment` | `equipment[]` items (name, color); custom items `module: "equipment"` | life_vest, helmet, binoculars, radio |
-| `placement` | the `place` of each equipment entry and each equipment custom item | right_hand, left_hand, chest, back, hip, head, both_hands |
+| `equipment` | `equipment[]` items (name, color, `place`); custom items `module: "equipment"`, including their `place` | life_vest, helmet, binoculars, radio; places right_hand, left_hand, chest, back, hip, head, both_hands |
 | `accessories` | `accessories[]` (`{"name","color"}`), `clothes.hat`, `clothes.hat_color`; custom items `module: "accessories"` | cap, sunglasses, ear_defenders, gloves, fedora01, fedora_cocked |
 
 Rules:
@@ -190,9 +189,18 @@ Rules:
   do this; the builder just draws the suit if set.)
 - **A described item replaces its module's preset:** a `shirt` custom item means `clothes.shirt`
   is null. Describing a module again replaces that module's custom items, nothing else.
-- **Placement:** `place` is one of `right_hand`, `left_hand`, `chest`, `back`, `hip`, `head`,
-  `both_hands`, or absent for worn items that have one fixed spot (life_vest, helmet). Equipment custom items are
-  modelled at the origin (grip point at the origin, +Z up, +X forward) and **not parented by their
+- **Equipment and where it is carried are one module** (Lester, 29 Oct: "combine equipment and
+  equipment placement, it is a duplicate. when user describe a equipment, user will also need to
+  describe how the human is holding the equipment"). An item's `place` is a field of equipment,
+  not a module of its own: a place-only change lists `equipment` in `changed_modules`, and an
+  equipment-scoped turn may set places. A description says what the item is **and** how it is held
+  or carried; when the user does not say how, the AI picks the sensible carry for that item (a
+  rifle: `both_hands`; binoculars: `chest`; a radio: `hip`; a small tool: `right_hand`), does it,
+  and says which in the reply. A missing carry is never a reason to refuse. `POST /chat` still
+  accepts `"module": "placement"` as an alias of `equipment` (older clients and saved messages).
+- **Placement** (a field of equipment): `place` is one of `right_hand`, `left_hand`, `chest`,
+  `back`, `hip`, `head`, `both_hands`, or absent for worn items that have one fixed spot (life_vest,
+  helmet). Equipment custom items are modelled at the origin (grip point at the origin, +Z up, +X forward) and **not parented by their
   code**; the builder attaches every equipment object by its `place`, so moving an item is a
   spec change with no AI and no code change.
 - **Both hands** (Lester, 29 Oct: "carry rifle in both hands. left hand on barrel, right hand on
@@ -224,9 +232,9 @@ Rules:
 - **`changed_modules`:** a crew chat job's result lists the modules whose keys differ between the
   start of the turn and the version on screen; a shirt or pants change that cleared the outfit
   lists `outfit` too. The screen marks those modules "changed".
-- **Scoped AI:** `POST /chat` takes optional `"module"`. When set, the AI may change only that
-  module's keys; any tool call that would change another module's keys is refused and changes
-  nothing. Without `module` (the main chat), the AI is told to change only the modules the request
+- **Scoped AI:** `POST /chat` takes optional `"module"` (a module id, or the alias `placement` for
+  `equipment`). When set, the AI may change only that module's keys; any tool call that would
+  change another module's keys is refused and changes nothing. Without `module` (the main chat), the AI is told to change only the modules the request
   is about.
 
 - **Rig:** MPFB2 `game_engine` skeleton for every human, the same skeleton for all.
@@ -344,11 +352,11 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | POST `/api/projects/{id}/spec` | `{"patch": {...}}` (deep-merged into the spec; Inspect drawer edits) | `{"job_id"}` → new version |
 | POST `/api/uploads` | same as below, before there is a project (Home) | `{"attachment"}`; copied into the project when a chat there names it |
 | POST `/api/projects/{id}/uploads` | `{"name","type","data"}` (`data` is base64; see Attachments) | `{"attachment"}` |
-| POST `/api/projects/{id}/chat` | `{"message","mode":"build|research","attachments"?:[upload id],"module"?:crew module id}` | `{"job_id"}` |
+| POST `/api/projects/{id}/chat` | `{"message","mode":"build|research","attachments"?:[upload id],"module"?:crew module id (or `placement`, an alias of `equipment`)}` | `{"job_id"}` |
 | POST `/api/projects/{id}/pins` | `{"part","point":[x,y,z],"text","author"}` | `{"pin","job_id"}` |
 | POST `/api/projects/{id}/pins/{pin_id}/reply` | `{"text"}` | `{"job_id"}` |
 | PATCH `/api/projects/{id}/pins/{pin_id}` | `{"status":"open|resolved"}` | `{"pin"}` |
-| POST `/api/projects/{id}/undo` | | `{"project"}` |
+| POST `/api/projects/{id}/undo` | | `{"project"}`: back to the version `Project.undo_to` names (ships and crew alike); nothing to undo is a no-op |
 | PATCH `/api/projects/{id}` | `{"category"?,"name"?}` (1–60 characters each) | `{"project"}`; no new version |
 | POST `/api/projects/{id}/variants` | `{"name"?,"version"?,"brief"?,"research"?:bool,"scene"?}` | `{"project","job_id"}` (below) |
 | POST `/api/projects/{id}/approve` | | `{"project","scene":{"id","missing_stations"}|null}` |
@@ -379,9 +387,13 @@ it on every page, so work carries on, and is reported, while the user is on anot
   "research": null,
   "research_rev": 0, "design_plan": null, "plan_built": false, "note": null,
   "derived_from": {"project": "p_9f00", "version": 4, "name": "PC 303"},
-  "brief": "Fit a 25 mm gun on the foredeck in place of the 12.7 mm"
+  "brief": "Fit a 25 mm gun on the foredeck in place of the 12.7 mm",
+  "can_undo": true, "undo_to": 2
 }
 ```
+
+`undo_to` is the version Undo returns to (null when `can_undo` is false). It is not always the
+version number below: after an undo, the next change is undone back to the version shown before it.
 
 `brief` is the request the project was made from: a `custom` ship's description, or what a variant
 was asked to change. It is null when neither applies.

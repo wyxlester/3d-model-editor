@@ -4,9 +4,9 @@
 import { ApiError } from '../api';
 import { httpErrorText } from '../lib/designPlan';
 import { mergePatch } from '../lib/spec';
-import { MODULES, isModuleId, moduleOfItem } from '../lib/modules';
+import { MODULES, isModuleId, moduleOfItem, placeLabel } from '../lib/modules';
 import type {
-  Attachment, Catalog, CustomItem, Job, JobSummary, Message, ModuleId, Part, Pin, Project, ProjectSummary, Research, RouteResult, Scene,
+  Attachment, Catalog, CustomItem, Job, JobSummary, Message, ModuleId, Part, Pin, Place, Project, ProjectSummary, Research, RouteResult, Scene,
   SceneSpec, UnrealReport, VersionInfo,
 } from '../types';
 import shipPartsJson from '../../public/mock/ship_parts.json';
@@ -20,7 +20,8 @@ const JOB_MS = 3500;
 
 interface MockJob { job: Job; created: number; steps: string[]; finish: () => unknown; finished: boolean; fail?: string; project?: string; label?: string; kind?: string }
 interface Store {
-  projects: Record<string, Project & { glbs: Record<number, string> }>;
+  /** `specs`: each version's spec, so Undo can put the earlier one back (crew and ship). */
+  projects: Record<string, Project & { glbs: Record<number, string>; specs?: Record<number, Project['spec']> }>;
   scenes: Record<string, Scene>;
   seq: number;
 }
@@ -141,9 +142,12 @@ function proj(id: string) {
   return p;
 }
 const strip = (p: Store['projects'][string]): Project => {
-  const { glbs: _g, ...rest } = p;
-  void _g;
-  return JSON.parse(JSON.stringify({ ...rest, can_undo: rest.versions.length > 1 }));
+  // Remember the spec on screen for this version, so an undo back to it restores it.
+  if (p.version) p.specs = { ...(p.specs ?? {}), [p.version]: p.specs?.[p.version] ?? JSON.parse(JSON.stringify(p.spec ?? {})) };
+  const { glbs: _g, specs: _s, ...rest } = p;
+  void _g; void _s;
+  const n = rest.versions.length;
+  return JSON.parse(JSON.stringify({ ...rest, can_undo: n > 1, undo_to: n > 1 ? rest.versions[n - 2].n : null }));
 };
 
 function newVersion(p: Store['projects'][string], summary: string) {
@@ -152,7 +156,22 @@ function newVersion(p: Store['projects'][string], summary: string) {
   p.glbs[n] = p.kind === 'ship' ? (n % 2 ? '/mock/ship_v1.glb' : '/mock/ship_v2.glb') : p.glbs[1];
   p.model_url = p.glbs[n];
   p.versions = [...p.versions, { n, at: now(), summary, ok: true } as VersionInfo];
+  p.specs = { ...(p.specs ?? {}), [n]: JSON.parse(JSON.stringify(p.spec ?? {})) };
   return n;
+}
+
+/**
+ * Like the real AI (CONTRACT §6): a described equipment item says how it is held; when it does
+ * not, the sensible carry for that item is picked and said in the reply.
+ */
+function mockCarry(text: string): { place: Place; said: boolean } {
+  const t = text.toLowerCase();
+  const said: [RegExp, Place][] = [[/both hands|two hands|two-handed/, 'both_hands'], [/left hand/, 'left_hand'], [/right hand/, 'right_hand'],
+    [/\bchest\b/, 'chest'], [/\bback\b|slung/, 'back'], [/\bhip\b|\bbelt\b/, 'hip'], [/\bhead\b/, 'head']];
+  for (const [re, place] of said) if (re.test(t)) return { place, said: true };
+  const guess: [RegExp, Place][] = [[/rifle|gun|boat hook|pole|spear|oar/, 'both_hands'], [/binocular/, 'chest'], [/radio|walkie/, 'hip']];
+  for (const [re, place] of guess) if (re.test(t)) return { place, said: false };
+  return { place: 'right_hand', said: false };
 }
 
 /**
@@ -161,33 +180,36 @@ function newVersion(p: Store['projects'][string], summary: string) {
  * real AI must (CONTRACT §6 "Modules"). Returns the modules it changed, for `changed_modules`.
  * Unscoped messages starting "Shirt: …" are treated the same, so the main chat can be tried too.
  */
-function mockDescribed(p: Store['projects'][string], message: string, module: unknown): ModuleId[] {
-  if (p.kind !== 'crew') return [];
-  let m: ModuleId | null = isModuleId(module) ? module : null;
+function mockDescribed(p: Store['projects'][string], message: string, module: unknown): { changed: ModuleId[]; note?: string } {
+  if (p.kind !== 'crew') return { changed: [] };
+  // "placement" is the old id of the equipment module (CONTRACT §6); the server accepts it too.
+  let m: ModuleId | null = module === 'placement' ? 'equipment' : isModuleId(module) ? module : null;
   let text = message;
   const pre = message.match(/^([A-Za-z ]+):\s*(.+)$/s);
   if (pre) {
     const named = MODULES.find((d) => d.name.toLowerCase() === pre[1].trim().toLowerCase());
     if (named && (!m || m === named.id)) { m = named.id; text = pre[2]; }
   }
-  if (!m) return [];
+  if (!m) return { changed: [] };
   const spec = p.spec as Record<string, unknown>;
   const patch = (x: Record<string, unknown>) => { p.spec = mergePatch(p.spec as Record<string, unknown>, x) as Project['spec']; };
-  if (m === 'hair') { if (/blond/i.test(text)) patch({ body: { hair_color: [0.687, 0.479, 0.188] } }); return ['hair']; }
-  if (m === 'gender') { if (/\b(woman|female)\b/i.test(text)) patch({ body: { gender: 'female' } }); return ['gender']; }
-  if (m === 'skin' || m === 'outfit' || m === 'placement') return [m];
+  if (m === 'hair') { if (/blond/i.test(text)) patch({ body: { hair_color: [0.687, 0.479, 0.188] } }); return { changed: ['hair'] }; }
+  if (m === 'gender') { if (/\b(woman|female)\b/i.test(text)) patch({ body: { gender: 'female' } }); return { changed: ['gender'] }; }
+  if (m === 'skin' || m === 'outfit') return { changed: [m] };
   const items = ((spec.custom_items as CustomItem[] | undefined) ?? []).filter((i) => moduleOfItem(i) !== m);
   const n = ++store.seq;
   const held = m === 'equipment';
   const name = `${held ? 'Equipment' : 'Clothes'}__Mock_${n}`;
   const code = `# (mock) nothing is built in mock mode\nobj = ${held ? `crew.object_from_bmesh("${name}", crew.new_bmesh(), (0.4, 0.3, 0.2))` : `crew.garment("${name}", ["torso"], (1, 1, 1))`}`;
-  const item: CustomItem = { id: `item_${n}`, description: text.trim(), code, module: m, ...(held ? { place: 'right_hand' as const } : {}) };
+  const carry = held ? mockCarry(text) : null;
+  const item: CustomItem = { id: `item_${n}`, description: text.trim(), code, module: m, ...(carry ? { place: carry.place } : {}) };
   p.spec = { ...spec, custom_items: [...items, item] } as Project['spec'];
   const hadSuit = Boolean((spec.clothes as { suit?: string | null } | undefined)?.suit);
   if (m === 'shirt' || m === 'pants') patch({ clothes: { [m]: null, suit: null } });
   if (m === 'shoes') patch({ clothes: { shoes: null } });
   // Like the server: a shirt or pants change that clears the outfit reports the outfit as changed too.
-  return (m === 'shirt' || m === 'pants') && hadSuit ? [m, 'outfit'] : [m];
+  const note = carry ? (carry.said ? ` Carried: ${placeLabel(carry.place).toLowerCase()}.` : ` You didn't say how it's held, so I put it in ${placeLabel(carry.place).toLowerCase()}; move it under Equipment.`) : undefined;
+  return { changed: (m === 'shirt' || m === 'pants') && hadSuit ? [m, 'outfit'] : [m], note };
 }
 
 // ---- Ships of any type (CONTRACT §5 `type: "custom"`) ---------------------------------------
@@ -463,9 +485,10 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
         p.research = got.research;
         said = got.reply;
       }
-      const reply: Message = { who: 'AI', text: said, at: now() };
+      const described = research ? { changed: [] as ModuleId[] } : mockDescribed(p, String(body.message), body.module);
+      const changed = described.changed;
+      const reply: Message = { who: 'AI', text: said + (described.note ?? ''), at: now() };
       p.messages = [...p.messages, reply];
-      const changed = research ? [] : mockDescribed(p, String(body.message), body.module);
       if (!research) newVersion(p, String(body.message).slice(0, 60));
       return { message: reply, ...(p.kind === 'crew' && !research ? { changed_modules: changed } : {}) };
     });
@@ -571,6 +594,7 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
       p.versions = p.versions.slice(0, -1);
       p.version = p.versions[p.versions.length - 1].n;
       p.model_url = p.glbs[p.version];
+      if (p.specs?.[p.version]) p.spec = JSON.parse(JSON.stringify(p.specs[p.version]));
       p.pins = p.pins.map((x) => (x.after_version === gone ? { ...x, status: 'open', after_version: null } : x));
     }
     save();

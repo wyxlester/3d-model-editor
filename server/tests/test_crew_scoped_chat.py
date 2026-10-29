@@ -118,38 +118,82 @@ def test_custom_item_rules(make_client):
     assert proj["version"] == 1 and "custom_items" not in proj["spec"]
 
 
-def test_placement_scope_moves_only_the_place(make_client):
+def _with_held_items(make_client):
+    """A crew project holding binoculars on the chest and a described torch in the right hand."""
     agent, _, proj = chat(make_client, [
         ("set_equipment", {"equipment": ["life_vest", {"name": "binoculars", "place": "chest"}]}),
         ("add_custom_item", {"description": "torch", "module": "equipment", "place": "right_hand", "code": TORCH}),
     ])
     assert errors(agent) == [False, False]
+    return proj
+
+
+def test_equipment_scope_sets_places_and_items(make_client):
+    """Lester, 29 Oct: "combine equipment and equipment placement, it is a duplicate". Where an
+    item is carried is part of equipment, so an equipment-scoped turn may move things."""
+    proj = _with_held_items(make_client)
     agent = ScriptedAgent([("set_place", {"item": "binoculars", "place": "left_hand"}),
                            ("set_place", {"item": "item_1", "place": "hip"}),
                            ("set_place", {"item": "life_vest", "place": "back"}),  # fixed spot
                            ("set_place", {"item": "rope", "place": "back"}),
-                           ("set_equipment", {"equipment": ["life_vest"]})])  # equipment change: refused
+                           ("set_body", {"patch": {"hair": "afro01"}})])  # another module: refused
     c = make_client(agent=agent)
     # Re-use the stored project: the store is per settings, so a second client sees it.
     job = wait_job(c, c.post(f"/api/projects/{proj['id']}/chat",
-                             json={"message": "move things", "module": "placement"}).json()["job_id"])
+                             json={"message": "move things", "module": "equipment"}).json()["job_id"])
     assert errors(agent) == [False, False, True, True, True], agent.results
-    assert "only change the placement module" in agent.results[4][1]
+    assert "only change the equipment module" in agent.results[4][1]
     spec = c.get(f"/api/projects/{proj['id']}").json()["spec"]
     assert spec["equipment"] == ["life_vest", {"name": "binoculars", "place": "left_hand"}]
     assert spec["custom_items"][0]["place"] == "hip" and spec["custom_items"][0]["code"] == TORCH
-    assert job["result"]["changed_modules"] == ["placement"]
+    assert spec["body"].get("hair") is None
+    assert job["result"]["changed_modules"] == ["equipment"]  # a place-only change is equipment
 
 
-def test_equipment_scope_cannot_move_and_set_equipment_keeps_places(make_client):
+def test_placement_is_still_accepted_as_an_alias_of_equipment(make_client):
+    """Older clients and saved messages may still send module "placement"."""
+    proj = _with_held_items(make_client)
+    agent = ScriptedAgent([("set_place", {"item": "binoculars", "place": "back"}),
+                           ("set_equipment", {"equipment": ["life_vest", {"name": "binoculars", "color": "red"}]}),
+                           ("set_clothes", {"patch": {"shoes": None}})])  # another module: refused
+    c = make_client(agent=agent)
+    r = c.post(f"/api/projects/{proj['id']}/chat", json={"message": "sling them", "module": "placement"})
+    assert r.status_code == 200, r.text
+    job = wait_job(c, r.json()["job_id"])
+    assert errors(agent) == [False, False, True], agent.results
+    assert "only change the equipment module" in agent.results[2][1]
+    assert agent.prompts[0].startswith("You are editing only the equipment module")
+    assert "Changing" in job["label"] and "equipment" in job["label"] and "placement" not in job["label"]
+    spec = c.get(f"/api/projects/{proj['id']}").json()["spec"]
+    assert spec["equipment"] == ["life_vest", {"name": "binoculars", "color": "red", "place": "back"}]
+    assert job["result"]["changed_modules"] == ["equipment"]
+    assert c.post(f"/api/projects/{proj['id']}/chat",
+                  json={"message": "x", "module": "pockets"}).status_code == 400
+
+
+def test_equipment_turns_are_told_to_settle_the_carry():
+    """Lester, 29 Oct: "when user describe a equipment, user will also need to describe how the
+    human is holding the equipment". The AI picks a sensible carry rather than refusing."""
+    from app.agent import AgentSession, module_prompt, system_prompt
+    for text in (module_prompt("equipment"), module_prompt("placement"), system_prompt("crew", "build")):
+        assert "how it is held or carried" in text and "Never refuse" in text
+        assert "a rifle: both_hands" in text and "binoculars: chest" in text and "a radio: hip" in text
+    assert module_prompt("placement").startswith("You are editing only the equipment module")
+    assert "held or carried" not in module_prompt("shirt")
+    session = AgentSession.__new__(AgentSession)
+    session.repo_root = __import__("pathlib").Path(__file__).resolve().parents[2]
+    session.kind = "crew"
+    assert "pick the sensible carry" in session._custom_item_doc()
+
+
+def test_recolouring_equipment_keeps_its_place(make_client):
     agent, _, proj = chat(make_client, [
         ("set_equipment", {"equipment": ["life_vest", {"name": "binoculars", "place": "chest"}]})])
-    agent = ScriptedAgent([("set_place", {"item": "binoculars", "place": "back"}),
-                           ("set_equipment", {"equipment": ["life_vest", {"name": "binoculars", "color": "red"}]})])
+    agent = ScriptedAgent([("set_equipment", {"equipment": ["life_vest", {"name": "binoculars", "color": "red"}]})])
     c = make_client(agent=agent)
     job = wait_job(c, c.post(f"/api/projects/{proj['id']}/chat",
                              json={"message": "red binoculars", "module": "equipment"}).json()["job_id"])
-    assert errors(agent) == [True, False], agent.results
+    assert errors(agent) == [False], agent.results
     spec = c.get(f"/api/projects/{proj['id']}").json()["spec"]
     assert spec["equipment"][1] == {"name": "binoculars", "color": "red", "place": "chest"}
     assert job["result"]["changed_modules"] == ["equipment"]

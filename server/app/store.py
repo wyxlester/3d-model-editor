@@ -236,6 +236,9 @@ class ProjectStore:
             "derived_from": p.get("derived_from"), "brief": p.get("brief"),
             "draft": p.get("draft"), "discarded": bool(p.get("discarded")), "category": p.get("category"),
             "can_undo": bool(p["undo_stack"]),
+            # The version Undo returns to, so the button can say so (not derivable from `versions`
+            # once an undo has been followed by a new change).
+            "undo_to": p["undo_stack"][-1] if p["undo_stack"] else None,
         }
 
     def api_summary(self, pid: str) -> dict:
