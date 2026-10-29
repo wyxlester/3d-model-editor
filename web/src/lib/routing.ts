@@ -49,6 +49,15 @@ export function targetFor(dest: Destination, projectId: string | null): RouteTar
   }
 }
 
+/**
+ * Home starts the research itself when asked to research a ship that has no project yet ("Research
+ * and build USS Abraham Lincoln"): it creates the ship and opens Research on the running turn, rather
+ * than the Ship page with the request waiting for another click. A known ship opens as usual.
+ */
+export function startsNewResearch(dest: Destination, projectId: string | null): boolean {
+  return dest === 'ship_research' && !projectId;
+}
+
 /** The canvas's clarifying choices. The contract's `clarify` has no options field, so these are fixed. */
 export const clarifyOptions: { label: string; text: string }[] = [
   { label: 'A ship', text: 'Research and build a new ship' },

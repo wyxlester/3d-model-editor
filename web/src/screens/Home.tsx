@@ -1,11 +1,14 @@
 // Home: a chat box that routes to the right workshop (Lester, 29 Oct). Routing opens a screen
-// only after the user clicks "Open X"; when unsure it asks one question with choices.
+// only after the user clicks "Open X"; when unsure it asks one question with choices. Asked to
+// research a ship that has no project yet, it creates the ship and starts the research itself.
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, errorText } from '../api';
 import { AttachmentList, Dot, ErrorNote, TopBar, filesOnlyText, useAttachPicker } from '../components/common';
 import { recall, remember, useCatalog, useHealth, useJobs, useProjects } from '../hooks';
-import { clarifyOptions, paths, projectPath, targetFor } from '../lib/routing';
+import { briefFromCarried } from '../lib/designPlan';
+import { clarifyOptions, paths, projectPath, startsNewResearch, targetFor } from '../lib/routing';
+import { startDescribedShip } from './ProjectPicker';
 import type { Attachment, Message, ProjectBase, ProjectKind } from '../types';
 import { JobLines } from '../components/common';
 
@@ -63,6 +66,16 @@ export function Home() {
     setThread((t) => [...t, { who: 'me', text, attachments }, { who: 'ai', text: 'Working out where this belongs…', pending: true }]);
     try {
       const r = await api.route(text, attachments.map((a) => a.name));
+      if (startsNewResearch(r.destination, r.project_id)) {
+        // A ship with no project yet: create it and start the research here, then open Research on
+        // the running turn, where the report is reviewed and the plan approved before anything is built.
+        setThread((t) => [...t.slice(0, -1), { who: 'ai', text: 'Starting the research…', pending: true }]);
+        const turns: Turn[] = [...thread, { who: 'me', text, attachments }];
+        const brief = briefFromCarried(toCarried(turns));
+        const { id, state } = await startDescribedShip(brief.text, brief.attachments);
+        nav(paths.shipResearch(id), { state });
+        return;
+      }
       const target = targetFor(r.destination, r.project_id);
       if (target) {
         // Sure of the workshop: open it straight away (Lester, 29 Oct), carrying the conversation and files.

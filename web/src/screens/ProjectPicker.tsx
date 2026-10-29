@@ -24,7 +24,7 @@ import {
   filterToParams, groupByCategory, isFiltered, type ProjectFilter,
 } from '../lib/projectFilter';
 import { paths, projectPath } from '../lib/routing';
-import type { Message, ProjectBase, ProjectKind, ProjectSummary } from '../types';
+import type { Attachment, Message, ProjectBase, ProjectKind, ProjectSummary } from '../types';
 import { CrewViewer, ShipViewer } from '../viewer/Viewer';
 import { useThumbnail } from '../viewer/thumbnail';
 
@@ -290,6 +290,28 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
 export interface ResearchStart { researchJob?: string; note?: string; startError?: string; carried?: Message[] }
 
 /**
+ * Create a custom ship and send the brief and files as its first research turn. Used by "Describe a
+ * new ship" and by Home when it is asked to research a ship that has no project yet. Throws only when
+ * the ship could not be created; a research turn that did not start is reported to Research instead.
+ */
+export async function startDescribedShip(brief: string, atts: Attachment[]): Promise<{ id: string; state: ResearchStart }> {
+  const r = await api.createProject('ship', 'custom', undefined, brief);
+  const id = r.project.id;
+  remember('ship', id);
+  let state: ResearchStart = { note: r.project.note };
+  try {
+    // Home's upload ids are copied into the project by the server when the chat names them.
+    const c = await api.chat(id, brief, 'research', atts.map((a) => a.id));
+    state = { ...state, researchJob: c.job_id };
+  } catch (e) {
+    // The ship exists but the research did not start: open it with the brief ready to send again.
+    state = { ...state, startError: `The research did not start: ${errorText(e)}`,
+      carried: [{ who: 'You', text: brief, at: new Date().toISOString(), ...(atts.length ? { attachments: atts } : {}) }] };
+  }
+  return { id, state };
+}
+
+/**
  * "Describe a new ship": one click creates a custom ship, sends the description and photos as the
  * first research turn, and opens Research to watch it. Nothing is built until the plan is approved.
  */
@@ -310,20 +332,7 @@ function DescribeShip({ carried, disabled }: { carried: Message[] | null; disabl
     if (!brief) { setEmpty(true); return; }
     setCreating(true); setErr(null);
     try {
-      const r = await api.createProject('ship', 'custom', undefined, brief);
-      const id = r.project.id;
-      remember('ship', id);
-      const atts = files.ready;
-      let state: ResearchStart = { note: r.project.note };
-      try {
-        // Home's upload ids are copied into the project by the server when the chat names them.
-        const c = await api.chat(id, brief, 'research', atts.map((a) => a.id));
-        state = { ...state, researchJob: c.job_id };
-      } catch (e) {
-        // The ship exists but the research did not start: open it with the brief ready to send again.
-        state = { ...state, startError: `The research did not start: ${errorText(e)}`,
-          carried: [{ who: 'You', text: brief, at: new Date().toISOString(), ...(atts.length ? { attachments: atts } : {}) }] };
-      }
+      const { id, state } = await startDescribedShip(brief, files.ready);
       nav(paths.shipResearch(id), { state });
     } catch (e) {
       setErr(errorText(e));

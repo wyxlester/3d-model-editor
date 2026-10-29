@@ -4,7 +4,7 @@ import { hiddenParts, isPartName, jointsOf, levelsFor, ownNodes, partLabel, reso
 import { MAX_POLL_FAILURES, describe as describePoll, nextDelayMs, pollReducer, type PollState } from './jobs';
 import { blenderToGltf, cameraFor, gltfToBlender, jointAxisGltf } from './frames';
 import { assetLabel, clothesSlot, mergePatch, toggleIn } from './spec';
-import { targetFor } from './routing';
+import { startsNewResearch, targetFor } from './routing';
 import { fileType, refuse, sizeText } from './attachments';
 import {
   boxText, boxToPercent, clampPan, countLine, coverageSummary, filterPhotos, fitSize, hostOf, photoIdsIn, photoStatus, provenanceRows,
@@ -171,6 +171,12 @@ describe('routing', () => {
     expect(targetFor('ship_variant', null)?.path).toBe('/ship');
     expect(targetFor('crew_variant', 'c1')?.path).toBe('/crew/c1?variant=1');
     expect(targetFor('crew_variant', null)?.path).toBe('/crew');
+  });
+  it('starts the research itself only for a ship that has no project yet', () => {
+    expect(startsNewResearch('ship_research', null)).toBe(true);
+    expect(startsNewResearch('ship_research', 'p1')).toBe(false);
+    expect(startsNewResearch('ship_build', null)).toBe(false);
+    expect(startsNewResearch('crew', null)).toBe(false);
   });
 });
 
