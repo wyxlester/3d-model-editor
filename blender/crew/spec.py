@@ -26,6 +26,20 @@ SUITS = ["male_worksuit01", "male_casualsuit01", "male_casualsuit02", "male_casu
          "female_casualsuit01", "female_casualsuit02", "female_elegantsuit01", "female_sportsuit01"]
 SHOES = ["shoes01", "shoes02", "shoes03", "shoes04", "shoes05", "shoes06"]
 HATS = ["fedora01", "fedora_cocked"]
+# Modules (contract section 6, "Modules").
+SHIRT_STYLES = ["tshirt", "singlet", "long_sleeve", "polo"]
+PANTS_STYLES = ["shorts", "trousers", "cargo"]
+GARMENT_DEFAULT_COLOR = {"shirt": [0.85, 0.85, 0.82], "pants": [0.04, 0.06, 0.18]}
+ACCESSORIES = ["cap", "sunglasses", "ear_defenders", "gloves"]
+ACCESSORY_DEFAULT_COLOR = {"cap": [0.03, 0.06, 0.20], "sunglasses": [0.02, 0.02, 0.02],
+                           "ear_defenders": [0.75, 0.55, 0.03], "gloves": [0.55, 0.42, 0.25]}
+PLACES = ["right_hand", "left_hand", "chest", "back", "hip", "head"]
+# Items with one fixed spot have no place; the others default to where the catalog puts them.
+FIXED_SPOT = {"life_vest", "helmet"}
+DEFAULT_PLACE = {"binoculars": "chest", "radio": "hip"}
+CUSTOM_DEFAULT_PLACE = "right_hand"
+ITEM_MODULES = ["shirt", "pants", "shoes", "hair", "equipment", "accessories"]
+
 HAIRS = ["short01", "short02", "short03", "short04", "afro01", "bob01", "bob02", "braid01",
          "long01", "ponytail01"]
 
@@ -36,8 +50,9 @@ DEFAULT_SPEC = {
     "body": {"gender": "male", "height_cm": 178, "weight": 0.5, "muscle": 0.5, "age_years": 30,
              "skin": "medium", "hair": None, "hair_color": None},
     "clothes": {"suit": "male_worksuit01", "shoes": "shoes01", "hat": None, "suit_color": None,
-                "shoes_color": None, "hat_color": None},
+                "shoes_color": None, "hat_color": None, "shirt": None, "pants": None},
     "equipment": ["life_vest"],
+    "accessories": [],
     "animations": list(ANIMATIONS),
     "custom_items": [],
 }
@@ -124,9 +139,11 @@ def _strict_color(name, v, errors):
     return None
 
 
-def custom_items(items, errors):
-    """Validate custom_items: a list of {"id", "description", "code"} with unique [A-Za-z0-9_] ids,
-    code that compiles and uses none of the forbidden calls. Returns the cleaned list."""
+def custom_items(items, errors, warnings=None):
+    """Validate custom_items: a list of {"id", "description", "code", "module"?, "place"?} with
+    unique [A-Za-z0-9_] ids, code that compiles and uses none of the forbidden calls. Returns the
+    cleaned list, every item with "module" (inferred when absent) and "place" (or None)."""
+    warnings = [] if warnings is None else warnings
     if items is None:
         return []
     if not isinstance(items, list):
@@ -162,7 +179,69 @@ def custom_items(items, errors):
         except SyntaxError as e:
             errors.append("custom_items %s (%s) failed at line %s: SyntaxError: %s" % (iid, desc, e.lineno, e.msg))
             continue
-        out.append({"id": iid, "description": desc, "code": code})
+        module = item.get("module")
+        if module is None:
+            # Contract: an item without a module is equipment if it makes Equipment__ objects,
+            # else shirt. object_from_bmesh names its object Equipment__<Name> by default.
+            module = "equipment" if _MAKES_EQUIPMENT.search(code) else "shirt"
+        elif module not in ITEM_MODULES:
+            errors.append("custom_items %s: module must be one of %s, got %r" % (iid, ITEM_MODULES, module))
+            continue
+        place = item.get("place")
+        if place is not None and place not in PLACES:
+            errors.append("custom_items %s: place must be one of %s or absent, got %r" % (iid, PLACES, place))
+            continue
+        if place is not None and module != "equipment":
+            warnings.append("custom_items %s: place %r is ignored; only equipment items are placed "
+                            "(a %s item fixes its own spot)" % (iid, place, module))
+            place = None
+        out.append({"id": iid, "description": desc, "code": code, "module": module, "place": place})
+    return out
+
+
+_MAKES_EQUIPMENT = re.compile(r"Equipment__|object_from_bmesh\s*\(")
+
+
+def garment_preset(key, value, styles, errors):
+    """clothes.shirt / clothes.pants: null or {"style", "color"}; returns the cleaned value."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = {"style": value}
+    if not isinstance(value, dict) or value.get("style") not in styles:
+        errors.append("clothes.%s must be null or {\"style\": one of %s, \"color\": [r,g,b]}, got %r"
+                      % (key, styles, value))
+        return None
+    color = _strict_color("clothes.%s.color" % key, value.get("color"), errors)
+    return {"style": value["style"], "color": color or list(GARMENT_DEFAULT_COLOR[key])}
+
+
+def accessories(items, errors, warnings):
+    """accessories[]: names from ACCESSORIES, as strings or {"name", "color"}; returns
+    [{"name", "color"}] with each accessory's default colour filled in."""
+    if items is None:
+        return []
+    if not isinstance(items, list):
+        errors.append("accessories must be a list, got %r" % type(items).__name__)
+        return []
+    out, seen = [], set()
+    for item in items:
+        if isinstance(item, str):
+            item = {"name": item}
+        name = item.get("name") if isinstance(item, dict) else None
+        if name in HATS:
+            errors.append("accessories: %r is a hat; set clothes.hat to %r instead" % (name, name))
+            continue
+        if name not in ACCESSORIES:
+            errors.append("accessories entries must be one of %s (or {\"name\",\"color\"}), got %r"
+                          % (ACCESSORIES, item))
+            continue
+        if name in seen:
+            warnings.append("accessory %r listed twice; using the first" % name)
+            continue
+        seen.add(name)
+        color = _strict_color("accessories.%s.color" % name, item.get("color"), errors)
+        out.append({"name": name, "color": color or list(ACCESSORY_DEFAULT_COLOR[name])})
     return out
 
 
@@ -220,6 +299,12 @@ def normalize(spec):
     clothes["suit_color"] = _color("clothes.suit_color", clothes.get("suit_color"), errors)
     for key in ("shoes_color", "hat_color"):
         clothes[key] = _strict_color("clothes." + key, clothes.get(key), errors)
+    clothes["shirt"] = garment_preset("shirt", clothes.get("shirt"), SHIRT_STYLES, errors)
+    clothes["pants"] = garment_preset("pants", clothes.get("pants"), PANTS_STYLES, errors)
+    if clothes.get("suit") and (clothes["shirt"] or clothes["pants"]):
+        warnings.append("clothes.suit %s is set, so it is drawn instead of clothes.%s (set suit to null "
+                        "to wear them)" % (clothes["suit"], " and ".join(
+                            k for k in ("shirt", "pants") if clothes[k])))
 
     eq_out, seen = [], set()
     for item in spec.get("equipment") or []:
@@ -233,19 +318,36 @@ def normalize(spec):
             continue
         seen.add(item["name"])
         color = _color("equipment.%s.color" % item["name"], item.get("color"), errors)
+        place = item.get("place")
+        if item["name"] in FIXED_SPOT:
+            if place is not None:
+                warnings.append("equipment %s has one fixed spot; place %r is ignored" % (item["name"], place))
+            place = None
+        elif place is None:
+            place = DEFAULT_PLACE[item["name"]]
+        elif place not in PLACES:
+            errors.append("equipment.%s.place must be one of %s, got %r" % (item["name"], PLACES, place))
+            place = DEFAULT_PLACE[item["name"]]
         eq_out.append({"name": item["name"],
-                       "color": color or list(EQUIPMENT_COLORS[EQUIPMENT_DEFAULT_COLOR[item["name"]]])})
+                       "color": color or list(EQUIPMENT_COLORS[EQUIPMENT_DEFAULT_COLOR[item["name"]]]),
+                       "place": place})
     spec["equipment"] = eq_out
     if "helmet" in seen and clothes.get("hat"):
         warnings.append("both a hat and a helmet were asked for; the hat is left off")
         clothes["hat"] = None
+    spec["accessories"] = accessories(spec.get("accessories"), errors, warnings)
+    names = [a["name"] for a in spec["accessories"]]
+    if "cap" in names and ("helmet" in seen or clothes.get("hat")):
+        warnings.append("a cap and a %s were both asked for; the cap is left off"
+                        % ("helmet" if "helmet" in seen else "hat"))
+        spec["accessories"] = [a for a in spec["accessories"] if a["name"] != "cap"]
 
     anims = spec.get("animations") or []
     bad = [a for a in anims if a not in ANIMATIONS]
     if bad:
         errors.append("animations must be from %s, got unknown %s" % (ANIMATIONS, bad))
     spec["animations"] = [a for a in anims if a in ANIMATIONS]
-    spec["custom_items"] = custom_items(spec.get("custom_items"), errors)
+    spec["custom_items"] = custom_items(spec.get("custom_items"), errors, warnings)
     return spec, errors, warnings
 
 

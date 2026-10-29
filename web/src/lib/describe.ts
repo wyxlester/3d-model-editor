@@ -1,4 +1,5 @@
-// "Made by description" helpers for the crew workshop (CONTRACT §6). Pure, unit tested.
+// "Made by description" helpers for the crew workshop (CONTRACT §6): swatch colours, removing a
+// described item, the picker offer. Which module an item belongs to is in modules.ts. Pure, unit tested.
 import type { CustomItem, Vec3 } from '../types';
 
 export interface Swatch { id: string; label: string; hex: string }
@@ -44,38 +45,6 @@ export function selectedSwatch(value: Vec3 | null | undefined, swatches: Swatch[
   if (!value) return 'default';
   const hit = swatches.find((s) => hexToLinear(s.hex).every((c, i) => Math.abs(c - value[i]) < 0.01));
   return hit ? hit.id : null;
-}
-
-export type DescribeSlot = 'Hair' | 'Clothes' | 'Head' | 'Equipment';
-
-/** The chat message for a description typed under a picker: "Clothes: a white singlet". Null when blank. */
-export function describeMessage(slot: DescribeSlot, text: string): string | null {
-  const t = text.trim().replace(/\s+/g, ' ');
-  return t ? `${slot}: ${t}` : null;
-}
-
-export type ItemKind = 'clothes' | 'head' | 'equipment' | 'other';
-
-const HEAD_WORDS = /\b(hat|cap|helmet|beret|hood|beanie|fedora|turban|bandana|headband|goggles|glasses|sunglasses|beard|moustache|mustache|hair)\b/i;
-
-/**
- * Which tab a made-by-description item belongs in. The code's object names say worn vs held
- * (CONTRACT §6: Clothes__ / Equipment__); worn things on the head are told apart by the words.
- */
-export function itemKind(item: Pick<CustomItem, 'code' | 'description'>): ItemKind {
-  const code = item.code ?? '';
-  const worn = code.includes('Clothes__');
-  const held = code.includes('Equipment__');
-  if (worn && !held) return HEAD_WORDS.test(item.description ?? '') ? 'head' : 'clothes';
-  if (held && !worn) return 'equipment';
-  if (worn && held) return HEAD_WORDS.test(item.description ?? '') ? 'head' : 'clothes';
-  return 'other';
-}
-
-/** Items to list in a tab. Ones that can't be classified show under Clothes so none is lost. */
-export function itemsFor(items: CustomItem[] | undefined, tab: 'Clothes' | 'Head' | 'Equipment'): CustomItem[] {
-  const want: ItemKind[] = tab === 'Clothes' ? ['clothes', 'other'] : tab === 'Head' ? ['head'] : ['equipment'];
-  return (items ?? []).filter((i) => want.includes(itemKind(i)));
 }
 
 /** The spec patch that removes one made-by-description item (the whole array, as patches replace arrays). */

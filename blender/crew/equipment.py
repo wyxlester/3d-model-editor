@@ -14,7 +14,9 @@ from mathutils import Matrix, Vector
 TORSO_GROUPS = {"pelvis", "spine_01", "spine_02", "spine_03"}
 HEAD_GROUPS = {"head", "neck_01"}
 
-PARENT_BONE = {"life_vest": "spine_02", "helmet": "head", "binoculars": "spine_03", "radio": "pelvis"}
+VEST_CLEARANCE = 0.012
+
+PARENT_BONE = {"life_vest": "spine_02", "helmet": "head"}   # fixed spots; the rest go by place
 
 
 def _dominant_groups(obj):
@@ -27,6 +29,11 @@ def _dominant_groups(obj):
                 best, w = names.get(g.group), g.weight
         out.append(best)
     return out
+
+
+def _points_all(obj):
+    mw = obj.matrix_world
+    return [mw @ v.co for v in obj.data.vertices]
 
 
 def _points(objs, groups):
@@ -130,6 +137,9 @@ def build_life_vest(objs, armature, color):
     outer, inner = [], []
     for k, (z, c, rx, ry) in enumerate(secs):
         bulk = 0.045 if 0 < k < len(secs) - 1 else 0.03   # puffier in the middle, like a foam vest
+        # VEST_CLEARANCE leaves room for a shirt under the vest. It is the same whatever is worn,
+        # so changing the shirt never resizes the vest (contract section 6, "Modules").
+        rx, ry = rx + VEST_CLEARANCE, ry + VEST_CLEARANCE
         outer.append([bm.verts.new(p) for p in _ellipse(c, rx + bulk, ry + bulk * 0.8, n, z)])
         inner.append([bm.verts.new(p) for p in _ellipse(c, rx + 0.008, ry + 0.006, n, z)])
     _bridge_rings(bm, outer)
@@ -138,11 +148,12 @@ def build_life_vest(objs, armature, color):
     _bridge_rings(bm, [outer[-1], inner[-1]])
     # Shoulder straps: from the top of the vest at the front, over the shoulder, down the back.
     ztop, c_top, rx_top, ry_top = secs[-1]
+    rx_top += VEST_CLEARANCE
     pts = _points(objs, {"spine_03", "clavicle_l", "clavicle_r", "neck_01"})
     for s in (1, -1):
         y = s * min(0.11, ry_top * 0.6)
         near = [p for p in pts if abs(p.y - y) < 0.03 and abs(p.x - c_top.x) < 0.08]
-        zs = max((p.z for p in near), default=ztop + 0.1) + 0.012
+        zs = max((p.z for p in near), default=ztop + 0.1) + 0.012 + VEST_CLEARANCE
         front = Vector((c_top.x + rx_top + 0.02, y, ztop - 0.01))
         back = Vector((c_top.x - rx_top - 0.02, y, ztop - 0.01))
         top_f = Vector((c_top.x + 0.07, y, zs))
@@ -192,30 +203,36 @@ def build_helmet(objs, armature, color):
 
 
 def build_binoculars(objs, armature, color):
-    secs = torso_sections(objs, armature, [armature.data.bones["spine_03"].head_local.z + 0.03])
-    z, c, rx, ry = secs[0]
-    front = c.x + rx
-    center = Vector((front + 0.045, 0.0, z))
+    """Modelled at the origin (hinge at the origin, barrels upright, eyepieces up); the builder
+    places it by its place, and adds the neck strap when that place is the chest."""
+    center = Vector((0.0, 0.0, 0.0))
     bm = bmesh.new()
     for s in (1, -1):
         _add_cylinder(bm, center + Vector((0, s * 0.036, 0)), 0.026, 0.12, 10, "Z")
         _add_cylinder(bm, center + Vector((0, s * 0.036, -0.068)), 0.03, 0.025, 10, "Z")  # objective lens bell
     _add_box(bm, center + Vector((0, 0, 0.02)), (0.03, 0.05, 0.035))  # hinge bridge
-    # Neck strap: from the eyepieces up to the base of the neck on each side.
-    neck = armature.data.bones["neck_01"].head_local
-    for s in (1, -1):
-        a = center + Vector((0, s * 0.05, 0.06))
-        b = Vector((neck.x + 0.02, s * 0.065, neck.z - 0.01))
-        _segment_box(bm, a, b, 0.014, 0.006)
     mat = _material("Equipment__binoculars", color, 0.45)
     return _object_from_bmesh("Equipment__binoculars", bm, center, [mat], smooth=False)
 
 
+def add_binocular_strap(obj, armature):
+    """Neck strap from the placed binoculars' eyepieces up to the base of the neck on each side."""
+    inv = obj.matrix_world.inverted()
+    neck = armature.matrix_world @ armature.data.bones["neck_01"].head_local
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    for s in (1, -1):
+        a = obj.matrix_world @ Vector((0, s * 0.05, 0.06))
+        b = Vector((neck.x + 0.02, s * 0.065, neck.z - 0.01))
+        _segment_box(bm, inv @ a, inv @ b, 0.014, 0.006)
+    bm.to_mesh(obj.data)
+    bm.free()
+    obj.data.update()
+
+
 def build_radio(objs, armature, color):
-    pelvis = armature.data.bones["pelvis"].head_local
-    secs = torso_sections(objs, armature, [pelvis.z])
-    z, c, rx, ry = secs[0]
-    center = Vector((c.x + 0.01, -(ry + 0.03), z - 0.01))   # character's right hip
+    """Modelled at the origin (body centre at the origin, belt clip on its +Y side, upright)."""
+    center = Vector((0.0, 0.0, 0.0))
     bm = bmesh.new()
     _add_box(bm, center, (0.035, 0.06, 0.11))
     _add_box(bm, center + Vector((0, 0.02, 0.0)), (0.012, 0.02, 0.08))  # belt clip
@@ -242,11 +259,18 @@ def parent_to_bone(obj, armature, bone_name):
 
 
 def add_equipment(items, armature, body_objs, log=print):
-    out = {}
+    """Builds every catalog item. Items with one fixed spot (life vest, helmet) are parented now;
+    the others are returned unparented in ``to_place`` as (object, place), for the builder to
+    attach by place after custom items have run. Returns (objects by name, to_place)."""
+    out, to_place = {}, []
     for item in items:
         obj = BUILDERS[item["name"]](body_objs, armature, item["color"])
-        parent_to_bone(obj, armature, PARENT_BONE[item["name"]])
         out[obj.name] = obj
-        log("equipment %s on bone %s, %d triangles" % (obj.name, PARENT_BONE[item["name"]],
-                                                       sum(len(p.vertices) - 2 for p in obj.data.polygons)))
-    return out
+        tris = sum(len(p.vertices) - 2 for p in obj.data.polygons)
+        if item.get("place"):
+            to_place.append((obj, item["place"]))
+            log("equipment %s built, %d triangles, to go on %s" % (obj.name, tris, item["place"]))
+        else:
+            parent_to_bone(obj, armature, PARENT_BONE[item["name"]])
+            log("equipment %s on bone %s, %d triangles" % (obj.name, PARENT_BONE[item["name"]], tris))
+    return out, to_place

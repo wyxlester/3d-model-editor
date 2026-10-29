@@ -35,7 +35,7 @@ def parse_args():
     p = argparse.ArgumentParser(prog="build_crew.py")
     p.add_argument("--spec", help="crew spec JSON (defaults to the default male)")
     p.add_argument("--out", required=True)
-    p.add_argument("--render", help="also render <prefix>idle.png and <prefix>walk.png previews")
+    p.add_argument("--render", help="also render <prefix>idle.png, <prefix>walk.png and <prefix>back.png previews")
     return p.parse_args(argv)
 
 
@@ -165,52 +165,114 @@ def check_feet(armature, action_names, errors, warnings):
     return stats
 
 
-def run_custom_items(items, armature, objects, errors, log):
+def run_custom_items(items, armature, errors, warnings, log):
     """Run the AI's custom_items in order with bpy, mathutils and the crew helpers in scope (same
     rules as ship custom ops: a failing item is a build error naming its id and line, and the
-    remaining items still run). Returns {name: object} of the Clothes__/Equipment__ meshes made.
-    Runs before animations bake, so anything skinned or bone-parented here is animated too."""
+    remaining items still run). Runs before animations bake, so anything skinned or bone-parented
+    here is animated too. The caller wraps this in crew_custom._setup/_finish.
+
+    Returns ({name: object} of the Clothes__/Equipment__ meshes made, [(object, place)] of the
+    equipment the builder still has to attach). Equipment items (module "equipment") are modelled
+    at the origin and placed by the builder; an older item whose code parented its own object is
+    left where it put it unless the spec gives a place."""
     import math as _math
     import mathutils
     from mathutils import Matrix, Vector
-    crew_custom._setup(armature, objects.get("Body__Skin"))
-    made = {}
-    try:
-        for item in items:
-            iid = item["id"]
-            before = set(bpy.data.objects.keys())
-            ns = {"bpy": bpy, "mathutils": mathutils, "crew": crew_custom, "math": _math,
-                  "Vector": Vector, "Matrix": Matrix, "__name__": "custom_item_%s" % iid}
-            try:
-                exec(compile(item["code"], "<custom_item %s>" % iid, "exec"), ns)
-            except Exception as e:  # noqa: BLE001 - reported, the build is then not ok
-                tb = traceback.extract_tb(e.__traceback__)
-                line = next((f.lineno for f in reversed(tb) if f.filename.startswith("<custom_item")), "?")
-                errors.append("custom item %s (%s) failed at line %s: %s: %s"
-                              % (iid, item.get("description", ""), line, type(e).__name__, e))
+    made, to_place = {}, []
+    for item in items:
+        iid = item["id"]
+        module = item.get("module", "shirt")
+        before = set(bpy.data.objects.keys())
+        ns = {"bpy": bpy, "mathutils": mathutils, "crew": crew_custom, "math": _math,
+              "Vector": Vector, "Matrix": Matrix, "__name__": "custom_item_%s" % iid}
+        try:
+            exec(compile(item["code"], "<custom_item %s>" % iid, "exec"), ns)
+        except Exception as e:  # noqa: BLE001 - reported, the build is then not ok
+            tb = traceback.extract_tb(e.__traceback__)
+            line = next((f.lineno for f in reversed(tb) if f.filename.startswith("<custom_item")), "?")
+            errors.append("custom item %s (%s) failed at line %s: %s: %s"
+                          % (iid, item.get("description", ""), line, type(e).__name__, e))
+            continue
+        for name in sorted(set(bpy.data.objects.keys()) - before):
+            ob = bpy.data.objects[name]
+            problem = None
+            bone_parented = ob.parent is armature and ob.parent_type == "BONE"
+            if ob.type != "MESH":
+                problem = "is not a mesh"
+            elif not crew_custom._NAME.match(name) or not name.startswith(("Clothes__", "Equipment__")):
+                problem = "is not a legal crew part name (Clothes__<Name> or Equipment__<Name>, [A-Za-z0-9_])"
+            elif name.startswith("Equipment__") and module != "equipment" and not bone_parented:
+                problem = "is not parented to a bone (use crew.hold or crew.attach), so it would not move"
+            elif name.startswith("Clothes__") and not any(
+                    m.type == "ARMATURE" and m.object is armature for m in ob.modifiers):
+                problem = "is not skinned to the crew armature (use crew.garment)"
+            if problem:
+                errors.append("custom item %s created %r, which %s" % (iid, name, problem))
+                bpy.data.objects.remove(ob, do_unlink=True)
                 continue
-            for name in sorted(set(bpy.data.objects.keys()) - before):
-                ob = bpy.data.objects[name]
-                problem = None
-                if ob.type != "MESH":
-                    problem = "is not a mesh"
-                elif not crew_custom._NAME.match(name) or not name.startswith(("Clothes__", "Equipment__")):
-                    problem = "is not a legal crew part name (Clothes__<Name> or Equipment__<Name>, [A-Za-z0-9_])"
-                elif name.startswith("Equipment__") and not (ob.parent is armature and ob.parent_type == "BONE"):
-                    problem = "is not parented to a bone (use crew.hold or crew.attach), so it would not move"
-                elif name.startswith("Clothes__") and not any(
-                        m.type == "ARMATURE" and m.object is armature for m in ob.modifiers):
-                    problem = "is not skinned to the crew armature (use crew.garment)"
-                if problem:
-                    errors.append("custom item %s created %r, which %s" % (iid, name, problem))
-                    bpy.data.objects.remove(ob, do_unlink=True)
+            made[name] = ob
+            if name.startswith("Equipment__") and module == "equipment":
+                if item.get("place"):
+                    to_place.append((ob, item["place"]))
+                elif not bone_parented:
+                    to_place.append((ob, crew_spec.CUSTOM_DEFAULT_PLACE))
+            log("custom item %s (%s) made %s (%d triangles)" % (
+                iid, module, name, sum(len(p.vertices) - 2 for p in ob.data.polygons)))
+    return made, to_place
+
+
+def build_modules(spec, armature, objects, equipment, warnings, log):
+    """Shirt, pants, accessories, custom items and placement, in the order that keeps modules
+    independent (see blender/crew/modules.py). Mutates objects/equipment; returns errors."""
+    from crew import modules as crew_modules
+    errors = []
+    c = spec["clothes"]
+    surface = crew_modules.snapshot(objects)
+    equipment_objs, to_place = crew_equipment.add_equipment(spec["equipment"], armature,
+                                                            list(objects.values()), log)
+    equipment.update(equipment_objs)
+    for tag in ("life_vest", "helmet"):
+        if "Equipment__" + tag in equipment:
+            surface.add(equipment["Equipment__" + tag], tag)
+    equipment.update(crew_modules.build_accessories(spec["accessories"], armature, surface, log))
+
+    items = spec["custom_items"]
+    described = {i["module"] for i in items}
+    if c.get("suit"):
+        dropped = [i["id"] for i in items if i["module"] in ("shirt", "pants")]
+        if dropped:
+            warnings.append("clothes.suit %s is set, so it is drawn instead of the shirt/pants custom "
+                            "items %s" % (c["suit"], ", ".join(dropped)))
+            items = [i for i in items if i["module"] not in ("shirt", "pants")]
+    crew_custom._setup(armature, objects.get("Body__Skin"))
+    try:
+        if not c.get("suit"):
+            for key, build in (("shirt", lambda p: crew_modules.build_shirt(p, armature, log)),
+                               ("pants", lambda p: crew_modules.build_pants(p, armature, surface, log))):
+                if not c.get(key):
                     continue
-                made[name] = ob
-                log("custom item %s made %s (%d triangles)" % (
-                    iid, name, sum(len(p.vertices) - 2 for p in ob.data.polygons)))
+                if key in described:
+                    warnings.append("clothes.%s is set but a %s custom item describes it; the described "
+                                    "one is drawn" % (key, key))
+                    continue
+                ob = build(c[key])
+                objects[ob.name] = ob
+        if any(a["name"] == "gloves" for a in spec["accessories"]):
+            color = next(a["color"] for a in spec["accessories"] if a["name"] == "gloves")
+            ob = crew_modules.build_gloves(color, log)
+            objects[ob.name] = ob
+        if items:
+            made, more = run_custom_items(items, armature, errors, warnings, log)
+            to_place += more
+            for name, ob in made.items():
+                (equipment if name.startswith("Equipment__") else objects)[name] = ob
+        for ob, where in to_place:
+            crew_modules.place(ob, where, armature, surface, log)
+            if ob.name == "Equipment__binoculars" and where == "chest":
+                crew_equipment.add_binocular_strap(ob, armature)
     finally:
         crew_custom._finish()
-    return made
+    return errors
 
 
 def main():
@@ -241,13 +303,8 @@ def main():
         reset_scene()
         report["mpfb_pack_installed"] = mpfb_human.pack_installed()
         armature, objects, barefoot_h, height_macro = mpfb_human.build_human(spec, warnings, log)
-        equipment = crew_equipment.add_equipment(spec["equipment"], armature, list(objects.values()), log)
-        if spec["custom_items"]:
-            for name, ob in run_custom_items(spec["custom_items"], armature, objects, errors, log).items():
-                if name.startswith("Equipment__"):
-                    equipment[name] = ob
-                else:
-                    objects[name] = ob
+        equipment = {}
+        errors.extend(build_modules(spec, armature, objects, equipment, warnings, log))
 
         actions = crew_anims.bake_all(armature, spec["animations"], log)
         report["feet"] = check_feet(armature, [a.name for a in actions], errors, warnings)
@@ -288,9 +345,12 @@ def main():
 
         if args.render:
             from crew import render
-            render.render_preview(args.render + "idle.png", armature, "idle", frame=20)
-            walk = crew_anims.frame_count(crew_anims.ANIMATIONS["walk"])
-            render.render_preview(args.render + "walk.png", armature, "walk", frame=1 + walk // 4)
+            still = "idle" if "idle" in bpy.data.actions else None
+            render.render_preview(args.render + "idle.png", armature, still, frame=20)
+            render.render_preview(args.render + "back.png", armature, still, frame=20, yaw_deg=215.0)
+            if "walk" in bpy.data.actions:
+                walk = crew_anims.frame_count(crew_anims.ANIMATIONS["walk"])
+                render.render_preview(args.render + "walk.png", armature, "walk", frame=1 + walk // 4)
             armature.animation_data.action = None
     except Exception as exc:  # noqa: BLE001 - the report is the interface
         errors.append("%s: %s" % (type(exc).__name__, exc))

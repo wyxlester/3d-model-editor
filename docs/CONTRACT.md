@@ -70,7 +70,7 @@ the exit code**: Blender returns 0 even when a script raises an error, unless th
 ```json
 {
   "schema": "me3d.ship_spec/1",
-  "type": "container | sampan | tanker",
+  "type": "container | sampan | tanker | custom",
   "id": "container_ship",
   "name": "Container ship",
   "params": {"loa_m": 200, "beam_m": 32.2, "draught_m": 11.5, "depth_m": 20.5,
@@ -83,6 +83,33 @@ the exit code**: Blender returns 0 even when a script raises an error, unless th
 ```
 
 - `params` are the builder's own knobs; each builder documents its own in `catalog/ships/<type>.json`.
+- **`type: "custom"` — any vessel** (Lester, 29 Oct: "should allow the user to create ships of any
+  types, based on how the user prompt"). A general monohull builder whose params describe the hull
+  (`loa_m`, `beam_m`, `depth_m`, `draught_m`, bow form `plumb|raked|flared|bulbous|axe`, stern form
+  `transom|cruiser|swim_platform|open`, sheer and deadrise, hull/boot/deck colours, bulwark or
+  rail) and a list of **superstructure tiers** `[{x_aft_m, x_fwd_m, width_m, height_m, setback?,
+  rake_deg?, color, windows?}]` stacked from the deck up, plus optional mast, funnel, radar arch.
+  Everything else (fly-bridge furniture, cranes, guns, davits) is AI custom ops. A new project of
+  this type is created from a prompt (and photos): `POST /api/projects` with
+  `{"kind":"ship","base":"custom","name"?,"brief"?}`; its first build is a plain placeholder hull
+  until the AI researches and shapes it. **Research first, then wait** (Lester, 29 Oct: "research
+  first, wait for user confirmation to build"): a new custom ship opens in Research, the AI
+  researches from the prompt, photos and the web and stops; it never builds on its own.
+  Then (Lester, 29 Oct: "let user iterate the design inputs and amend research output accordingly,
+  before a final design plan is approved by user and then build"):
+  1. **Iterate.** Every research-mode chat turn (corrections, answers to open questions, more
+     photos) amends the saved research; nothing is built.
+  2. **Design plan.** The AI drafts `project.design_plan` = `{"status":"draft|approved|stale",
+     "summary": [plain-English lines: size, hull form, each superstructure tier, colours, details
+     to add as custom ops, assumptions], "spec": {the full custom ship spec it would build},
+     "research_rev": n, "at": iso}` via a research-mode tool, and redrafts it whenever asked. Any
+     later change to the research makes an approved plan `stale`.
+  3. **Approve and build.** `POST /api/projects/{id}/design-plan/approve` (only on a `draft`
+     plan matching the current research) marks it `approved` and starts the build job from its
+     `spec` plus a build-mode AI turn for the custom-op details; returns `{"job_id"}`. Nothing
+     else builds a `custom` ship whose plan is not approved: build-mode chat on such a project
+     is refused with a sentence pointing to the plan. It follows every other rule here (parts naming §2, frame
+  §1, sockets, contract checks).
 - `meta` (optional) holds the `strait.ship_model/1` fields that `params` don't: `type` (from
   StraitsSim's list; a sampan uses `fishing`, the closest), speeds, propulsion, `rcs_class`,
   notes, source. Length, beam, draught and depth in `ship/<id>.json` always come from `params`,
@@ -127,6 +154,50 @@ from them): `body()`, `armature()`, `REGIONS` (named bone sets: torso, upper_arm
 pelvis, thighs, shins, feet, neck, head), `garment(name, regions, color, ...)`,
 `hold(obj, hand)`, `attach(obj, bone)`, `material(name, color)`, and the low-poly mesh helpers used
 by catalog equipment. A failing item is reported as a build error naming its id and line.
+
+### Modules (Lester, 29 Oct: "separate out the various parts … in modules that could be configurable by user prompts"; "if the user chooses to describe a particular module … it works and render the particular module, without reseting the entire human")
+
+A crew member is ten **modules**. Each owns a fixed set of spec keys; changing one module never
+touches another's keys. Every module has presets, colours where they matter, and can be described
+in words (the AI then writes a custom item **tagged with that module**).
+
+| Module id | Owns | Presets (no AI) |
+|---|---|---|
+| `gender` | `body.gender`, `height_cm`, `weight`, `muscle`, `proportions`, `age_years` | male, female; sliders |
+| `skin` | `body.skin` | light, medium, dark |
+| `hair` | `body.hair`, `body.hair_color`; custom items with `module: "hair"` | catalog hair styles + bald; colour |
+| `shirt` | `clothes.shirt`; custom items `module: "shirt"` | `{"style": "tshirt"|"singlet"|"long_sleeve"|"polo", "color": [r,g,b]}` or null |
+| `pants` | `clothes.pants`; custom items `module: "pants"` | `{"style": "shorts"|"trousers"|"cargo", "color": [r,g,b]}` or null |
+| `outfit` | `clothes.suit`, `clothes.suit_color` | catalog suits (textured, fill shirt *and* pants) or null |
+| `shoes` | `clothes.shoes`, `clothes.shoes_color`; custom items `module: "shoes"` | catalog shoes, or null = barefoot |
+| `equipment` | `equipment[]` items (name, color); custom items `module: "equipment"` | life_vest, helmet, binoculars, radio |
+| `placement` | the `place` of each equipment entry and each equipment custom item | right_hand, left_hand, chest, back, hip, head |
+| `accessories` | `accessories[]` (`{"name","color"}`), `clothes.hat`, `clothes.hat_color`; custom items `module: "accessories"` | cap, sunglasses, ear_defenders, gloves, fedora01, fedora_cocked |
+
+Rules:
+- **Outfit vs shirt/pants:** a non-null `clothes.suit` draws instead of `shirt` and `pants`.
+  Setting a shirt or pants (preset or described) sets `suit` to null; choosing an outfit sets
+  `shirt` and `pants` to null and removes `shirt`/`pants` custom items. (The tools and the screen
+  do this; the builder just draws the suit if set.)
+- **A described item replaces its module's preset:** a `shirt` custom item means `clothes.shirt`
+  is null. Describing a module again replaces that module's custom items, nothing else.
+- **Placement:** `place` is one of `right_hand`, `left_hand`, `chest`, `back`, `hip`, `head`, or
+  absent for worn items that have one fixed spot (life_vest, helmet). Equipment custom items are
+  modelled at the origin (grip point at the origin, +Z up, +X forward) and **not parented by their
+  code**; the builder attaches every equipment object by its `place`, so moving an item is a
+  spec change with no AI and no code change.
+- Custom items gain `"module"` (required for new items; an item without one is treated as
+  `equipment` if it makes `Equipment__` objects, else `shirt`) and, for equipment, `"place"`.
+- **A preset replaces what was described:** choosing a hair/shirt/pants/shoes preset removes that
+  module's custom items (the screen asks first). Full outfit has no describe box; a described
+  outfit is a described shirt and pants.
+- **`changed_modules`:** a crew chat job's result lists the modules whose keys differ between the
+  start of the turn and the version on screen; a shirt or pants change that cleared the outfit
+  lists `outfit` too. The screen marks those modules "changed".
+- **Scoped AI:** `POST /chat` takes optional `"module"`. When set, the AI may change only that
+  module's keys; any tool call that would change another module's keys is refused and changes
+  nothing. Without `module` (the main chat), the AI is told to change only the modules the request
+  is about.
 
 - **Rig:** MPFB2 `game_engine` skeleton for every human, the same skeleton for all.
 - Animations are **glTF animations named exactly as listed**, on that skeleton.
@@ -222,14 +293,15 @@ Every body is JSON. Long work returns `{"job_id"}`; poll `GET /api/jobs/{id}`, w
 | GET `/api/catalog` | | `{"ships":[{"type","name","description"}],"crew":[{"id","name"}],"clothes":[str],"equipment":[str],"animations":[str]}` |
 | POST `/api/route` | `{"message","attachments"?:[file name]}` (names only; the files go with the carried message) | `{"destination":"ship_research|ship_build|crew|animation|assembly|review|clarify","reason","project_id":str|null}` |
 | GET `/api/projects` | | `[ProjectSummary]` |
-| POST `/api/projects` | `{"kind":"ship|crew","base":"container|sampan|tanker|male_default","name"?}` | `{"project", "job_id"}` (first build) |
+| POST `/api/projects` | `{"kind":"ship|crew","base":"container|sampan|tanker|custom|male_default","name"?,"brief"?}` | `{"project", "job_id"}` (first build; `custom` takes a `brief`, see §5) |
+| POST `/api/projects/{id}/design-plan/approve` | | `{"job_id"}`: builds a `custom` ship from its draft plan; 409 with a sentence when there is no current draft |
 | GET `/api/projects/{id}` | | `Project` (below) |
 | GET `/api/projects/{id}/versions/{n}/model.glb` | | the GLB |
 | GET `/api/projects/{id}/versions/{n}/parts.json` | | the parts list |
 | POST `/api/projects/{id}/spec` | `{"patch": {...}}` (deep-merged into the spec; Inspect drawer edits) | `{"job_id"}` → new version |
 | POST `/api/uploads` | same as below, before there is a project (Home) | `{"attachment"}`; copied into the project when a chat there names it |
 | POST `/api/projects/{id}/uploads` | `{"name","type","data"}` (`data` is base64; see Attachments) | `{"attachment"}` |
-| POST `/api/projects/{id}/chat` | `{"message","mode":"build|research","attachments"?:[upload id]}` | `{"job_id"}` |
+| POST `/api/projects/{id}/chat` | `{"message","mode":"build|research","attachments"?:[upload id],"module"?:crew module id}` | `{"job_id"}` |
 | POST `/api/projects/{id}/pins` | `{"part","point":[x,y,z],"text","author"}` | `{"pin","job_id"}` |
 | POST `/api/projects/{id}/pins/{pin_id}/reply` | `{"text"}` | `{"job_id"}` |
 | PATCH `/api/projects/{id}/pins/{pin_id}` | `{"status":"open|resolved"}` | `{"pin"}` |
@@ -255,9 +327,16 @@ Every body is JSON. Long work returns `{"job_id"}`; poll `GET /api/jobs/{id}`, w
             "author": "You", "messages": [{"who": "You|AI|Customer", "text": "...", "at": "..."}],
             "before_version": 2, "after_version": 3}],
   "messages": [{"who": "You|AI", "text": "...", "at": "...", "attachments"?: [Attachment]}],
-  "research": null
+  "research": null,
+  "research_rev": 0, "design_plan": null, "brief": null, "plan_built": false, "note": null
 }
 ```
+
+`research_rev`, `design_plan` (plus `approved_at`, `build_error` on the plan), `brief`, `plan_built`
+and `note` matter for `custom` ships (§5). A research chat job's result carries `plan_saved`; the
+approve job's result is `{version, build_report, reply, built_versions}`. A `custom` ship's build
+chat, `POST /spec` and pins are refused (409) only until an approved plan has been built (`plan_built`);
+after that a stale plan never blocks edits, it only offers a rebuild through approve.
 
 **Attachments** (pictures and documents sent with a chat message). An upload is stored at once and
 returns `{"id","name","type","size","url"}`; the chat message then names it by `id`, and the AI

@@ -2,7 +2,7 @@
 // VITE_MOCK=1 routes every call to an in-browser mock (src/mock) for development before the
 // server exists. The default build always talks to the real /api.
 import type {
-  Attachment, Catalog, ExportResult, Health, Job, Part, Pin, Project, ProjectBase, ProjectKind, ProjectSummary,
+  Attachment, Catalog, ExportResult, Health, Job, ModuleId, Part, Pin, Project, ProjectBase, ProjectKind, ProjectSummary,
   RouteResult, Scene, SceneSpec, UnrealReport, Vec3,
 } from './types';
 
@@ -66,8 +66,11 @@ export const api = {
   project: (id: string) => call<Project>('GET', `/api/projects/${enc(id)}`),
   parts: (id: string, n: number) => call<Part[]>('GET', `/api/projects/${enc(id)}/versions/${n}/parts.json`),
   patchSpec: (id: string, patch: Record<string, unknown>) => call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/spec`, { patch }),
-  chat: (id: string, message: string, mode: 'build' | 'research', attachments: string[] = []) =>
-    call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/chat`, attachments.length ? { message, mode, attachments } : { message, mode }),
+  /** `module` scopes a crew chat to one module (CONTRACT §6 "Scoped AI"); omitted = the whole person. */
+  chat: (id: string, message: string, mode: 'build' | 'research', attachments: string[] = [], module?: ModuleId) =>
+    call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/chat`, {
+      message, mode, ...(attachments.length ? { attachments } : {}), ...(module ? { module } : {}),
+    }),
   uploadHome: (file: { name: string; type: string; data: string }) =>
     call<{ attachment: Attachment }>('POST', '/api/uploads', file),
   upload: (id: string, file: { name: string; type: string; data: string }) =>

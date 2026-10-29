@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from .design_plan import approve_refusal, on_research_saved
 from .jobs import now_iso
 
 ID_RE = re.compile(r"^[a-z0-9_]+$")
@@ -52,6 +53,10 @@ def read_json(path: Path, default: Any = None) -> Any:
 
 class NotFound(Exception):
     pass
+
+
+class PlanRefused(Exception):
+    """A design plan cannot be approved now; the message is a sentence for the user."""
 
 
 class ProjectStore:
@@ -96,11 +101,14 @@ class ProjectStore:
             self.save(project)
 
     # ---- projects ---------------------------------------------------------------------
-    def create(self, kind: str, base: str, name: str) -> dict:
+    def create(self, kind: str, base: str, name: str, brief: str | None = None) -> dict:
         pid = "p_" + uuid.uuid4().hex[:8]
         project = {"id": pid, "kind": kind, "name": name, "base": base, "version": 0,
                    "versions": [], "undo_stack": [], "pins": [], "messages": [],
-                   "research": None, "created": now_iso(), "updated": now_iso()}
+                   "research": None, "research_rev": 0, "design_plan": None,
+                   "created": now_iso(), "updated": now_iso()}
+        if brief:
+            project["brief"] = brief
         self._dir(pid).mkdir(parents=True, exist_ok=False)
         self.save(project)
         return project
@@ -175,6 +183,8 @@ class ProjectStore:
             "parts": self.parts(pid, n),
             "build_report": self.report(pid, n) or {},
             "pins": p["pins"], "messages": p["messages"], "research": p["research"],
+            "research_rev": p.get("research_rev", 0), "design_plan": p.get("design_plan"),
+            "brief": p.get("brief"), "plan_built": bool(p.get("plan_built")),
             "can_undo": bool(p["undo_stack"]),
         }
 
@@ -264,6 +274,43 @@ class ProjectStore:
                     return pin
         raise NotFound(pin_id)
 
-    def set_research(self, pid: str, research: dict) -> None:
+    def set_research(self, pid: str, research: dict) -> int:
+        """Save the research; returns the new research revision (an approved plan goes stale)."""
         with self.edit(pid) as project:
             project["research"] = research
+            on_research_saved(project)
+            return project["research_rev"]
+
+    def set_design_plan(self, pid: str, summary: list[str], spec: dict) -> dict:
+        """A new draft, stamped with the research revision it was drafted against."""
+        with self.edit(pid) as project:
+            plan = {"status": "draft", "summary": summary, "spec": spec,
+                    "research_rev": int(project.get("research_rev") or 0), "at": now_iso()}
+            project["design_plan"] = plan
+        return plan
+
+    def approve_design_plan(self, pid: str) -> dict:
+        """Mark the plan approved, or raise PlanRefused with the sentence for the user."""
+        with self.edit(pid) as project:
+            why = approve_refusal(project)
+            if why:
+                raise PlanRefused(why)
+            plan = project["design_plan"]
+            plan["status"] = "approved"
+            plan["approved_at"] = now_iso()
+            plan.pop("build_error", None)
+        return plan
+
+    def mark_plan_built(self, pid: str) -> None:
+        """An approved plan has been built once: building is open from now on (see needs_plan)."""
+        with self.edit(pid) as project:
+            project["plan_built"] = True
+
+    def unapprove_design_plan(self, pid: str, error: str) -> None:
+        """The approved plan failed to build: back to draft so it can be approved again."""
+        with self.edit(pid) as project:
+            plan = project.get("design_plan")
+            if isinstance(plan, dict) and plan.get("status") == "approved":
+                plan["status"] = "draft"
+                plan.pop("approved_at", None)
+                plan["build_error"] = error

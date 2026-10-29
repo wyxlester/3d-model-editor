@@ -6,7 +6,9 @@ import bpy
 from mathutils import Vector
 
 
-def render_preview(path, armature, action_name=None, frame=None, resolution=(720, 960), engine="BLENDER_EEVEE"):
+def render_preview(path, armature, action_name=None, frame=None, resolution=(720, 960), engine="BLENDER_EEVEE",
+                   yaw_deg=35.0):
+    """Render one still; yaw_deg is the camera bearing around the character (35 = front three-quarter, 215 = back)."""
     scene = bpy.context.scene
     if action_name:
         armature.animation_data.action = bpy.data.actions[action_name]
@@ -19,7 +21,7 @@ def render_preview(path, armature, action_name=None, frame=None, resolution=(720
     target = Vector((0.0, 0.0, 0.95))
     # Front three-quarter: the character faces +X, so stand off on +X, a little to its left (+Y).
     d = 4.2
-    yaw = math.radians(35.0)
+    yaw = math.radians(yaw_deg)
     cam.location = target + Vector((d * math.cos(yaw), d * math.sin(yaw), 0.35))
     cam.rotation_euler = (target - cam.location).to_track_quat("-Z", "Y").to_euler()
     cam_data.lens = 50

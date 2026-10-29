@@ -3,8 +3,9 @@
 // exercised. Nothing here is AI: replies are canned and say "(mock)".
 import { ApiError } from '../api';
 import { mergePatch } from '../lib/spec';
+import { MODULES, isModuleId, moduleOfItem } from '../lib/modules';
 import type {
-  Attachment, Catalog, Job, Message, Part, Pin, Project, ProjectSummary, RouteResult, Scene, SceneSpec, UnrealReport, VersionInfo,
+  Attachment, Catalog, CustomItem, Job, Message, ModuleId, Part, Pin, Project, ProjectSummary, RouteResult, Scene, SceneSpec, UnrealReport, VersionInfo,
 } from '../types';
 import shipPartsJson from '../../public/mock/ship_parts.json';
 import { mockResearch } from './research';
@@ -151,23 +152,38 @@ function newVersion(p: Store['projects'][string], summary: string) {
 }
 
 /**
- * A crew chat sent from a "describe it" box ("Clothes: a white singlet") makes a fake custom item,
- * so the "Made by description" list has something in it. Hair gets blonde if the words say so.
+ * A crew chat scoped to a module ("Make it" under Shirt sends module "shirt") makes a fake custom
+ * item tagged with that module, replacing that module's earlier items and nothing else, like the
+ * real AI must (CONTRACT §6 "Modules"). Returns the modules it changed, for `changed_modules`.
+ * Unscoped messages starting "Shirt: …" are treated the same, so the main chat can be tried too.
  */
-function mockDescribed(p: Store['projects'][string], message: string) {
-  if (p.kind !== 'crew') return;
-  const m = message.match(/^(Clothes|Head|Equipment|Hair):\s*(.+)$/s);
-  if (!m) return;
-  const spec = p.spec as Record<string, unknown>;
-  if (m[1] === 'Hair') {
-    if (/blond/i.test(m[2])) p.spec = mergePatch(spec, { body: { hair_color: [0.687, 0.479, 0.188] } }) as Project['spec'];
-    return;
+function mockDescribed(p: Store['projects'][string], message: string, module: unknown): ModuleId[] {
+  if (p.kind !== 'crew') return [];
+  let m: ModuleId | null = isModuleId(module) ? module : null;
+  let text = message;
+  const pre = message.match(/^([A-Za-z ]+):\s*(.+)$/s);
+  if (pre) {
+    const named = MODULES.find((d) => d.name.toLowerCase() === pre[1].trim().toLowerCase());
+    if (named && (!m || m === named.id)) { m = named.id; text = pre[2]; }
   }
-  const items = (spec.custom_items as { id: string; description: string; code: string }[] | undefined) ?? [];
-  const n = items.length + 1;
-  const kind = m[1] === 'Equipment' ? 'Equipment' : 'Clothes';
-  const code = `# (mock) nothing is built in mock mode\nobj = crew.garment("${kind}__Mock_${n}", ["torso"], (1, 1, 1))`;
-  p.spec = { ...spec, custom_items: [...items, { id: `item_${++store.seq}`, description: m[2].trim(), code }] } as Project['spec'];
+  if (!m) return [];
+  const spec = p.spec as Record<string, unknown>;
+  const patch = (x: Record<string, unknown>) => { p.spec = mergePatch(p.spec as Record<string, unknown>, x) as Project['spec']; };
+  if (m === 'hair') { if (/blond/i.test(text)) patch({ body: { hair_color: [0.687, 0.479, 0.188] } }); return ['hair']; }
+  if (m === 'gender') { if (/\b(woman|female)\b/i.test(text)) patch({ body: { gender: 'female' } }); return ['gender']; }
+  if (m === 'skin' || m === 'outfit' || m === 'placement') return [m];
+  const items = ((spec.custom_items as CustomItem[] | undefined) ?? []).filter((i) => moduleOfItem(i) !== m);
+  const n = ++store.seq;
+  const held = m === 'equipment';
+  const name = `${held ? 'Equipment' : 'Clothes'}__Mock_${n}`;
+  const code = `# (mock) nothing is built in mock mode\nobj = ${held ? `crew.object_from_bmesh("${name}", crew.new_bmesh(), (0.4, 0.3, 0.2))` : `crew.garment("${name}", ["torso"], (1, 1, 1))`}`;
+  const item: CustomItem = { id: `item_${n}`, description: text.trim(), code, module: m, ...(held ? { place: 'right_hand' as const } : {}) };
+  p.spec = { ...spec, custom_items: [...items, item] } as Project['spec'];
+  const hadSuit = Boolean((spec.clothes as { suit?: string | null } | undefined)?.suit);
+  if (m === 'shirt' || m === 'pants') patch({ clothes: { [m]: null, suit: null } });
+  if (m === 'shoes') patch({ clothes: { shoes: null } });
+  // Like the server: a shirt or pants change that clears the outfit reports the outfit as changed too.
+  return (m === 'shirt' || m === 'pants') && hadSuit ? [m, 'outfit'] : [m];
 }
 
 const buildSteps = ['Merging the spec', 'Running the builder in Blender', 'Applying overrides', 'Exporting glTF', 'Checking the build report'];
@@ -194,8 +210,10 @@ const catalog: Catalog = {
     { type: 'tanker', name: 'Tanker', description: 'Crude oil tanker' },
   ],
   crew: [{ id: 'male_default', name: 'Default male crew' }],
-  clothes: ['male_worksuit01', 'male_casualsuit02', 'navy_coverall', 'shoes01', 'boots02', 'navy_cap', 'combat_helmet'],
-  equipment: ['life_vest', 'binoculars', 'radio'],
+  // Mirrors catalog/crew/male_default.json options (suits, shoes, hats).
+  clothes: ['male_worksuit01', 'male_casualsuit01', 'male_casualsuit02', 'male_elegantsuit01', 'female_casualsuit01', 'female_elegantsuit01', 'female_sportsuit01',
+    'shoes01', 'shoes02', 'shoes03', 'fedora01', 'fedora_cocked'],
+  equipment: ['life_vest', 'helmet', 'binoculars', 'radio'],
   animations: ['idle', 'walk', 'run', 'brace', 'hands_up', 'squat', 'binocular_look'],
 };
 
@@ -252,9 +270,9 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
     return startJob(research ? ['Reading the research', 'Searching sources', 'Updating the research'] : ['Reading the request', ...buildSteps], () => {
       const reply: Message = { who: 'AI', text: research ? `(mock) Noted for the research: “${body.message}”. No real search runs in mock mode.` : `(mock) Done: “${body.message}”. Rebuilt as a new version.`, at: now() };
       p.messages = [...p.messages, reply];
-      if (!research) mockDescribed(p, String(body.message));
+      const changed = research ? [] : mockDescribed(p, String(body.message), body.module);
       if (!research) newVersion(p, String(body.message).slice(0, 60));
-      return { message: reply };
+      return { message: reply, ...(p.kind === 'crew' && !research ? { changed_modules: changed } : {}) };
     });
   }
   if ((r = m(/^\/api\/projects\/([^/]+)\/pins$/)) && method === 'POST') {

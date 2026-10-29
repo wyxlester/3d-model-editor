@@ -6,6 +6,8 @@ from conftest import create_ready, wait_job
 
 SINGLET = ("s = crew.garment('Clothes__Singlet', crew.REGIONS['torso'], (1, 1, 1))\n"
            "s.name = 'Clothes__Singlet'\n")
+TORCH = ("bm = crew.new_bmesh()\ncrew.cylinder(bm, (0, 0, 0.05), 0.02, 0.2)\n"
+         "t = crew.object_from_bmesh('Equipment__Torch', bm, (1, 1, 0))\n")
 
 
 def _run_crew(make_client, steps):
@@ -36,26 +38,29 @@ def test_hair_and_clothing_colours(make_client):
 
 def test_custom_items_add_validate_remove(make_client):
     agent, spec = _run_crew(make_client, [
-        ("add_custom_item", {"description": "white singlet", "code": SINGLET}),
-        ("add_custom_item", {"description": "torch", "code":
-                             "t = crew.cylinder('Equipment__Torch', 0.02, 0.2)\ncrew.hold(t, 'right')"}),
-        ("add_custom_item", {"description": "bad name", "code": "o = crew.box('Hat__Cap', (1, 1, 1))"}),
-        ("add_custom_item", {"description": "bad name", "code": "o.name = 'singlet'"}),
-        ("add_custom_item", {"description": "evil", "code": "import os\nos.system('ls')"}),
-        ("add_custom_item", {"description": "evil", "code": "open('/etc/passwd')"}),
-        ("add_custom_item", {"description": "broken", "code": "def x(:\n  pass"}),
-        ("add_custom_item", {"description": "", "code": "x = 1"}),
+        ("add_custom_item", {"description": "white singlet", "code": SINGLET, "module": "shirt"}),
+        ("add_custom_item", {"description": "torch", "module": "equipment", "place": "right_hand", "code": TORCH}),
+        ("add_custom_item", {"description": "bad name", "module": "accessories",
+                             "code": "o = crew.box('Hat__Cap', (1, 1, 1))"}),
+        ("add_custom_item", {"description": "bad name", "module": "shirt", "code": "o.name = 'singlet'"}),
+        ("add_custom_item", {"description": "evil", "module": "shirt", "code": "import os\nos.system('ls')"}),
+        ("add_custom_item", {"description": "evil", "module": "shirt", "code": "open('/etc/passwd')"}),
+        ("add_custom_item", {"description": "broken", "module": "shirt", "code": "def x(:\n  pass"}),
+        ("add_custom_item", {"description": "", "module": "shirt", "code": "x = 1"}),
         ("remove_custom_item", {"id": "item_1"}),
         ("remove_custom_item", {"id": "item_9"}),
-        ("add_custom_item", {"description": "white singlet again", "code": SINGLET}),
+        ("add_custom_item", {"description": "white singlet again", "code": SINGLET, "module": "shirt"}),
     ])
     errs = [e for _, _, e in agent.results]
     assert errs == [False, False, True, True, True, True, True, True, False, True, False], agent.results
     assert "Clothes__<Name>" in agent.results[2][1]
     assert "syntax" in agent.results[6][1]
     # item_1 removed, then its id reused for the next item.
-    assert [(i["id"], i["description"]) for i in spec["custom_items"]] == [
-        ("item_2", "torch"), ("item_1", "white singlet again")]
+    assert [(i["id"], i["description"], i["module"]) for i in spec["custom_items"]] == [
+        ("item_2", "torch", "equipment"), ("item_1", "white singlet again", "shirt")]
+    assert spec["custom_items"][0]["place"] == "right_hand" and "place" not in spec["custom_items"][1]
+    # A described shirt replaces the outfit and the shirt preset (contract §6 Modules).
+    assert spec["clothes"]["suit"] is None and spec["clothes"]["shirt"] is None
 
 
 def test_equipment_accepts_coloured_entries(make_client):
@@ -101,7 +106,8 @@ def test_crew_and_ship_tool_sets_are_disjoint(make_client, settings):
 
 def test_crew_prompt_does_not_refuse_off_catalog_items():
     p = system_prompt("crew", "build")
-    assert "not a limit" in p and "add_custom_item" in p and "suit to null" in p
+    assert "not a limit" in p and "add_custom_item" in p and "suit is set to null" in p
+    assert "change only those" in p and "never remove, recolour" in p
     assert "cannot be made yet" not in p
 
 

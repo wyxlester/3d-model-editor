@@ -3,40 +3,260 @@
  "id": "crew_male_default",
  "name": "Default male crew",
  "description": "A deck crew member: MPFB2 (MakeHuman) body on the shared game_engine skeleton (53 bones, Unreal mannequin names), CC0 MakeHuman work suit and shoes, an orange life vest, and five keyed animations. Built by blender/build_crew.py; about 34k triangles.",
- "body": {"gender": "male", "height_cm": 178, "weight": 0.5, "muscle": 0.5, "age_years": 30, "skin": "medium"},
- "clothes": {"suit": "male_worksuit01", "shoes": "shoes01", "hat": null, "suit_color": null},
- "equipment": ["life_vest"],
- "animations": ["idle", "walk", "brace", "hands_up", "squat"],
+ "body": {
+  "gender": "male",
+  "height_cm": 178,
+  "weight": 0.5,
+  "muscle": 0.5,
+  "age_years": 30,
+  "skin": "medium"
+ },
+ "clothes": {
+  "suit": "male_worksuit01",
+  "shoes": "shoes01",
+  "hat": null,
+  "suit_color": null,
+  "shirt": null,
+  "pants": null
+ },
+ "equipment": [
+  "life_vest"
+ ],
+ "accessories": [],
+ "animations": [
+  "idle",
+  "walk",
+  "brace",
+  "hands_up",
+  "squat"
+ ],
  "param_docs": {
   "body": {
-   "gender": {"doc": "Body shape. 'male' or 'female' (MPFB gender macro at its end points). Pick a suit and hair to match: male_* suits and short hair for male, female_* suits and bob/long hair for female.", "options": ["male", "female"]},
-   "height_cm": {"doc": "Barefoot standing height in centimetres. The builder solves MPFB's height slider until the body measures this within 2 cm; shoes add about 1 cm, hair or a helmet more.", "min": 140, "max": 210},
-   "weight": {"doc": "Body mass slider, 0 = very slim, 0.5 = average, 1 = heavy.", "min": 0, "max": 1},
-   "muscle": {"doc": "Muscle definition slider, 0 = soft, 0.5 = average, 1 = very muscular.", "min": 0, "max": 1},
-   "proportions": {"doc": "MPFB body proportions slider, 0 = unusual, 0.5 = average, 1 = idealised. Optional; defaults to 0.5.", "min": 0, "max": 1},
-   "age_years": {"doc": "Age in years. Changes face and body shape, and picks the skin texture age band: young under 40, middle-aged 40-59, old 60 and over.", "min": 18, "max": 80},
-   "skin": {"doc": "Skin tone: light, medium or dark. Picks a CC0 MakeHuman skin texture (caucasian, asian or african set) and leans the face shape the same way.", "options": ["light", "medium", "dark"]},
-   "hair": {"doc": "Hair style; omit or null for the default (short02 for male, bob02 for female), \"none\" for bald.", "options": [null, "none", "short01", "short02", "short03", "short04", "afro01", "bob01", "bob02", "braid01", "long01", "ponytail01"]},
-   "hair_color": {"doc": "Optional hair (and eyebrow) colour, [r, g, b] each 0..1 in LINEAR values (what a Blender Base Color takes), or null for the style's own dark brown. The texture is recoloured, not tinted, so light colours work: blonde [0.687, 0.479, 0.188], platinum [0.8, 0.75, 0.6], red [0.45, 0.12, 0.04], grey [0.4, 0.4, 0.4], black [0.02, 0.02, 0.02]. The strand pattern is kept."}
+   "gender": {
+    "doc": "Body shape. 'male' or 'female' (MPFB gender macro at its end points). Pick a suit and hair to match: male_* suits and short hair for male, female_* suits and bob/long hair for female.",
+    "options": [
+     "male",
+     "female"
+    ]
+   },
+   "height_cm": {
+    "doc": "Barefoot standing height in centimetres. The builder solves MPFB's height slider until the body measures this within 2 cm; shoes add about 1 cm, hair or a helmet more.",
+    "min": 140,
+    "max": 210
+   },
+   "weight": {
+    "doc": "Body mass slider, 0 = very slim, 0.5 = average, 1 = heavy.",
+    "min": 0,
+    "max": 1
+   },
+   "muscle": {
+    "doc": "Muscle definition slider, 0 = soft, 0.5 = average, 1 = very muscular.",
+    "min": 0,
+    "max": 1
+   },
+   "proportions": {
+    "doc": "MPFB body proportions slider, 0 = unusual, 0.5 = average, 1 = idealised. Optional; defaults to 0.5.",
+    "min": 0,
+    "max": 1
+   },
+   "age_years": {
+    "doc": "Age in years. Changes face and body shape, and picks the skin texture age band: young under 40, middle-aged 40-59, old 60 and over.",
+    "min": 18,
+    "max": 80
+   },
+   "skin": {
+    "doc": "Skin tone: light, medium or dark. Picks a CC0 MakeHuman skin texture (caucasian, asian or african set) and leans the face shape the same way.",
+    "options": [
+     "light",
+     "medium",
+     "dark"
+    ]
+   },
+   "hair": {
+    "doc": "Hair style; omit or null for the default (short02 for male, bob02 for female), \"none\" for bald.",
+    "options": [
+     null,
+     "none",
+     "short01",
+     "short02",
+     "short03",
+     "short04",
+     "afro01",
+     "bob01",
+     "bob02",
+     "braid01",
+     "long01",
+     "ponytail01"
+    ]
+   },
+   "hair_color": {
+    "doc": "Optional hair (and eyebrow) colour, [r, g, b] each 0..1 in LINEAR values (what a Blender Base Color takes), or null for the style's own dark brown. The texture is recoloured, not tinted, so light colours work: blonde [0.687, 0.479, 0.188], platinum [0.8, 0.75, 0.6], red [0.45, 0.12, 0.04], grey [0.4, 0.4, 0.4], black [0.02, 0.02, 0.02]. The strand pattern is kept."
+   }
   },
   "clothes": {
-   "suit": {"doc": "Outfit (CC0 MakeHuman system assets). male_worksuit01 is blue work overalls over a white T-shirt; casualsuits are jeans/shirts; elegantsuit01 is a business suit. null for none (the body is then visible)."},
-   "shoes": {"doc": "Footwear. shoes01 brown work shoes (default), shoes02-06 other styles. null for barefoot."},
-   "hat": {"doc": "Hat, or null. Only fedoras are in the CC0 pack; for a hard hat use the helmet equipment instead (a hat is dropped when a helmet is worn)."},
-   "suit_color": {"doc": "Optional tint multiplied over the suit texture, [r, g, b] each 0..1 (e.g. [1, 0.45, 0.1] for orange overalls), or null for the suit's own colours."},
-   "shoes_color": {"doc": "Optional tint multiplied over the shoe texture, [r, g, b] each 0..1 (linear), or null. A multiply can only darken: brown shoes tinted white stay brown-ish."},
-   "hat_color": {"doc": "Optional tint multiplied over the hat texture, [r, g, b] each 0..1 (linear), or null."}
+   "suit": {
+    "doc": "Outfit (CC0 MakeHuman system assets). male_worksuit01 is blue work overalls over a white T-shirt; casualsuits are jeans/shirts; elegantsuit01 is a business suit. null for none (the body is then visible)."
+   },
+   "shoes": {
+    "doc": "Footwear (CC0 MakeHuman), each worn over light grey socks: shoes01 brown leather lace-up work shoes (default); shoes02 worn grey-green canvas trainers; shoes03 black leather ankle boots; shoes04 black slip-on dress shoes; shoes05 white trainers; shoes06 navy blue trainers. null for barefoot.",
+    "labels": {
+     "shoes01": "Brown work shoes",
+     "shoes02": "Canvas trainers",
+     "shoes03": "Black boots",
+     "shoes04": "Black dress shoes",
+     "shoes05": "White trainers",
+     "shoes06": "Blue trainers"
+    }
+   },
+   "hat": {
+    "doc": "Hat, or null. Only fedoras are in the CC0 pack; for a hard hat use the helmet equipment instead (a hat is dropped when a helmet is worn). Owned by the accessories module."
+   },
+   "suit_color": {
+    "doc": "Optional tint multiplied over the suit texture, [r, g, b] each 0..1 (e.g. [1, 0.45, 0.1] for orange overalls), or null for the suit's own colours."
+   },
+   "shoes_color": {
+    "doc": "Optional tint multiplied over the shoe texture, [r, g, b] each 0..1 (linear), or null. A multiply can only darken: brown shoes tinted white stay brown-ish."
+   },
+   "hat_color": {
+    "doc": "Optional tint multiplied over the hat texture, [r, g, b] each 0..1 (linear), or null."
+   },
+   "shirt": {
+    "doc": "Shirt module preset, or null. {\"style\": one of tshirt (short sleeves to just above the elbow), singlet (sleeveless, open armholes and neck), long_sleeve (sleeves to the wrist), polo (T-shirt with a simple collar); \"color\": [r, g, b] each 0..1 linear, or null for the default}. Cut from the body's own surface, so it fits every body and moves with every animation. Drawn only when clothes.suit is null (a suit fills shirt and pants); a shirt custom item replaces it.",
+    "options": [
+     "tshirt",
+     "singlet",
+     "long_sleeve",
+     "polo"
+    ]
+   },
+   "pants": {
+    "doc": "Pants module preset, or null. {\"style\": one of shorts (to mid-thigh), trousers (to the ankle), cargo (trousers with a pocket on each outer thigh); \"color\": [r, g, b] each 0..1 linear, or null for the default}. Drawn only when clothes.suit is null; a pants custom item replaces it.",
+    "options": [
+     "shorts",
+     "trousers",
+     "cargo"
+    ]
+   }
   },
-  "custom_items": {"doc": "Anything the catalog lacks (a singlet, shorts, a held boat hook or torch...). A list of {\"id\": \"item_1\", \"description\": \"white singlet\", \"code\": \"...\"}: Blender Python run after the body and catalog equipment are built and before the animations bake, with bpy, mathutils, math, Vector, Matrix and the helper module crew in scope. No os/sys/subprocess, open, eval, exec. Every object made must be a mesh named Clothes__<Name> (worn) or Equipment__<Name> (held/attached), [A-Za-z0-9_] only. CLOTHES: always use crew.garment(name, regions, color, offset_m=0.008, thickness_m=0.006, z_min=None, z_max=None, trim=0.3, hide_body=True), which cuts the garment from the body's own surface for the bones it covers, so it fits every body and deforms with every animation (never model clothes freehand: they will not move with the body). regions are names from crew.REGIONS: torso, upper_arms, forearms, hands, pelvis, thighs, shins, feet, neck, head (or single bone names like upperarm_l). z_min/z_max are rest-pose hem heights in metres; get them from joints, e.g. hip = crew.joint_z(\"thigh_l\"), knee = crew.joint_z(\"calf_l\"), ankle = crew.joint_z(\"foot_l\"). Recipes: singlet = garment(\"Clothes__Singlet\", [\"torso\", \"pelvis\"], c, z_min=hip - 0.03); T-shirt = [\"torso\", \"upper_arms\"] with z_min=hip; long sleeves add forearms; shorts = [\"pelvis\", \"thighs\"], z_min=(hip + knee) / 2, z_max=hip + 0.12; trousers = [\"pelvis\", \"thighs\", \"shins\"], z_max=hip + 0.12, z_min=ankle + 0.03. A layer worn over another needs a larger offset_m (e.g. 0.014 for shorts over a singlet). Set clothes.suit to null when replacing the outfit, or the suit shows through. HELD ITEMS: build a low-poly mesh with bm = crew.new_bmesh(), crew.box(bm, center, size), crew.cylinder(bm, center, radius, depth, segments, axis), then obj = crew.object_from_bmesh(\"Equipment__BoatHook\", bm, color); model it as if held upright in a relaxed hanging hand: grip at the origin, +Z up, +X forward, sizes in metres; then crew.hold(obj, \"right\") (or \"left\"). Worn-but-rigid items (badge, torch on a belt): place at rest-pose coordinates (crew.joint(bone) gives positions; the character faces +X, +Y is its left, +Z up) and crew.attach(obj, bone). crew.material(name, color) makes a plain material. Keep the whole crew under 40000 triangles. A failing item fails the build, naming its id and line."},
-  "equipment": {"doc": "Procedural low-poly items, each a mesh Equipment__<name> parented to a bone: life_vest (spine_02, orange by default), helmet (head, white hard hat), binoculars (spine_03, hanging on the chest), radio (pelvis, on the right hip). An entry may also be {\"name\": \"life_vest\", \"color\": \"navy\"}; colours: orange, navy, yellow, white, red, black, or [r,g,b]."},
-  "animations": {"doc": "glTF animations, named exactly: idle (3 s breathing and weight-shift loop), walk (1.1 s in-place loop), brace (2.6 s: knees bend, right hand forward-down onto a rail, hold, return), hands_up (2.4 s: raise both hands, hold, lower), squat (2.4 s: down, hold, up). Hand-keyed first drafts; feet stay planted on idle, brace, hands_up and squat."}
+  "custom_items": {
+   "doc": "Anything the catalog lacks (a singlet, shorts, a held boat hook or torch...). A list of {\"id\": \"item_1\", \"description\": \"white singlet\", \"code\": \"...\", \"module\": \"shirt\"}: Blender Python run after the body and catalog equipment are built and before the animations bake, with bpy, mathutils, math, Vector, Matrix and the helper module crew in scope. No os/sys/subprocess, open, eval, exec. Every object made must be a mesh named Clothes__<Name> (worn) or Equipment__<Name> (held/attached), [A-Za-z0-9_] only. CLOTHES: always use crew.garment(name, regions, color, offset_m=0.008, thickness_m=0.006, z_min=None, z_max=None, trim=0.3, hide_body=True), which cuts the garment from the body's own surface for the bones it covers, so it fits every body and deforms with every animation (never model clothes freehand: they will not move with the body). regions are names from crew.REGIONS: torso, upper_arms, forearms, hands, pelvis, thighs, shins, feet, neck, head (or single bone names like upperarm_l). z_min/z_max are rest-pose hem heights in metres; get them from joints, e.g. hip = crew.joint_z(\"thigh_l\"), knee = crew.joint_z(\"calf_l\"), ankle = crew.joint_z(\"foot_l\"). Recipes: singlet = garment(\"Clothes__Singlet\", [\"torso\", \"pelvis\"], c, z_min=hip - 0.03); T-shirt = [\"torso\", \"upper_arms\"] with z_min=hip; long sleeves add forearms; shorts = [\"pelvis\", \"thighs\"], z_min=(hip + knee) / 2, z_max=hip + 0.12; trousers = [\"pelvis\", \"thighs\", \"shins\"], z_max=hip + 0.12, z_min=ankle + 0.03. A layer worn over another needs a larger offset_m (e.g. 0.014 for shorts over a singlet). Set clothes.suit to null when replacing the outfit, or the suit shows through. EQUIPMENT (module \"equipment\", held or carried): build a low-poly mesh with bm = crew.new_bmesh(), crew.box(bm, center, size), crew.cylinder(bm, center, radius, depth, segments, axis), then crew.object_from_bmesh(\"Equipment__BoatHook\", bm, color); model it at the origin as if held upright in a relaxed hanging hand: grip at the origin, +Z up, +X forward, sizes in metres. Do NOT parent it (no crew.hold, crew.attach or .parent): give the item a \"place\" and the builder attaches it there. Worn-but-rigid items of other modules (module \"accessories\", e.g. a badge or a head torch): place at rest-pose coordinates (crew.joint(bone) gives positions; the character faces +X, +Y is its left, +Z up) and crew.attach(obj, bone). crew.material(name, color) makes a plain material. Keep the whole crew under 40000 triangles. A failing item fails the build, naming its id and line. MODULES: every item carries \"module\": shirt, pants, shoes, hair, equipment or accessories (an older item without one counts as equipment if its code makes Equipment__ objects, else shirt). A described shirt or pants replaces that module's preset; with clothes.suit set, shirt and pants items are not drawn. Equipment items carry \"place\" (right_hand, left_hand, chest, back, hip, head; right_hand if absent), so moving one is a spec change, not a code change. A described hair item goes with body.hair \"none\" so it replaces the preset hair.",
+   "module_options": [
+    "shirt",
+    "pants",
+    "shoes",
+    "hair",
+    "equipment",
+    "accessories"
+   ]
+  },
+  "equipment": {
+   "doc": "Procedural low-poly items, each a mesh Equipment__<name> parented to a bone: life_vest (fixed on spine_02, orange by default), helmet (fixed on the head, white hard hat), binoculars (place chest by default, hanging on a neck strap), radio (place hip by default, on the right hip). An entry may also be {\"name\": \"binoculars\", \"color\": \"navy\", \"place\": \"back\"}; colours: orange, navy, yellow, white, red, black, or [r,g,b]. place (the placement module) is one of right_hand, left_hand (held, parented to hand_r/hand_l), chest (in front of the chest, spine_03), back (slung diagonally behind the upper back, spine_03), hip (right side of the pelvis, pelvis bone), head (on the front of the head, head bone); measured from the body surface, so it fits every body. life_vest and helmet have one fixed spot and ignore place.",
+   "options": [
+    "life_vest",
+    "helmet",
+    "binoculars",
+    "radio"
+   ]
+  },
+  "animations": {
+   "doc": "glTF animations, named exactly: idle (3 s breathing and weight-shift loop), walk (1.1 s in-place loop), brace (2.6 s: knees bend, right hand forward-down onto a rail, hold, return), hands_up (2.4 s: raise both hands, hold, lower), squat (2.4 s: down, hold, up). Hand-keyed first drafts; feet stay planted on idle, brace, hands_up and squat."
+  },
+  "accessories": {
+   "doc": "Accessories module: a list of names or {\"name\", \"color\": [r, g, b] each 0..1 linear}: cap (baseball cap, navy by default), sunglasses (black), ear_defenders (yellow ear muffs with a headband over the head or helmet), gloves (work gloves, tan; a garment over the hands). Head accessories are meshes Equipment__Cap, Equipment__Sunglasses, Equipment__Ear_defenders on the head bone; gloves are Clothes__Gloves, skinned. Fedoras are clothes.hat, not this list. A cap is left off when a helmet or hat is worn.",
+   "options": [
+    "cap",
+    "sunglasses",
+    "ear_defenders",
+    "gloves"
+   ]
+  }
  },
  "options": {
-  "suit": ["male_worksuit01", "male_casualsuit01", "male_casualsuit02", "male_casualsuit03", "male_casualsuit04", "male_casualsuit05", "male_casualsuit06", "male_elegantsuit01", "female_casualsuit01", "female_casualsuit02", "female_elegantsuit01", "female_sportsuit01"],
-  "shoes": ["shoes01", "shoes02", "shoes03", "shoes04", "shoes05", "shoes06"],
-  "hat": [null, "fedora01", "fedora_cocked"],
-  "skin": ["light", "medium", "dark"],
-  "equipment": ["life_vest", "helmet", "binoculars", "radio"],
-  "animations": ["idle", "walk", "brace", "hands_up", "squat"]
+  "suit": [
+   "male_worksuit01",
+   "male_casualsuit01",
+   "male_casualsuit02",
+   "male_casualsuit03",
+   "male_casualsuit04",
+   "male_casualsuit05",
+   "male_casualsuit06",
+   "male_elegantsuit01",
+   "female_casualsuit01",
+   "female_casualsuit02",
+   "female_elegantsuit01",
+   "female_sportsuit01"
+  ],
+  "shoes": [
+   "shoes01",
+   "shoes02",
+   "shoes03",
+   "shoes04",
+   "shoes05",
+   "shoes06"
+  ],
+  "hat": [
+   null,
+   "fedora01",
+   "fedora_cocked"
+  ],
+  "skin": [
+   "light",
+   "medium",
+   "dark"
+  ],
+  "equipment": [
+   "life_vest",
+   "helmet",
+   "binoculars",
+   "radio"
+  ],
+  "animations": [
+   "idle",
+   "walk",
+   "brace",
+   "hands_up",
+   "squat"
+  ],
+  "shirt_styles": [
+   "tshirt",
+   "singlet",
+   "long_sleeve",
+   "polo"
+  ],
+  "pants_styles": [
+   "shorts",
+   "trousers",
+   "cargo"
+  ],
+  "accessories": [
+   "cap",
+   "sunglasses",
+   "ear_defenders",
+   "gloves"
+  ],
+  "places": [
+   "right_hand",
+   "left_hand",
+   "chest",
+   "back",
+   "hip",
+   "head"
+  ],
+  "default_places": {
+   "binoculars": "chest",
+   "radio": "hip"
+  },
+  "fixed_spot": [
+   "life_vest",
+   "helmet"
+  ],
+  "shoe_labels": {
+   "shoes01": "Brown work shoes",
+   "shoes02": "Canvas trainers",
+   "shoes03": "Black boots",
+   "shoes04": "Black dress shoes",
+   "shoes05": "White trainers",
+   "shoes06": "Blue trainers"
+  }
  }
 }

@@ -47,7 +47,9 @@ def test_default_spec_normalises_cleanly():
     spec, errors, warnings = crew_spec.normalize(json.loads(CATALOG.read_text(encoding="utf-8")))
     assert errors == [] and warnings == []
     assert spec["body"]["height_cm"] == 178
-    assert spec["equipment"] == [{"name": "life_vest", "color": crew_spec.EQUIPMENT_COLORS["orange"]}]
+    assert spec["equipment"] == [{"name": "life_vest", "color": crew_spec.EQUIPMENT_COLORS["orange"], "place": None}]
+    assert spec["clothes"]["shirt"] is None and spec["clothes"]["pants"] is None
+    assert spec["accessories"] == []
     assert spec["animations"] == ANIMS
 
 
@@ -738,11 +740,388 @@ def test_failing_custom_item_fails_build_with_its_id(tmp_path):
 
 @needs_blender
 def test_custom_item_bad_name_or_loose_item_is_an_error(tmp_path):
+    """Only equipment items are placed by the builder; an accessory that leaves its Equipment__
+    object unparented would not move with the body, so it is an error."""
     spec = _custom_spec()
     spec["animations"] = ["idle"]
-    spec["custom_items"] = [{"id": "loose", "description": "", "code":
+    spec["custom_items"] = [{"id": "loose", "description": "", "module": "accessories", "code":
                              "bm = crew.new_bmesh()\ncrew.box(bm, (0, 0, 1), (0.1, 0.1, 0.1))\n"
                              "crew.object_from_bmesh('Torch', bm, [1, 0, 0])\n"}]
     r = _build(tmp_path, spec)
     assert r["ok"] is False
     assert any("loose" in e and "Equipment__Torch" in e and "bone" in e for e in r["errors"]), r["errors"]
+
+
+# ---------------------------------------------------------------------------------------------
+# Modules (contract section 6, "Modules"): shirt/pants presets, accessories, placement, and the
+# point of it all - changing one module never changes any other part of the person.
+
+def test_shirt_and_pants_presets_validate():
+    spec, errors, warnings = crew_spec.normalize({"clothes": {"suit": None,
+                                                              "shirt": {"style": "polo", "color": [0.1, 0.2, 0.3]},
+                                                              "pants": {"style": "cargo"}}})
+    assert errors == [] and warnings == []
+    assert spec["clothes"]["shirt"] == {"style": "polo", "color": [0.1, 0.2, 0.3]}
+    assert spec["clothes"]["pants"] == {"style": "cargo", "color": crew_spec.GARMENT_DEFAULT_COLOR["pants"]}
+    for bad in ({"style": "kilt"}, {"style": "tshirt", "color": "navy"}, {"style": "tshirt", "color": [2, 0, 0]}, 7):
+        _, errors, _ = crew_spec.normalize({"clothes": {"shirt": bad}})
+        assert any("clothes.shirt" in e for e in errors), (bad, errors)
+
+
+def test_suit_with_shirt_warns_that_the_suit_wins():
+    spec, errors, warnings = crew_spec.normalize({"clothes": {"shirt": {"style": "tshirt"}}})
+    assert errors == [] and spec["clothes"]["suit"] == "male_worksuit01"
+    assert any("suit" in w and "shirt" in w for w in warnings), warnings
+
+
+def test_accessories_validate():
+    spec, errors, warnings = crew_spec.normalize({"accessories": ["cap", {"name": "gloves", "color": [0.2, 0.2, 0.2]},
+                                                                  "cap"]})
+    assert errors == []
+    assert spec["accessories"] == [{"name": "cap", "color": crew_spec.ACCESSORY_DEFAULT_COLOR["cap"]},
+                                   {"name": "gloves", "color": [0.2, 0.2, 0.2]}]
+    assert any("twice" in w for w in warnings)
+    for bad, needle in ((["fedora01"], "clothes.hat"), (["monocle"], "accessories"),
+                        ([{"name": "cap", "color": "navy"}], "accessories.cap.color"), ("cap", "list")):
+        _, errors, _ = crew_spec.normalize({"accessories": bad})
+        assert any(needle in e for e in errors), (bad, errors)
+    spec, _, warnings = crew_spec.normalize({"equipment": ["helmet"], "accessories": ["cap", "sunglasses"]})
+    assert [a["name"] for a in spec["accessories"]] == ["sunglasses"] and any("cap" in w for w in warnings)
+
+
+def test_equipment_places():
+    spec, errors, warnings = crew_spec.normalize({"equipment": [{"name": "life_vest", "place": "back"}, "binoculars",
+                                                                {"name": "radio", "place": "left_hand"}]})
+    assert errors == []
+    assert [(e["name"], e["place"]) for e in spec["equipment"]] == [
+        ("life_vest", None), ("binoculars", "chest"), ("radio", "left_hand")]
+    assert any("life_vest" in w and "fixed" in w for w in warnings)
+    _, errors, _ = crew_spec.normalize({"equipment": [{"name": "radio", "place": "pocket"}]})
+    assert any("place" in e for e in errors)
+
+
+def test_custom_item_module_and_place():
+    items = [{"id": "a", "code": "crew.object_from_bmesh('Torch', crew.new_bmesh(), [1, 0, 0])"},
+             {"id": "b", "code": "crew.garment('Vest', ['torso'], [1, 1, 1])"},
+             {"id": "c", "module": "equipment", "place": "back", "code": "x = 1"},
+             {"id": "d", "module": "shirt", "place": "back", "code": "x = 1"}]
+    spec, errors, warnings = crew_spec.normalize({"custom_items": items})
+    assert errors == []
+    assert [(i["module"], i["place"]) for i in spec["custom_items"]] == [
+        ("equipment", None), ("shirt", None), ("equipment", "back"), ("shirt", None)]
+    assert any("d:" in w and "ignored" in w for w in warnings), warnings
+    for bad, needle in (({"module": "cape"}, "module"), ({"module": "equipment", "place": "pocket"}, "place")):
+        _, errors, _ = crew_spec.normalize({"custom_items": [dict(id="x", code="x = 1", **bad)]})
+        assert any(needle in e for e in errors), errors
+
+
+def test_catalog_lists_module_options():
+    cat = json.loads(CATALOG.read_text(encoding="utf-8"))
+    opts, docs = cat["options"], cat["param_docs"]
+    assert opts["shirt_styles"] == crew_spec.SHIRT_STYLES and opts["pants_styles"] == crew_spec.PANTS_STYLES
+    assert opts["accessories"] == crew_spec.ACCESSORIES and opts["places"] == crew_spec.PLACES
+    assert opts["default_places"] == crew_spec.DEFAULT_PLACE
+    assert sorted(opts["shoe_labels"]) == crew_spec.SHOES
+    assert cat["clothes"]["shirt"] is None and cat["clothes"]["pants"] is None and cat["accessories"] == []
+    for key in ("shirt", "pants"):
+        assert key in docs["clothes"]
+    assert "place" in docs["equipment"]["doc"] and "Do NOT parent" in docs["custom_items"]["doc"]
+
+
+def _modules_spec():
+    spec = json.loads(CATALOG.read_text(encoding="utf-8"))
+    for k in ("param_docs", "options", "description"):
+        spec.pop(k, None)
+    spec["id"] = "crew_modules"
+    spec["clothes"]["suit"] = None
+    spec["clothes"]["shirt"] = {"style": "singlet", "color": [0.9, 0.9, 0.88]}
+    spec["clothes"]["pants"] = {"style": "cargo", "color": [0.25, 0.28, 0.15]}
+    spec["accessories"] = ["cap", "sunglasses"]
+    spec["equipment"] = [{"name": "binoculars", "place": "back"}, {"name": "radio", "place": "right_hand"}]
+    spec["animations"] = ["idle"]
+    return spec
+
+
+def _module_build(tmp_path_factory, name, change=None):
+    if not Path(BLENDER).exists():
+        pytest.skip("Blender not installed")
+    spec = _modules_spec()
+    if change:
+        change(spec)
+    return _build(tmp_path_factory.mktemp(name), spec)
+
+
+@pytest.fixture(scope="module")
+def modules_a(tmp_path_factory):
+    return _module_build(tmp_path_factory, "modules_a")
+
+
+@pytest.fixture(scope="module")
+def modules_b(tmp_path_factory):
+    """A with only the shirt module changed (style and colour)."""
+    def change(spec):
+        spec["clothes"]["shirt"] = {"style": "tshirt", "color": [0.7, 0.1, 0.1]}
+    return _module_build(tmp_path_factory, "modules_b", change)
+
+
+@pytest.fixture(scope="module")
+def modules_c(tmp_path_factory):
+    """A with only the binoculars' place changed."""
+    def change(spec):
+        spec["equipment"][0]["place"] = "chest"
+    return _module_build(tmp_path_factory, "modules_c", change)
+
+
+HAIR_CODE = """crew.garment("Clothes__Buzzcut", ["head"], [0.05, 0.04, 0.03], offset_m=0.004,
+             z_min=crew.joint_z("head") + 0.1, hide_body=False)
+"""
+TORCH_CODE = """bm = crew.new_bmesh()
+crew.cylinder(bm, (0, 0, 0.04), 0.018, 0.16, 8, "Z")
+crew.object_from_bmesh("Torch", bm, [0.9, 0.8, 0.1])
+"""
+FLARE_CODE = """bm = crew.new_bmesh()
+crew.cylinder(bm, (0, 0, 0), 0.02, 0.2, 8, "Z")
+crew.object_from_bmesh("Equipment__Flare", bm, [0.9, 0.1, 0.05])
+"""
+
+
+@pytest.fixture(scope="module")
+def modules_d(tmp_path_factory):
+    """Suit and shirt both set (suit wins); described hair over body.hair "none"; a legacy
+    equipment item with no module or place (goes to the right hand); a new one placed on the hip."""
+    def change(spec):
+        spec["clothes"]["suit"] = "male_worksuit01"
+        spec["clothes"]["shirt"] = {"style": "tshirt", "color": [0.7, 0.1, 0.1]}
+        spec["clothes"]["pants"] = None
+        spec["body"]["hair"] = "none"
+        spec["equipment"] = []
+        spec["accessories"] = ["ear_defenders", "gloves"]
+        spec["custom_items"] = [
+            {"id": "buzzcut", "description": "short buzz cut", "module": "hair", "code": HAIR_CODE},
+            {"id": "torch", "description": "a torch", "code": TORCH_CODE},
+            {"id": "flare", "description": "a flare", "module": "equipment", "place": "hip", "code": FLARE_CODE},
+        ]
+    return _module_build(tmp_path_factory, "modules_d", change)
+
+
+def _parents(g):
+    return {g.nodes[c].name: g.nodes[i].name for i, n in enumerate(g.nodes) for c in (n.children or [])}
+
+
+def _world_verts(g, node_name):
+    """Rest-pose world positions (glTF frame, Y up, +X forward) of a mesh node's vertices."""
+    w = _world_positions(g)[node_name]
+    node = g.nodes[_node(g, node_name)]
+    out = []
+    for prim in g.meshes[node.mesh].primitives:
+        for p in _accessor_values(g, prim.attributes.POSITION):
+            out.append(tuple(sum(w[r][k] * p[k] for k in range(3)) + w[r][3] for r in range(3)))
+    return out
+
+
+@needs_blender
+def test_modules_build_ok(modules_a):
+    r = modules_a
+    assert r["ok"] is True and r["_exit"] == 0, r["errors"]
+    assert r["warnings"] == [], r["warnings"]
+    assert 0 < r["triangles"] <= 40000
+    parts = {p["path"]: p for p in json.loads((r["_out"] / "parts.json").read_text(encoding="utf-8"))}
+    for name in ("Clothes__Shirt", "Clothes__Pants", "Equipment__Cap", "Equipment__Sunglasses",
+                 "Equipment__binoculars", "Equipment__radio"):
+        assert name in parts and parts[name]["triangles"] > 0, name
+    assert "Clothes__Suit" not in parts
+
+
+@needs_blender
+def test_shirt_and_pants_skinned_on_the_one_skeleton(modules_a):
+    g = _gltf(modules_a)
+    assert len(g.skins) == 1
+    assert sorted(g.nodes[j].name for j in g.skins[0].joints) == GAME_ENGINE_BONES
+    for name in ("Clothes__Shirt", "Clothes__Pants"):
+        n = g.nodes[_node(g, name)]
+        assert n.mesh is not None and n.skin == 0 and _is_identity(n), name
+    dom = _dominant(_skin_data(g, "Clothes__Pants")[1])
+    for side in ("thigh_l", "thigh_r", "calf_l", "calf_r"):   # cargo = trousers: thighs and shins
+        assert dom.count(side) / len(dom) > 0.05, side
+
+
+@needs_blender
+def test_singlet_has_no_arm_weighted_vertices(modules_a):
+    """No vertex is driven mainly by an arm, neck or head bone (that would be a sleeve or collar),
+    and no arm bone carries more than the garment trim (0.3) anywhere: a sleeve would carry 1.0."""
+    g = _gltf(modules_a)
+    _, infl = _skin_data(g, "Clothes__Shirt")
+    assert not [d for d in _dominant(infl) if d.startswith(("upperarm", "lowerarm", "hand", "neck", "head"))]
+    arm = max((w for names, ws in infl for n, w in zip(names, ws)
+               if n.startswith(("upperarm", "lowerarm", "hand"))), default=0.0)
+    assert arm <= 0.3, arm
+
+
+@needs_blender
+def test_cap_and_sunglasses_follow_the_head(modules_a):
+    g = _gltf(modules_a)
+    parent = _parents(g)
+    assert parent["Equipment__Cap"] == "head" and parent["Equipment__Sunglasses"] == "head"
+    head_y = _world_positions(g)["head"][1][3]
+    cap = _world_verts(g, "Equipment__Cap")
+    glasses = _world_verts(g, "Equipment__Sunglasses")
+    assert min(p[1] for p in cap) > head_y + 0.05                 # on top of the head, not the neck
+    lo, hi = min(p[1] for p in glasses), max(p[1] for p in glasses)
+    face = [p for p in _world_verts(g, "Body__Skin") if lo <= p[1] <= hi and abs(p[2]) < 0.03]
+    assert max(p[0] for p in glasses) > max(p[0] for p in face)   # lenses in front of the face
+
+
+@needs_blender
+def test_binoculars_on_the_back(modules_a):
+    """place back: every vertex behind the torso surface (glTF +X is forward), on spine_03."""
+    g = _gltf(modules_a)
+    assert _parents(g)["Equipment__binoculars"] == "spine_03"
+    bino = _world_verts(g, "Equipment__binoculars")
+    lo, hi = min(p[1] for p in bino), max(p[1] for p in bino)
+    torso = [p for n in ("Body__Skin", "Clothes__Shirt") for p in _world_verts(g, n)
+             if lo <= p[1] <= hi and abs(p[2]) < 0.12]
+    assert max(p[0] for p in bino) < min(p[0] for p in torso), (max(p[0] for p in bino), min(p[0] for p in torso))
+
+
+@needs_blender
+def test_radio_held_in_right_hand(modules_a):
+    g = _gltf(modules_a)
+    assert _parents(g)["Equipment__radio"] == "hand_r"
+    ov, _ = _pose(g, "idle", 0)
+    w = _world_positions(g, ov)
+    radio, hand = w["Equipment__radio"], w["hand_r"]
+    assert math.dist([radio[r][3] for r in range(3)], [hand[r][3] for r in range(3)]) < 0.12
+
+
+def _material_sig(g, mat_idx):
+    m = g.materials[mat_idx]
+    pbr = m.pbrMetallicRoughness
+    tex = None
+    if pbr and pbr.baseColorTexture is not None:
+        img = g.images[g.textures[pbr.baseColorTexture.index].source]
+        bv = g.bufferViews[img.bufferView]
+        tex = hash(g.binary_blob()[(bv.byteOffset or 0):(bv.byteOffset or 0) + bv.byteLength])
+    return (m.name, tuple(pbr.baseColorFactor or ()) if pbr else None, pbr.roughnessFactor if pbr else None,
+            pbr.metallicFactor if pbr else None, m.alphaMode, tex)
+
+
+def _node_sig(g, i):
+    """Everything about a node that a viewer could see: parent, transform, vertices, materials."""
+    n = g.nodes[i]
+    parent = _parents(g).get(n.name)
+    sig = {"parent": parent, "t": n.translation, "r": n.rotation, "s": n.scale, "skin": n.skin}
+    if n.mesh is not None:
+        prims = g.meshes[n.mesh].primitives
+        sig["verts"] = [_accessor_values(g, p.attributes.POSITION) for p in prims]
+        sig["materials"] = [_material_sig(g, p.material) for p in prims]
+    return sig
+
+
+def _same_verts(a, b, tol=1e-6):
+    return len(a) == len(b) and all(len(x) == len(y) and all(abs(p - q) <= tol for u, v in zip(x, y)
+                                                              for p, q in zip(u, v)) for x, y in zip(a, b))
+
+
+def _assert_only_changed(ga, gb, allowed, body_under=()):
+    """Every node of the two GLBs is identical except those in ``allowed``. Body__Skin, when in
+    ``body_under``, may lose or regain skin only where one of those garments covers it."""
+    names_a = {n.name for n in ga.nodes}
+    names_b = {n.name for n in gb.nodes}
+    assert names_a - set(allowed) == names_b - set(allowed), names_a ^ names_b
+    for name in sorted(names_a - set(allowed)):
+        sa, sb = _node_sig(ga, _node(ga, name)), _node_sig(gb, _node(gb, name))
+        if name == "Body__Skin" and body_under:
+            assert sa["materials"] == sb["materials"], name
+            _assert_body_differs_only_under(ga, gb, body_under)
+            continue
+        for k in ("parent", "t", "r", "s", "skin", "materials"):
+            assert sa.get(k) == sb.get(k), (name, k, sa.get(k), sb.get(k))
+        if "verts" in sa:
+            assert _same_verts(sa["verts"], sb["verts"]), name
+
+
+def _assert_body_differs_only_under(ga, gb, garments, reach=0.03):
+    """The body's skin under a garment is trimmed (it cannot be seen and would poke through), so
+    a different shirt trims a different patch. Everything else about the body must be identical:
+    same bounds, and every vertex present in one build but not the other lies under a garment."""
+    va = {tuple(round(c, 5) for c in p) for p in _world_verts(ga, "Body__Skin")}
+    vb = {tuple(round(c, 5) for c in p) for p in _world_verts(gb, "Body__Skin")}
+    for k in range(3):
+        assert abs(min(p[k] for p in va) - min(p[k] for p in vb)) < 1e-5
+        assert abs(max(p[k] for p in va) - max(p[k] for p in vb)) < 1e-5
+    cover = {}
+    for g in (ga, gb):
+        for name in garments:
+            if any(n.name == name for n in g.nodes):
+                for p in _world_verts(g, name):
+                    cover.setdefault(tuple(int(math.floor(c / reach)) for c in p), []).append(p)
+    for p in va ^ vb:
+        cell = [int(math.floor(c / reach)) for c in p]
+        near = [q for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)
+                for q in cover.get((cell[0] + dx, cell[1] + dy, cell[2] + dz), ())]
+        assert any(math.dist(p, q) < reach for q in near), ("body changed away from the garments", p)
+    assert len(va & vb) > 0.5 * len(va)
+
+
+@needs_blender
+def test_changing_the_shirt_changes_nothing_else(modules_a, modules_b):
+    """The point of modules: B is A with only clothes.shirt changed. Every other part - pants,
+    cap, sunglasses, binoculars, radio, shoes, hair, eyes, every bone - is identical in the GLB:
+    same vertices, same transform, same parent, same materials. Proves 'without resetting the
+    entire human' at the builder level."""
+    assert modules_b["ok"] is True, modules_b["errors"]
+    ga, gb = _gltf(modules_a), _gltf(modules_b)
+    sa, sb = _node_sig(ga, _node(ga, "Clothes__Shirt")), _node_sig(gb, _node(gb, "Clothes__Shirt"))
+    assert not _same_verts(sa["verts"], sb["verts"]) and sa["materials"] != sb["materials"]  # it did change
+    _assert_only_changed(ga, gb, {"Clothes__Shirt"}, body_under=("Clothes__Shirt",))
+
+
+@needs_blender
+def test_changing_a_place_moves_only_that_item(modules_a, modules_c):
+    """C is A with only the binoculars' place changed (back -> chest): the binoculars move to the
+    front of the chest; nothing else changes at all, the body included."""
+    assert modules_c["ok"] is True, modules_c["errors"]
+    ga, gc = _gltf(modules_a), _gltf(modules_c)
+    _assert_only_changed(ga, gc, {"Equipment__binoculars"})
+    back = _world_verts(ga, "Equipment__binoculars")
+    chest = _world_verts(gc, "Equipment__binoculars")
+    assert sum(p[0] for p in chest) / len(chest) - sum(p[0] for p in back) / len(back) > 0.2
+
+
+@needs_blender
+def test_suit_wins_over_shirt(modules_d):
+    r = modules_d
+    assert r["ok"] is True, r["errors"]
+    g = _gltf(r)
+    names = {n.name for n in g.nodes}
+    assert "Clothes__Suit" in names and "Clothes__Shirt" not in names
+    assert any("suit" in w and "shirt" in w for w in r["warnings"]), r["warnings"]
+
+
+@needs_blender
+def test_described_hair_replaces_bald_preset(modules_d):
+    g = _gltf(modules_d)
+    names = {n.name for n in g.nodes}
+    assert "Head__Hair" not in names
+    n = g.nodes[_node(g, "Clothes__Buzzcut")]
+    assert n.mesh is not None and n.skin == 0
+
+
+@needs_blender
+def test_ear_defenders_and_gloves(modules_d):
+    g = _gltf(modules_d)
+    assert _parents(g)["Equipment__Ear_defenders"] == "head"
+    dom = _dominant(_skin_data(g, "Clothes__Gloves")[1])
+    assert all(d.startswith(("hand", "thumb", "index", "middle", "ring", "pinky")) for d in dom)
+
+
+@needs_blender
+def test_equipment_items_are_placed_by_the_builder(modules_d):
+    """A legacy item (no module, no place, not parented) goes to the right hand; a new one with
+    place hip goes on the pelvis at the right side (Blender -Y is glTF +Z)."""
+    g = _gltf(modules_d)
+    parent = _parents(g)
+    assert parent["Equipment__Torch"] == "hand_r"
+    assert parent["Equipment__Flare"] == "pelvis"
+    w = _world_positions(g)
+    assert w["Equipment__Flare"][2][3] - w["pelvis"][2][3] > 0.1

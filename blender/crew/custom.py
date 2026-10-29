@@ -135,6 +135,13 @@ def material(name, color, roughness=0.6):
 def garment(name, regions, color, offset_m=0.008, thickness_m=0.006, z_min=None, z_max=None,
             trim=0.3, hide_body=True, roughness=0.8):
     """Clothes__<name> cut from the body over REGIONS (z_min/z_max = rest-pose hem heights in m); skinned, fits any body."""
+    return _garment(name, regions, color, offset_m, thickness_m, z_min, z_max, trim, hide_body, roughness)
+
+
+def _garment(name, regions, color, offset_m=0.008, thickness_m=0.006, z_min=None, z_max=None,
+             trim=0.3, hide_body=True, roughness=0.8, cuts=()):
+    """garment() plus ``cuts``: [(point, normal, bones)] - faces mainly on those bones and on the
+    +normal side of the plane through point are cut away along a straight hem (sleeve length)."""
     full = _full_name(name, "Clothes__")
     bones = _bones_for(regions)
     arm, body_obj, src = armature(), body(), _STATE["source"]
@@ -154,6 +161,23 @@ def garment(name, regions, color, offset_m=0.008, thickness_m=0.006, z_min=None,
             geom = list(bm.verts) + list(bm.edges) + list(bm.faces)
             bmesh.ops.bisect_plane(bm, geom=geom, dist=1e-5, plane_co=(0.0, 0.0, float(z)),
                                    plane_no=(0.0, 0.0, 1.0))
+    cuts = [(Vector(co), Vector(no).normalized(), set(bs)) for co, no, bs in cuts]
+
+    def dominant(v):
+        best, bw = None, 0.0
+        for gi, w in v[deform].items():
+            gname = group_names[gi] if gi < len(group_names) else None
+            if gname in bone_names and w > bw:
+                best, bw = gname, w
+        return best
+
+    for co, no, cut_bones in cuts:
+        faces = [f for f in bm.faces if any(dominant(v) in cut_bones for v in f.verts)]
+        if faces:
+            edges = {e for f in faces for e in f.edges}
+            verts = {v for f in faces for v in f.verts}
+            bmesh.ops.bisect_plane(bm, geom=list(verts) + list(edges) + faces, dist=1e-5,
+                                   plane_co=co, plane_no=no)
     bm.verts.index_update()
     bm.faces.index_update()
     bm.verts.ensure_lookup_table()
@@ -178,8 +202,12 @@ def garment(name, regions, color, offset_m=0.008, thickness_m=0.006, z_min=None,
         idx = [v.index for v in f.verts]
         if sum(inside[i] for i in idx) * 2 < len(idx) or any(outside_heavy[i] for i in idx):
             continue
-        cz = f.calc_center_median().z
+        center = f.calc_center_median()
+        cz = center.z
         if (z_min is not None and cz < z_min) or (z_max is not None and cz > z_max):
+            continue
+        if any((center - co).dot(no) > 0 and sum(dominant(v) in cb for v in f.verts) * 2 >= len(idx)
+               for co, no, cb in cuts):
             continue
         keep.add(f.index)
     if not keep:
@@ -215,7 +243,8 @@ def garment(name, regions, color, offset_m=0.008, thickness_m=0.006, z_min=None,
     # The bone-weight rule cuts openings (neck, armholes) along the body's quads, which reads as a
     # saw-tooth edge. Relax those edges along themselves; the straight z hems are left alone.
     def on_hem(v):
-        return any(z is not None and abs(v.co.z - z) < 1e-4 for z in (z_min, z_max))
+        return (any(z is not None and abs(v.co.z - z) < 1e-4 for z in (z_min, z_max))
+                or any(abs((v.co - co).dot(no)) < 1e-4 for co, no, _ in cuts))
 
     for _ in range(4):
         moves = {}
@@ -303,7 +332,7 @@ def _hide_body_under(body_obj, covered, border):
 
 
 def attach(obj, bone):
-    """Parent obj to any bone, keeping its current rest-pose position (name it Equipment__<Name>)."""
+    """Accessories/hair items only: parent obj to a bone where it is; equipment items are never parented by their code."""
     arm = armature()
     if bone not in arm.data.bones:
         raise ValueError("no bone %r; bones: %s" % (bone, sorted(b.name for b in arm.data.bones)))
@@ -354,7 +383,7 @@ def _relaxed_hand(s):
 
 
 def hold(obj, hand="right"):
-    """Put obj in a hand, parented to hand_r/hand_l: model it upright, grip at origin, +Z up, +X forward."""
+    """Builder's own: equipment is modelled at the origin (grip, +Z up, +X forward), unparented, and placed by its place."""
     s = _side(hand)
     rest, posed, palm = _relaxed_hand(s)
     scale = Matrix.Diagonal(obj.matrix_world.to_scale().to_4d())

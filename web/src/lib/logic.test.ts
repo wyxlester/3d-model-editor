@@ -229,7 +229,7 @@ describe('chat attachments', () => {
   });
 });
 
-import { HAIR_SWATCHES, describeMessage, hexToLinear, itemKind, itemsFor, madeSomethingNew, removeItemPatch, selectedSwatch } from './describe';
+import { HAIR_SWATCHES, hexToLinear, madeSomethingNew, removeItemPatch, selectedSwatch } from './describe';
 
 describe('made by description', () => {
   const item = (id: string, code: string, description = 'thing') => ({ id, code, description });
@@ -249,23 +249,6 @@ describe('made by description', () => {
     expect(selectedSwatch([0.2, 0.9, 0.2], HAIR_SWATCHES)).toBeNull();
   });
 
-  it('prefixes the slot and refuses a blank description', () => {
-    expect(describeMessage('Clothes', '  a white   singlet ')).toBe('Clothes: a white singlet');
-    expect(describeMessage('Equipment', '   ')).toBeNull();
-  });
-
-  it('sorts items into tabs by the object names their code makes', () => {
-    expect(itemKind(item('a', 'crew.garment("Clothes__Singlet", ...)', 'white singlet'))).toBe('clothes');
-    expect(itemKind(item('b', 'crew.garment("Clothes__Cap", ...)', 'navy cap with badge'))).toBe('head');
-    expect(itemKind(item('c', 'o.name = "Equipment__Boat_hook"', 'boat hook'))).toBe('equipment');
-    expect(itemKind(item('d', 'pass', 'mystery'))).toBe('other');
-    const items = [item('a', 'Clothes__X'), item('c', 'Equipment__Y'), item('d', 'pass'), item('b', 'Clothes__Z', 'a beard')];
-    expect(itemsFor(items, 'Clothes').map((i) => i.id)).toEqual(['a', 'd']);
-    expect(itemsFor(items, 'Equipment').map((i) => i.id)).toEqual(['c']);
-    expect(itemsFor(items, 'Head').map((i) => i.id)).toEqual(['b']);
-    expect(itemsFor(undefined, 'Clothes')).toEqual([]);
-  });
-
   it('removes one item and sends the whole remaining list', () => {
     const items = [item('a', 'Clothes__X'), item('b', 'Equipment__Y')];
     expect(removeItemPatch(items, 'a')).toEqual({ custom_items: [items[1]] });
@@ -281,5 +264,143 @@ describe('picker offer', () => {
     expect(madeSomethingNew(['item_1'], [item('item_1'), item('item_2')])).toBe(true);
     expect(madeSomethingNew(null, [item('item_1')])).toBe(false);         // page just opened
     expect(madeSomethingNew([], undefined)).toBe(false);
+  });
+});
+
+import {
+  SHIRT_SWATCHES, changedModules, colourName, garmentColorPatch, garmentStylePatch, itemsInModule, moduleMessage, moduleOfItem,
+  moduleSummary, outfitPatch, outfitWouldRemove, placePatch, presetPatch, placementRows, suitLabel, suitsFor, toggleAccessory, toggleEquipment,
+} from './modules';
+import type { CrewSpec, CustomItem } from '../types';
+
+describe('crew modules', () => {
+  const ci = (id: string, code: string, extra: Partial<CustomItem> = {}): CustomItem => ({ id, code, description: id, ...extra });
+  const base = (): Partial<CrewSpec> => ({
+    body: { gender: 'male', height_cm: 178, weight: 0.5, muscle: 0.5, age_years: 30, skin: 'medium' },
+    clothes: { suit: 'male_worksuit01', shoes: 'shoes01', hat: null, suit_color: null },
+    equipment: ['life_vest'], animations: ['idle'],
+  });
+
+  it('puts a described item in its tagged module, and infers untagged ones from the code', () => {
+    expect(moduleOfItem(ci('a', 'Clothes__Vest', { module: 'accessories' }))).toBe('accessories');
+    expect(moduleOfItem(ci('b', 'obj.name = "Equipment__Rifle"'))).toBe('equipment');
+    expect(moduleOfItem(ci('c', 'crew.garment("Clothes__Singlet")'))).toBe('shirt');
+    // a tag that is not a module falls back to inference rather than vanishing
+    expect(moduleOfItem({ code: 'Equipment__X', module: 'nonsense' as never })).toBe('equipment');
+    const items = [ci('a', 'Clothes__A', { module: 'pants' }), ci('b', 'Equipment__B'), ci('c', 'Clothes__C')];
+    expect(itemsInModule(items, 'shirt').map((i) => i.id)).toEqual(['c']);
+    expect(itemsInModule(items, 'pants').map((i) => i.id)).toEqual(['a']);
+    expect(itemsInModule(undefined, 'equipment')).toEqual([]);
+  });
+
+  it('choosing a shirt or pants style clears the outfit and keeps the chosen colour', () => {
+    const s = base();
+    const p = garmentStylePatch(s, 'shirt', 'singlet') as { clothes: Record<string, unknown> };
+    expect(p.clothes.suit).toBeNull();
+    expect(p.clothes.shirt).toEqual({ style: 'singlet', color: hexToLinear(SHIRT_SWATCHES[0].hex) });
+    s.clothes!.shirt = { style: 'polo', color: [0.1, 0.2, 0.3] };
+    expect((garmentStylePatch(s, 'shirt', 'tshirt') as { clothes: { shirt: unknown } }).clothes.shirt).toEqual({ style: 'tshirt', color: [0.1, 0.2, 0.3] });
+    // None removes only the garment, and leaves the outfit alone
+    expect(garmentStylePatch(s, 'pants', null)).toEqual({ clothes: { pants: null } });
+  });
+
+  it('a preset replaces the described items of its own module only', () => {
+    const s = base();
+    s.custom_items = [ci('vest', 'Clothes__Vest', { module: 'shirt' }), ci('boots', 'Clothes__B', { module: 'shoes' }), ci('old', 'Clothes__Old')];
+    const shirt = garmentStylePatch(s, 'shirt', 'polo') as { custom_items: CustomItem[] };
+    expect(shirt.custom_items.map((i) => i.id)).toEqual(['boots']);   // 'old' is untagged, so inferred as shirt
+    expect((garmentStylePatch(s, 'shirt', null) as { custom_items: CustomItem[] }).custom_items.map((i) => i.id)).toEqual(['boots']);
+    expect(presetPatch(s, 'shoes', { clothes: { shoes: null } })).toEqual({ clothes: { shoes: null }, custom_items: [s.custom_items[0], s.custom_items[2]] });
+    expect(presetPatch(s, 'hair', { body: { hair: 'afro01' } })).toEqual({ body: { hair: 'afro01' } });
+  });
+
+  it('a swatch colours the current style, and does nothing without one', () => {
+    const s = base();
+    expect(garmentColorPatch(s, 'pants', [1, 0, 0])).toBeNull();
+    s.clothes!.pants = { style: 'cargo', color: null };
+    expect(garmentColorPatch(s, 'pants', [1, 0, 0])).toEqual({ clothes: { pants: { style: 'cargo', color: [1, 0, 0] }, suit: null } });
+  });
+
+  it('choosing an outfit nulls shirt and pants and removes only their described items', () => {
+    const s = base();
+    s.custom_items = [ci('vest', 'Clothes__Vest', { module: 'shirt' }), ci('shorts', 'Clothes__S', { module: 'pants' }), ci('rifle', 'Equipment__R', { module: 'equipment' }), ci('old', 'Clothes__Old')];
+    expect(outfitWouldRemove(s).map((i) => i.id)).toEqual(['vest', 'shorts', 'old']);
+    const p = outfitPatch(s, 'male_casualsuit02') as { clothes: Record<string, unknown>; custom_items: CustomItem[] };
+    expect(p.clothes).toEqual({ suit: 'male_casualsuit02', shirt: null, pants: null });
+    expect(p.custom_items.map((i) => i.id)).toEqual(['rifle']);
+    expect(outfitPatch(base(), 'male_worksuit01')).not.toHaveProperty('custom_items');
+    expect(outfitPatch(s, null)).toEqual({ clothes: { suit: null } });
+  });
+
+  it('places equipment by name or described item by id, touching nothing else', () => {
+    const s = base();
+    s.equipment = ['life_vest', { name: 'binoculars', color: 'navy' }, 'radio'];
+    s.custom_items = [ci('rifle', 'Equipment__Rifle', { module: 'equipment' }), ci('vest', 'Clothes__V', { module: 'shirt' })];
+    const rows = placementRows(s);
+    expect(rows.map((r) => [r.ref, r.place])).toEqual([['life_vest', 'fixed'], ['binoculars', 'chest'], ['radio', 'hip'], ['rifle', 'right_hand']]);
+    expect(placePatch(s, { kind: 'equipment', ref: 'radio' }, 'back')).toEqual({ equipment: ['life_vest', { name: 'binoculars', color: 'navy' }, { name: 'radio', place: 'back' }] });
+    expect(placePatch(s, { kind: 'equipment', ref: 'binoculars' }, 'head')).toEqual({ equipment: ['life_vest', { name: 'binoculars', color: 'navy', place: 'head' }, 'radio'] });
+    const p = placePatch(s, { kind: 'item', ref: 'rifle' }, 'back') as { custom_items: CustomItem[] };
+    expect(p.custom_items[0].place).toBe('back');
+    expect(p.custom_items[1]).toEqual(s.custom_items[1]);
+  });
+
+  it('toggles equipment and accessories without dropping colour or place', () => {
+    const list = [{ name: 'radio', place: 'back' as const }, 'life_vest'];
+    expect(toggleEquipment(list, 'helmet')).toEqual([...list, 'helmet']);
+    expect(toggleEquipment(list, 'life_vest')).toEqual([{ name: 'radio', place: 'back' }]);
+    expect(toggleEquipment(list, 'radio')).toEqual(['life_vest']);
+    expect(toggleAccessory([{ name: 'cap', color: 'navy' }], 'gloves')).toEqual([{ name: 'cap', color: 'navy' }, 'gloves']);
+    expect(toggleAccessory([{ name: 'cap' }], 'cap')).toEqual([]);
+    expect(toggleAccessory(['cap', 'gloves'], 'cap')).toEqual(['gloves']);
+  });
+
+  it('summarises each collapsed module in one line', () => {
+    const s = base();
+    expect(moduleSummary(s, 'gender')).toBe('Male · 178 cm · 30 yrs');
+    expect(moduleSummary(s, 'skin')).toBe('Medium');
+    expect(moduleSummary(s, 'shirt')).toBe('Covered by the full outfit');
+    expect(moduleSummary(s, 'outfit')).toBe('Work overalls');
+    expect(moduleSummary(s, 'shoes')).toBe('Work shoes');
+    expect(moduleSummary(s, 'placement')).toBe('Nothing held');
+    expect(moduleSummary(s, 'accessories')).toBe('None');
+    s.clothes = { ...s.clothes!, suit: null, shirt: { style: 'singlet', color: hexToLinear('#D6A63A') }, shoes: null };
+    expect(moduleSummary(s, 'shirt')).toBe('Singlet · mustard');
+    expect(moduleSummary(s, 'pants')).toBe('None');
+    expect(moduleSummary(s, 'shoes')).toBe('Barefoot');
+    s.custom_items = [{ id: 'v', code: 'Clothes__V', description: 'khaki vest', module: 'shirt' }];
+    expect(moduleSummary(s, 'shirt')).toBe('Described: khaki vest');
+    s.equipment = ['binoculars'];
+    expect(moduleSummary(s, 'placement')).toBe('Binoculars: Chest');
+    s.body = { ...s.body!, hair: 'none', hair_color: [0.5, 0.5, 0.5] };
+    expect(moduleSummary(s, 'hair')).toBe('Bald');
+    s.body = { ...s.body!, hair: 'afro01', hair_color: hexToLinear(HAIR_SWATCHES[0].hex) };
+    expect(moduleSummary(s, 'hair')).toBe('Afro · black');
+    s.clothes = { ...s.clothes!, hat: 'fedora01' };
+    s.accessories = [{ name: 'sunglasses' }, 'ear_defenders'];
+    expect(moduleSummary(s, 'accessories')).toBe('Fedora, Sunglasses, Ear defenders');
+  });
+
+  it('names swatch colours, and says when a colour is not one of ours', () => {
+    expect(colourName(null, SHIRT_SWATCHES)).toBeNull();
+    expect(colourName(hexToLinear('#1F2F55'), SHIRT_SWATCHES)).toBe('navy');
+    expect(colourName([0.9, 0.1, 0.9], SHIRT_SWATCHES)).toBe('custom colour');
+  });
+
+  it('labels and filters outfits by body', () => {
+    expect(suitLabel('male_worksuit01')).toBe('Work overalls');
+    expect(suitLabel('male_casualsuit03')).toBe('Casual 3');
+    expect(suitLabel('female_elegantsuit01')).toBe('Business');
+    expect(suitLabel('navy_coverall')).toBe('Navy coverall');
+    expect(suitsFor(['male_worksuit01', 'female_sportsuit01', 'navy_coverall'], 'male', 'female_sportsuit01')).toEqual(['male_worksuit01', 'female_sportsuit01', 'navy_coverall']);
+    expect(suitsFor(['male_worksuit01', 'female_sportsuit01'], 'female', null)).toEqual(['female_sportsuit01']);
+  });
+
+  it('prefixes a description with its module, refuses blanks, and reads changed_modules', () => {
+    expect(moduleMessage('shirt', '  a khaki   vest ')).toBe('Shirt: a khaki vest');
+    expect(moduleMessage('equipment', '  ')).toBeNull();
+    expect(changedModules({ changed_modules: ['shirt', 'bogus', 'pants'] })).toEqual(['shirt', 'pants']);
+    expect(changedModules({ message: {} })).toEqual([]);
+    expect(changedModules(null)).toEqual([]);
   });
 });

@@ -95,6 +95,22 @@ export interface PartOverride {
   hidden?: boolean;
 }
 
+/** CONTRACT §6 "Modules": the ten parts of a crew member, each owning fixed spec keys. */
+export type ModuleId = 'gender' | 'skin' | 'hair' | 'shirt' | 'pants' | 'outfit' | 'shoes' | 'equipment' | 'placement' | 'accessories';
+
+/** Where a held or attached equipment item goes (§6 "Placement"). Absent = the item's fixed spot. */
+export type Place = 'right_hand' | 'left_hand' | 'chest' | 'back' | 'hip' | 'head';
+
+/** `clothes.shirt` / `clothes.pants`: a preset garment. */
+export interface Garment { style: string; color?: Vec3 | null }
+
+/** An equipment entry: a bare catalog name, or `{name, color, place}`. Colour is a name or [r,g,b]. */
+export interface EquipmentEntry { name: string; color?: string | Vec3 | null; place?: Place }
+export type Equipment = string | EquipmentEntry;
+
+/** `accessories[]` entry (§6 "Modules"): a bare name, or `{name, color}`. */
+export type Accessory = string | { name: string; color?: string | Vec3 | null };
+
 export interface CrewSpec {
   schema: 'me3d.crew_spec/1';
   id: string;
@@ -106,20 +122,26 @@ export interface CrewSpec {
     muscle: number;
     age_years: number;
     skin: string;
+    /** Optional MPFB proportions slider 0..1 (default 0.5). */
+    proportions?: number;
+    /** Catalog hair style, "none" for bald, null/absent for the gender's default. */
+    hair?: string | null;
     /** [r,g,b] 0..1 or null; absent in the default spec (CONTRACT §6 "Made by description"). */
     hair_color?: Vec3 | null;
   };
   clothes: {
     suit: string | null; shoes: string | null; hat: string | null; suit_color: Vec3 | null;
     shoes_color?: Vec3 | null; hat_color?: Vec3 | null;
+    shirt?: Garment | null; pants?: Garment | null;
   };
-  equipment: string[];
+  equipment: Equipment[];
   animations: string[];
+  accessories?: Accessory[];
   /** Things the AI made from a description: Blender Python creating Clothes__* / Equipment__* objects. */
   custom_items?: CustomItem[];
 }
 
-export interface CustomItem { id: string; description: string; code: string }
+export interface CustomItem { id: string; description: string; code: string; module?: ModuleId; place?: Place }
 
 /** A project's spec: a ship spec (§5) or a crew spec (§6), depending on `kind`. */
 export type ProjectSpec = { schema?: string } & Partial<Omit<ShipSpec, 'schema'>> & Partial<Omit<CrewSpec, 'schema' | 'id' | 'name'>> & Record<string, unknown>;

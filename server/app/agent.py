@@ -22,6 +22,8 @@ from typing import Any, Callable, Protocol
 
 from .builds import Builds, summarise_change
 from .catalog import Catalog, CatalogError
+from . import crew_modules as cm
+from . import design_plan as dp
 from .specmerge import deep_merge, label_for
 from .store import ProjectStore
 
@@ -139,8 +141,11 @@ class AgentSession:
     """One AI turn against one project."""
 
     def __init__(self, store: ProjectStore, builds: Builds, catalog: Catalog, pid: str,
-                 log: Log, repo_root: Path, pin_id: str | None = None, mode: str = "build"):
+                 log: Log, repo_root: Path, pin_id: str | None = None, mode: str = "build",
+                 module: str | None = None):
         self.mode = mode
+        # Scoped chat (contract §6): when set, every spec change must stay inside this crew module.
+        self.module = module
         self.store, self.builds, self.catalog = store, builds, catalog
         self.pid, self.log, self.repo_root, self.pin_id = pid, log, repo_root, pin_id
         project = store.load(pid)
@@ -149,11 +154,14 @@ class AgentSession:
         self.version = project["version"]
         self.spec = store.spec(pid, self.version) if self.version else store.spec(pid, 1)
         self.built_spec = copy.deepcopy(self.spec)
+        self.start_spec = copy.deepcopy(self.spec)
         self.parts = store.parts(pid, self.version)
         self.report = store.report(pid, self.version) or {}
         self.built_versions: list[int] = []
         self.pin_replied: str | None = None  # status set via reply_to_pin
         self.research_saved = False
+        self.plan_saved = False
+        self.is_custom = self.kind == "ship" and self.base == "custom"
         self.tool_calls: list[str] = []
         try:
             self.cat_entry = catalog.entry(self.kind, self.base)
@@ -167,7 +175,12 @@ class AgentSession:
 
     def tool_specs(self, mode: str) -> list[tuple[str, str, dict]]:
         if mode == "research":
-            return [("save_research", RESEARCH_DOC, _obj({"research": {"type": "object"}}, ["research"]))]
+            tools = [("save_research", RESEARCH_DOC, _obj({"research": {"type": "object"}}, ["research"]))]
+            if self.is_custom:
+                tools.append(("save_design_plan", self._design_plan_doc(),
+                              _obj({"summary": {"type": "array", "items": {"type": "string"}},
+                                    "spec": {"type": "object"}}, ["summary", "spec"])))
+            return tools
         common = [
             ("get_project", "Read the project: spec, parts (path, label, joint, station, bounds), the last "
              "build report, research summary and open pins. Call this first.", _obj({}, [])),
@@ -181,7 +194,8 @@ class AgentSession:
         ]
         if self.kind == "ship":
             return common[:1] + [
-                ("set_params", "Patch the builder's params (deep merge; null deletes). Only known params.",
+                ("set_params", "Patch the builder's params (deep merge; null deletes). Only known params. A list param "
+                 "(e.g. a custom ship's tiers) is replaced whole: send the complete list, not just the changed entry.",
                  _obj({"patch": {"type": "object"}}, ["patch"])),
                 ("set_part_override", "Adjust one existing part after the build. Fields (all optional): "
                  "offset_m [x,y,z] metres in the ship frame (+X bow, +Y port, +Z up), rotate_deg [x,y,z], "
@@ -196,24 +210,46 @@ class AgentSession:
                 ("remove_custom_op", "Remove a custom op by id.", _obj({"id": {"type": "string"}}, ["id"])),
             ] + common[1:]
         rgb_or_name = {"oneOf": [{"type": "string"}, VEC3]}
+        place = {"type": "string", "enum": list(cm.PLACES)}
         equipment_item = {"oneOf": [
             {"type": "string"},
-            {"type": "object", "properties": {"name": {"type": "string"}, "color": rgb_or_name},
+            {"type": "object", "properties": {"name": {"type": "string"}, "color": rgb_or_name, "place": place},
              "required": ["name"]}]}
+        accessory_item = {"oneOf": [
+            {"type": "string"},
+            {"type": "object", "properties": {"name": {"type": "string"}, "color": VEC3}, "required": ["name"]}]}
         return common[:1] + [
-            ("set_body", "Patch body fields: gender, height_cm, weight, muscle, age_years, skin, hair (a catalog "
-             "style), hair_color ([r,g,b] 0..1 recolouring hair and eyebrows, e.g. blonde [0.85, 0.7, 0.4]; "
-             "null for natural).", _obj({"patch": {"type": "object"}}, ["patch"])),
-            ("set_clothes", "Patch clothes: suit, shoes, hat from the catalog options (null empties the slot, "
-             "e.g. suit null when a custom garment replaces the outfit); suit_color, shoes_color, hat_color "
-             "[r,g,b] 0..1 tints, or null.", _obj({"patch": {"type": "object"}}, ["patch"])),
-            ("set_equipment", "Replace the catalog equipment list. Entries are a catalog name or "
-             "{\"name\", \"color\"} with color one of " + ", ".join(EQUIPMENT_COLOR_NAMES) + " or [r,g,b] 0..1.",
+            ("set_body", "Patch body fields. Module gender: gender, height_cm, weight, muscle, proportions, "
+             "age_years. Module skin: skin. Module hair: hair (a catalog style, \"none\" for bald), hair_color "
+             "([r,g,b] 0..1 recolouring hair and eyebrows, e.g. blonde [0.85, 0.7, 0.4]; null for natural).",
+             _obj({"patch": {"type": "object"}}, ["patch"])),
+            ("set_clothes", "Patch clothes. Module shirt: shirt = {\"style\": one of " + ", ".join(cm.SHIRT_STYLES) +
+             ", \"color\": [r,g,b] 0..1} or null. Module pants: pants = {\"style\": one of " +
+             ", ".join(cm.PANTS_STYLES) + ", \"color\"} or null. Module outfit: suit (a catalog suit, fills "
+             "shirt and pants) or null, suit_color. Module shoes: shoes (catalog, null = barefoot), shoes_color. "
+             "Module accessories: hat (catalog) or null, hat_color. Colours are [r,g,b] 0..1 or null. Setting a "
+             "shirt or pants clears the suit; choosing a suit clears shirt, pants and their described items.",
+             _obj({"patch": {"type": "object"}}, ["patch"])),
+            ("set_equipment", "Module equipment: replace the catalog equipment list. Entries are a catalog name "
+             "or {\"name\", \"color\", \"place\"} with color one of " + ", ".join(EQUIPMENT_COLOR_NAMES) +
+             " or [r,g,b] 0..1. An entry that is already worn keeps its place unless you give one; "
+             "life_vest and helmet have a fixed spot and take no place.",
              _obj({"equipment": {"type": "array", "items": equipment_item}}, ["equipment"])),
-            ("set_animations", "Replace the animation list.",
+            ("set_place", "Module placement: move one equipment item to " + ", ".join(cm.PLACES) + ". `item` "
+             "is a catalog equipment name in the list (e.g. radio) or an equipment custom item id (item_2). "
+             "No code change and nothing else moves.",
+             _obj({"item": {"type": "string"}, "place": place}, ["item", "place"])),
+            ("set_accessories", "Module accessories: replace the accessories list. Entries are a name (" +
+             ", ".join(cm.ACCESSORIES) + " or the catalog's accessories options) or {\"name\", \"color\": "
+             "[r,g,b] 0..1}. Hats are set_clothes hat.",
+             _obj({"accessories": {"type": "array", "items": accessory_item}}, ["accessories"])),
+            ("set_animations", "Replace the animation list (not part of any module: main chat only).",
              _obj({"animations": {"type": "array", "items": {"type": "string"}}}, ["animations"])),
             ("add_custom_item", self._custom_item_doc(),
-             _obj({"description": {"type": "string"}, "code": {"type": "string"}}, ["description", "code"])),
+             _obj({"description": {"type": "string"}, "code": {"type": "string"},
+                   "module": {"type": "string", "enum": list(cm.CUSTOM_ITEM_MODULES)},
+                   "place": place, "replace": {"type": "boolean"}},
+                  ["description", "code", "module"])),
             ("remove_custom_item", "Remove a custom item by id.", _obj({"id": {"type": "string"}}, ["id"])),
         ] + common[1:]
 
@@ -226,14 +262,43 @@ class AgentSession:
                 "me3d_joint. No file, network or OS access (imports of os/sys/subprocess, open(), eval, "
                 "exec are rejected). Helpers:\n" + me3d_helpers(self.repo_root))
 
+    def _design_plan_doc(self) -> str:
+        docs = self.cat_entry.get("param_docs")
+        known = (f"Params the builder knows (with docs and ranges): {json.dumps(docs)}" if docs else
+                 "The custom builder's catalog is not available yet: use loa_m, beam_m, depth_m, draught_m, "
+                 "bow_form, stern_form and a tiers list as in the contract.")
+        return ("Save (or replace) the design plan the user approves before anything is built. Call it after "
+                "save_research, whenever the research is good enough to build from or the user asks for a plan.\n"
+                "summary: plain-English lines Lester reads on a phone, one fact each: overall size; hull form "
+                "(bow, stern); each superstructure tier, deck by deck, with its length, width and height; colours "
+                "by name; each detail to add after the build as a custom op (fly-bridge furniture, davits, rails, "
+                "antennas); and every assumption with its value and why ('Assumed beam 6.2 m: typical for a 24 m "
+                "yacht; no source gives it'). No code, no tool or param names.\n"
+                "spec: the custom ship spec it would build: {\"params\": {...}} (plus optional meta). Frame: "
+                "metres, origin amidships at the waterline, +X bow, so the hull spans -loa_m/2..+loa_m/2. Tiers "
+                "stack from the deck up; each must lie within the hull and on the tier below it, no wider than "
+                "the beam. Leave custom_ops empty: details go in the summary. The tool validates and returns "
+                "errors to fix.\n" + known)
+
     def _custom_item_doc(self) -> str:
-        return ("Make clothing or equipment the catalog does not have (a singlet, shorts, a torch, a clipboard). "
+        return ("Make a module's item from a description when no preset fits (a singlet, shorts, boots, a "
+                "torch, a clipboard, gloves). `module` is required: hair, shirt, pants, shoes, equipment or "
+                "accessories. `replace` (default true for hair, shirt, pants and shoes; false for equipment and "
+                "accessories, where several items coexist) first removes that module's existing custom items; "
+                "nothing in any other module is touched. A described hair, shirt, pants or shoes item replaces "
+                "that module's preset, and a described shirt or pants clears the outfit (suit).\n"
                 "`code` is Python run inside Blender after the human and catalog equipment are built and before "
-                "animations bake, with `bpy`, `mathutils` and helper module `crew` in scope. Worn things: "
-                "crew.garment over the body regions they cover, so they fit any body and move with every "
-                "animation; name them Clothes__<Name>. Held or attached things: build a low-poly mesh, then "
-                "crew.hold(obj, hand) or crew.attach(obj, bone); name them Equipment__<Name>. Names use "
-                "letters/digits/underscore only, e.g. Clothes__Singlet, Equipment__Torch. Colours via "
+                "animations bake, with `bpy`, `mathutils` and helper module `crew` in scope.\n"
+                "- Worn things (shirt, pants, shoes, hair, gloves): crew.garment over the body regions they "
+                "cover, so they fit any body and move with every animation; name them Clothes__<Name>. Modules "
+                "shirt, pants and shoes make Clothes__ objects only.\n"
+                "- Module equipment (held or carried things): `place` is required, one of " +
+                ", ".join(cm.PLACES) + ". Build a low-poly mesh named Equipment__<Name> modelled at the origin: "
+                "grip point at the origin, +Z up, +X forward, sizes in metres. Do NOT parent or position it "
+                "(no crew.hold, crew.attach or .parent): the builder attaches it by its place, so moving it "
+                "later is set_place with no code change. Equipment makes Equipment__ objects only.\n"
+                "- Accessories that sit rigidly on the body (sunglasses, a badge) may use crew.attach.\n"
+                "Names use letters/digits/underscore only, e.g. Clothes__Singlet, Equipment__Torch. Colours via "
                 "crew.material. No file, network or OS access (imports of os/sys/subprocess, open(), eval, exec "
                 "are rejected). Helpers:\n" + crew_helpers(self.repo_root))
 
@@ -244,15 +309,39 @@ class AgentSession:
         fn = getattr(self, f"t_{name}", None)
         if fn is None or name not in allowed:
             return f"Unknown tool {name}.", True
+        before = copy.deepcopy(self.spec)
         try:
             out = fn(**(args or {}))
+            notes = self._check_modules(name, before) if self.kind == "crew" and self.spec != before else []
         except ToolError as e:
+            self.spec = before  # a refused call changes nothing
             self.log(f"AI tool {name} refused: {e}")
             return str(e), True
         except TypeError as e:
+            self.spec = before
             return f"Bad arguments for {name}: {e}", True
         self.log(f"AI tool {name}: ok")
-        return out if isinstance(out, str) else json.dumps(out, indent=1), False
+        text = out if isinstance(out, str) else json.dumps(out, indent=1)
+        return (text + (" " + " ".join(notes) if notes else "")), False
+
+    def _check_modules(self, name: str, before: dict) -> list[str]:
+        """After a crew spec change: apply the shared module rules (outfit vs shirt/pants, described
+        item vs preset), then, in a scoped chat, refuse anything outside the module. Raises ToolError;
+        `call` then restores `before`, so a refused change leaves the spec exactly as it was."""
+        try:
+            self.spec, notes = cm.apply_module_rules(before, self.spec)
+        except cm.ModuleRuleError as e:
+            raise ToolError(str(e))
+        if self.module:
+            bad = cm.outside_changes(before, self.spec, self.module)
+            if bad:
+                owners = sorted({c.module or "no module" for c in bad})
+                raise ToolError(
+                    f"Refused, nothing changed: you may only change the {self.module} module "
+                    f"({cm.MODULE_DOCS[self.module]}). {name} tried to change "
+                    f"{', '.join(c.path for c in bad)}, which belong(s) to {', '.join(owners)}. "
+                    "Leave those exactly as they are.")
+        return notes
 
     # ---- shared tools -----------------------------------------------------------------
     def t_get_project(self) -> dict:
@@ -272,6 +361,7 @@ class AgentSession:
                            "thread": [f"{m['who']}: {m['text']}" for m in p["messages"]]}
                           for p in project["pins"] if p["status"] != "resolved"],
             "catalog_docs": {k: self.cat_entry.get(k) for k in ("param_docs", "options") if k in self.cat_entry},
+            **({"modules": cm.MODULE_DOCS, "editing_only_module": self.module} if self.kind == "crew" else {}),
         }
 
     def t_rebuild(self) -> dict:
@@ -439,6 +529,9 @@ class AgentSession:
                 if v is not None and not _rgb(v):
                     raise ToolError(f"{slot} is [r,g,b] with each value 0..1, or null")
                 continue
+            if slot in ("shirt", "pants"):
+                self._check_top(slot, v)
+                continue
             allowed = self._crew_options(slot)
             if allowed is None and slot not in self.spec.get("clothes", {}):
                 raise ToolError(f"Unknown clothes slot {slot!r}")
@@ -447,6 +540,18 @@ class AgentSession:
                                 "to null if it is replaced and make the item with add_custom_item.")
         self.spec = self._set_section("clothes", patch)
         return "Clothes updated. Call rebuild."
+
+    def _check_top(self, slot: str, v) -> None:
+        """A shirt or pants preset: {"style", "color"} or null (contract §6 Modules)."""
+        if v is None:
+            return
+        styles = self._crew_options(slot) or list(cm.SHIRT_STYLES if slot == "shirt" else cm.PANTS_STYLES)
+        styles = [x for x in styles if x is not None]
+        if not isinstance(v, dict) or set(v) - {"style", "color"} or v.get("style") not in styles:
+            raise ToolError(f"{slot} is {{\"style\": one of {styles}, \"color\": [r,g,b] 0..1}} or null. "
+                            f"For a {slot} no style fits, use add_custom_item with module {slot!r}.")
+        if v.get("color") is not None and not _rgb(v["color"]):
+            raise ToolError(f"{slot} color is [r,g,b] with each value 0..1")
 
     def _set_section(self, section: str, patch: dict) -> dict:
         """Set fields of body/clothes keeping explicit nulls. deep_merge deletes a key on None, and
@@ -462,14 +567,20 @@ class AgentSession:
         if not isinstance(values, list):
             raise ToolError(f"{slot} must be a list")
         names = []
+        fields = {"equipment": {"name", "color", "place"}}.get(slot, {"name", "color"})
         for v in values:
             if allow_color and isinstance(v, dict):
-                extra = set(v) - {"name", "color"}
+                extra = set(v) - fields
                 if not isinstance(v.get("name"), str) or extra:
-                    raise ToolError(f"{slot} entries are a name or {{\"name\", \"color\"}}, got {v!r}")
+                    raise ToolError(f"{slot} entries are a name or an object with {sorted(fields)}, got {v!r}")
                 c = v.get("color")
-                if c is not None and c not in EQUIPMENT_COLOR_NAMES and not _rgb(c):
-                    raise ToolError(f"color must be one of {EQUIPMENT_COLOR_NAMES} or [r,g,b] 0..1, got {c!r}")
+                named_ok = slot == "equipment" and c in EQUIPMENT_COLOR_NAMES
+                if c is not None and not named_ok and not _rgb(c):
+                    raise ToolError(f"color must be " + (f"one of {EQUIPMENT_COLOR_NAMES} or " if slot == "equipment"
+                                                         else "") + f"[r,g,b] 0..1, got {c!r}")
+                p = v.get("place")
+                if p is not None:
+                    self._check_place(v["name"], p)
                 names.append(v["name"])
             elif isinstance(v, str):
                 names.append(v)
@@ -477,16 +588,68 @@ class AgentSession:
                 raise ToolError(f"{slot} must be a list of names" +
                                 (" or {\"name\", \"color\"} objects" if allow_color else ""))
         allowed = self._crew_options(slot)
+        if allowed is None and slot == "accessories":
+            allowed = list(cm.ACCESSORIES)
         bad = [v for v in names if allowed is not None and v not in allowed]
         if bad:
             raise ToolError(f"Not in the catalog: {bad}. Options: {allowed}" +
                             (". For anything else use add_custom_item." if slot == "equipment" else ""))
 
+    @staticmethod
+    def _check_place(name: str, place) -> None:
+        if place not in cm.PLACES:
+            raise ToolError(f"place must be one of {list(cm.PLACES)}, got {place!r}")
+        if name in cm.FIXED_PLACE_EQUIPMENT:
+            raise ToolError(f"{name} is worn in one fixed spot and takes no place.")
+
     def t_set_equipment(self, equipment: list) -> str:
         self._check_crew()
         self._check_list("equipment", equipment, allow_color=True)
-        self.spec = deep_merge(self.spec, {"equipment": equipment})
+        # An item already worn keeps its place unless one is given: changing what is carried must
+        # not move things (placement is its own module).
+        places: dict[str, list] = {}
+        for e in self.spec.get("equipment") or []:
+            if isinstance(e, dict) and e.get("place"):
+                places.setdefault(e.get("name"), []).append(e["place"])
+        kept = []
+        for e in equipment:
+            name = e if isinstance(e, str) else e["name"]
+            old = places.get(name)
+            if old and (isinstance(e, str) or "place" not in e):
+                e = dict({"name": e} if isinstance(e, str) else e, place=old.pop(0))
+            kept.append(e)
+        self.spec = deep_merge(self.spec, {"equipment": kept})
         return "Equipment updated. Call rebuild."
+
+    def t_set_place(self, item: str, place: str) -> str:
+        self._check_crew()
+        if not isinstance(item, str) or not item:
+            raise ToolError("item is an equipment name or an equipment custom item id")
+        self._check_place(item, place)
+        spec = copy.deepcopy(self.spec)
+        for i, e in enumerate(spec.get("equipment") or []):
+            if (e if isinstance(e, str) else e.get("name") if isinstance(e, dict) else None) == item:
+                spec["equipment"][i] = dict({"name": e} if isinstance(e, str) else e, place=place)
+                self.spec = spec
+                return f"{item} moved to {place}. Call rebuild."
+        for it in spec.get("custom_items") or []:
+            if isinstance(it, dict) and it.get("id") == item:
+                if cm.item_module(it) != "equipment":
+                    raise ToolError(f"{item} is a {cm.item_module(it)} item; only equipment has a place.")
+                it["place"] = place
+                self.spec = spec
+                return f"{item} ({it.get('description')}) moved to {place}. Call rebuild."
+        names = [e if isinstance(e, str) else e.get("name") for e in spec.get("equipment") or []
+                 if isinstance(e, (str, dict))]
+        ids = [it.get("id") for it in spec.get("custom_items") or []
+               if isinstance(it, dict) and cm.item_module(it) == "equipment"]
+        raise ToolError(f"No equipment item {item!r}. Equipment: {names}; equipment custom items: {ids}.")
+
+    def t_set_accessories(self, accessories: list) -> str:
+        self._check_crew()
+        self._check_list("accessories", accessories, allow_color=True)
+        self.spec = deep_merge(self.spec, {"accessories": accessories})
+        return "Accessories updated. Call rebuild."
 
     def t_set_animations(self, animations: list) -> str:
         self._check_crew()
@@ -494,23 +657,52 @@ class AgentSession:
         self.spec = deep_merge(self.spec, {"animations": animations})
         return "Animations updated. Call rebuild."
 
-    def t_add_custom_item(self, description: str, code: str) -> str:
+    def t_add_custom_item(self, description: str, code: str, module: str | None = None,
+                          place: str | None = None, replace: bool | None = None) -> str:
         self._check_crew()
         if not isinstance(description, str) or not isinstance(code, str) or not description.strip() or not code.strip():
             raise ToolError("description and code are both required")
+        if module not in cm.CUSTOM_ITEM_MODULES:
+            raise ToolError(f"module is required: one of {list(cm.CUSTOM_ITEM_MODULES)} (the module this item "
+                            "belongs to; describing that module again replaces it, nothing else).")
+        if module == "equipment":
+            if place is None:
+                raise ToolError(f"An equipment item needs a place: one of {list(cm.PLACES)}.")
+            self._check_place("", place)
+            if re.search(r"\bcrew\.(hold|attach)\s*\(|\.parent\s*=", code):
+                raise ToolError("Equipment code must not parent or position the item (no crew.hold, crew.attach "
+                                "or .parent): model it at the origin, grip at the origin, +Z up, +X forward. The "
+                                "builder attaches it by its place.")
+        elif place is not None:
+            raise ToolError("Only equipment items take a place.")
+        if replace is not None and not isinstance(replace, bool):
+            raise ToolError("replace is true or false")
         check_code(code)
         for name in crew_object_names(code):
             if not CREW_ITEM_RE.match(name):
                 raise ToolError(f"Object name {name!r} breaks the naming rule: Clothes__<Name> for worn things, "
                                 "Equipment__<Name> for held or attached things ([A-Za-z0-9_]).")
+            prefix = name.split("__", 1)[0]
+            if module == "equipment" and prefix != "Equipment":
+                raise ToolError(f"Equipment items make Equipment__<Name> objects, not {name!r}.")
+            if module in ("shirt", "pants", "shoes") and prefix != "Clothes":
+                raise ToolError(f"{module} items make Clothes__<Name> objects, not {name!r}.")
+        if replace is None:
+            replace = module not in cm.MULTI_ITEM_MODULES
         items = list(self.spec.get("custom_items", []))
+        removed = [o.get("id") for o in items if replace and cm.item_module(o) == module]
+        items = [o for o in items if not (replace and cm.item_module(o) == module)]
         taken = {o.get("id") for o in items}
         i = 1
         while f"item_{i}" in taken:
             i += 1
-        items.append({"id": f"item_{i}", "description": description, "code": code})
+        item = {"id": f"item_{i}", "module": module, "description": description, "code": code}
+        if place is not None:
+            item["place"] = place
+        items.append(item)
         self.spec = deep_merge(self.spec, {"custom_items": items})
-        return f"Custom item item_{i} added. Call rebuild to run it."
+        return (f"Custom item item_{i} added to {module}" +
+                (f", replacing {', '.join(map(str, removed))}" if removed else "") + ". Call rebuild to run it.")
 
     def t_remove_custom_item(self, id: str) -> str:
         self._check_crew()
@@ -527,9 +719,32 @@ class AgentSession:
         if errors:
             raise ToolError("Research not saved. Fix: " + "; ".join(errors))
         research = dict(research, schema="me3d.research/1")
-        self.store.set_research(self.pid, research)
+        rev = self.store.set_research(self.pid, research)
         self.research_saved = True
-        return "Research saved."
+        if not self.is_custom:
+            return "Research saved."
+        plan = self.store.load(self.pid).get("design_plan") or {}
+        note = {"stale": " The approved design plan no longer matches it: redraft it with save_design_plan.",
+                "draft": " The draft design plan was drafted against older research: redraft it if it changed."
+                }.get(plan.get("status"), "")
+        return f"Research saved (revision {rev}).{note}"
+
+    def t_save_design_plan(self, summary: list, spec: dict) -> str:
+        if not self.is_custom:
+            raise ToolError("Design plans are only for custom ships.")
+        errors = dp.check_summary(summary)
+        try:
+            default = self.catalog.default_spec("ship", "custom")
+        except CatalogError:
+            default = None
+        full, spec_errors = dp.plan_spec(spec, self.spec, default, self.cat_entry.get("param_docs") or {})
+        errors += spec_errors
+        if errors:
+            raise ToolError("Plan not saved. Fix: " + "; ".join(errors))
+        plan = self.store.set_design_plan(self.pid, [s.strip() for s in summary], full)
+        self.plan_saved = True
+        return (f"Design plan saved as a draft against research revision {plan['research_rev']}. The user approves "
+                "it on screen; nothing is built until then.")
 
 
 RESEARCH_DOC = (
@@ -614,9 +829,13 @@ CREW_PROMPT = """You edit one human crew member for a maritime simulator. Blende
 - The catalog options shown by get_project are a starting point, not a limit. Make what is asked for:
   - A colour change: the colour fields (hair_color in set_body; suit_color, shoes_color, hat_color in set_clothes; an equipment entry's color).
   - Hair: a style from the options plus hair_color (blonde is about [0.85, 0.7, 0.4]).
-  - Clothing not in the catalog (a singlet, shorts, gloves, a cap): add_custom_item with crew.garment over the body regions it covers. If it replaces the outfit (singlet and shorts), set suit to null.
-  - Things held or worn on the body (a torch, a clipboard, a rope, a tool belt): add_custom_item, a low-poly mesh with crew.hold or crew.attach.
+  - Shirts and trousers: a preset style and colour with set_clothes shirt / pants when one fits; otherwise (a singlet, cargo shorts with pockets) add_custom_item with module shirt or pants and crew.garment over the body regions it covers. Either way the suit is set to null for you, so the outfit no longer shows through.
+  - Things held or carried (a torch, a clipboard, a rope, a tool belt): add_custom_item with module equipment and a place, a low-poly mesh modelled at the origin and not parented; the builder puts it at its place.
+  - Gloves, sunglasses, ear defenders, caps: set_accessories, or add_custom_item with module accessories.
 - Never answer that something is not available when you can make it. If part of a request truly cannot be built (cloth that flows in the wind, real physics), make the closest thing and say plainly what you made instead.
+- The person is ten modules: gender, skin, hair, shirt, pants, outfit, shoes, equipment, placement, accessories (get_project lists what each owns). Work out which module or modules the request is about and change only those. Leave every other module exactly as it is: never remove, recolour, replace or reset anything the user did not mention. Matching a photo or a description is still one change per module it mentions, not a rebuild of the whole person.
+- Describing a module (hair, shirt, pants, shoes, equipment, accessories) is add_custom_item with that module; it replaces that module's earlier described item and nothing else. Equipment items take a place; moving one is set_place.
+- An outfit (suit) fills shirt and pants. Setting a shirt or pants clears the suit; choosing a suit clears shirt, pants and their described items. The tools do this for you.
 """ + COMMON_RULES
 
 RESEARCH_PROMPT = """You research one real vessel so a 3D model of it can be built for a maritime simulator. The user is Lester: ex-navy, not an engineer.
@@ -627,9 +846,59 @@ RESEARCH_PROMPT = """You research one real vessel so a 3D model of it can be bui
 - Save with save_research (it validates; fix and resave on errors). Then reply in two or three plain sentences: the verdict and the biggest open question."""
 
 
-def system_prompt(kind: str, mode: str) -> str:
+CUSTOM_RESEARCH_PROMPT = """You research a vessel of any type that the user asked for in their own words (the brief) and usually with photos, so a 3D model of it can be built for a maritime simulator. The user is Lester: ex-navy, the product owner, not an engineer. You never build anything: you research, then draft a design plan the user approves; approving it is what builds the ship.
+- Work from the brief, every attached photo, and public sources (WebSearch, WebFetch). If the photo shows a recognisable make or class, find it and make it the baseline; if not, say it is a generic vessel of that type and use comparable craft ('Comparison only') for proportions. Read the photos yourself: hull form (bow, stern, sheer), number of decks, window bands, colours, mast, radar arch, tender, fly-bridge. Those are 'Photo reading' claims.
+- Every source and claim gets an evidence status: Official, Photographed, Photo reading, Inference, Comparison only, Secondary lead, Unverified. Never 'verified'.
+- Every claim says what it changes in the model. Unknowns go to open_questions as concrete questions Lester can answer in one line, each with what you assume meanwhile ('How long is it? Meanwhile 24 m, from the photo's proportions'). Ask the few that change the model most, not everything.
+- Amend, do not restart: the saved research and design plan so far are given below. Each user message is a correction, an answer or more photos: fold it into the research (answered questions become claims with the user as source, status 'Official' when they state a fact about their own vessel), and resave the whole record with save_research.
+- When the research is good enough to build from, or the user asks for a plan, draft the design plan with save_design_plan (after save_research). Redraft it whenever the research changes. Keep its summary in plain English: size, hull form, each superstructure tier, colours, details to add, and assumptions with values.
+- Articulation: what moves (radar spin, davit, tender crane) and what must not.
+- Reply in two to four plain sentences: what you found or changed, the most important open question, and whether a plan is ready to approve."""
+
+
+def custom_research_context(project: dict, spec: dict, cat_entry: dict) -> str:
+    """What a custom-ship research turn starts from: the brief, the research and plan so far, and
+    the builder's knobs. The AI has no memory between turns, so this is how it amends rather than
+    restarts."""
+    research = project.get("research")
+    plan = project.get("design_plan")
+    lines = [f"Brief (the user's original request): {project.get('brief') or '(none given)'}",
+             f"Research revision: {project.get('research_rev', 0)}",
+             "Saved research so far: " + (json.dumps(research) if research else "none yet."),
+             ]
+    if plan:
+        lines.append("Design plan so far (status " + str(plan.get("status")) + ", drafted against research revision "
+                     f"{plan.get('research_rev')}): " + json.dumps({"summary": plan.get("summary"),
+                                                                    "params": (plan.get("spec") or {}).get("params")}))
+    else:
+        lines.append("Design plan: none yet.")
+    lines.append("Current model params: " + json.dumps(spec.get("params") or {}))
+    docs = cat_entry.get("param_docs")
+    if docs:
+        lines.append("Custom builder params (docs and ranges): " + json.dumps(docs))
+    return "\n".join(lines) + "\n\n"
+
+
+def plan_build_prompt(plan: dict) -> str:
+    """The build-mode turn after an approved plan has been built: add its details."""
+    summary = "\n".join(f"- {s}" for s in plan.get("summary") or [])
+    return ("The user approved this design plan and the hull and superstructure from it are now built and on "
+            f"screen:\n{summary}\n\nAdd every detail the plan lists that the build does not have yet (fly-bridge "
+            "furniture, rails, davits, antennas and so on) as custom ops, then rebuild and fix any errors. Do not "
+            "change the size, hull form or tiers: they are what the user approved. Reply with what you added.")
+
+
+def module_prompt(module: str) -> str:
+    """Prefix for a scoped chat turn (contract §6: POST /chat with "module")."""
+    return (f"You are editing only the {module} module ({cm.MODULE_DOCS[module]}). Change nothing else: any "
+            "tool call that touches another module is refused and changes nothing. If the request needs "
+            "another module, make the {module} part and say in the reply what the user should change in "
+            "the other module.\n\n").replace("{module}", module)
+
+
+def system_prompt(kind: str, mode: str, base: str | None = None) -> str:
     if mode == "research":
-        return RESEARCH_PROMPT
+        return CUSTOM_RESEARCH_PROMPT if kind == "ship" and base == "custom" else RESEARCH_PROMPT
     return SHIP_PROMPT if kind == "ship" else CREW_PROMPT
 
 
@@ -669,7 +938,7 @@ class ClaudeAgentRunner:
         opts = ClaudeAgentOptions(
             mcp_servers={"editor": server}, tools=builtins + names, allowed_tools=builtins + names,
             setting_sources=[], max_turns=self.max_turns, model=self.model,
-            system_prompt=system_prompt(session.kind, mode),
+            system_prompt=system_prompt(session.kind, mode, session.base),
             cwd=str(session.store.version_dir(session.pid, 0).parent))
         texts: list[str] = []
         final: str | None = None
@@ -699,10 +968,12 @@ class ScriptedAgent:
         self.steps = steps or []
         self.reply = reply
         self.prompts: list[str | list[dict]] = []
+        self.modes: list[str] = []
         self.results: list[tuple[str, str, bool]] = []
 
     def run(self, session: AgentSession, prompt: str | list[dict], mode: str, log: Log) -> str:
         self.prompts.append(prompt)
+        self.modes.append(mode)
         for name, args in self.steps:
             args = {k: (v.format(pin_id=session.pin_id) if isinstance(v, str) else v) for k, v in args.items()}
             text, err = session.call(name, args)

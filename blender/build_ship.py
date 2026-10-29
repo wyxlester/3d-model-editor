@@ -23,7 +23,7 @@ import common as me3d  # noqa: E402
 
 sys.modules["me3d"] = me3d  # custom ops and builders can `import me3d`
 
-SHIP_TYPES = ("container", "sampan", "tanker")
+SHIP_TYPES = ("container", "custom", "sampan", "tanker")
 
 
 def parse_args():

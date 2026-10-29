@@ -20,16 +20,19 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from .agent import AgentRunner, AgentSession, ClaudeAgentRunner
+from . import crew_modules
+from .agent import (AgentRunner, AgentSession, ClaudeAgentRunner, custom_research_context, module_prompt,
+                    plan_build_prompt)
 from .builder import BlenderRunner, BuilderRunner
 from .builds import Builds, summarise_change
 from .catalog import Catalog, CatalogError
 from .config import Settings, find_claude_cli
 from .jobs import JobError, JobManager
-from .packaging import export_scene, stations_of
+from .design_plan import name_from_brief, needs_plan
+from .packaging import export_scene, safe_id, stations_of
 from .router import LLM, claude_llm, route
 from .specmerge import deep_merge, gltf_to_blender, keep_crew_nulls, label_for
-from .store import NotFound, ProjectStore, atomic_write_json, read_json
+from .store import NotFound, PlanRefused, ProjectStore, atomic_write_json, read_json
 from .uploads import UploadRejected, check_size, content_blocks, decode, resolve_type
 from .uploads import TYPES as UPLOAD_TYPES
 
@@ -141,9 +144,15 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         kind, base = body.get("kind"), body.get("base")
         if kind not in ("ship", "crew"):
             raise HTTPException(400, "kind must be ship or crew")
+        brief = body.get("brief")
+        if brief is not None and (not isinstance(brief, str) or len(brief) > 4000):
+            raise HTTPException(400, "brief must be text of up to 4000 characters")
+        brief = brief.strip() if isinstance(brief, str) and brief.strip() else None
+        if kind == "ship" and base == "custom":
+            return create_custom_ship(body.get("name"), brief)
         spec = catalog.default_spec(kind, base)
         name = body.get("name") or spec.get("name") or base
-        project = store.create(kind, base, name)
+        project = store.create(kind, base, name, brief)
         pid = project["id"]
         n, d = store.reserve_version(pid)  # v1 holds the spec while the first build runs
         atomic_write_json(d / "spec.json", spec)
@@ -159,6 +168,107 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
 
         job_id = jobs.submit("build", first_build)
         return {"project": store.api_project(pid), "job_id": job_id}
+
+    def create_custom_ship(name: Any, brief: str | None) -> dict:
+        """Contract §5 `type: "custom"`: a ship of any type from a prompt. v1 is the catalog's plain
+        placeholder hull; the real shape comes only from an approved design plan."""
+        if name is not None and (not isinstance(name, str) or len(name) > 80):
+            raise HTTPException(400, "name must be text of up to 80 characters")
+        name = (name or "").strip() or name_from_brief(brief)
+        try:
+            spec = catalog.default_spec("ship", "custom")
+            note = None
+        except CatalogError:
+            # The custom builder's catalog file is not installed: keep a minimal spec so research and
+            # planning can start, and build nothing (a build would fail on the missing builder).
+            spec = {"schema": "me3d.ship_spec/1", "type": "custom", "params": {}, "overrides": {},
+                    "joint_limits": {}, "custom_ops": []}
+            note = ("The custom ship builder is not installed yet (catalog/ships/custom.json is missing), so "
+                    "there is no placeholder model. Research and the design plan still work.")
+        spec["type"], spec["name"] = "custom", name
+        spec["id"] = safe_id(name) if safe_id(name) != "x" else "custom_ship"
+        project = store.create("ship", "custom", name, brief)
+        pid = project["id"]
+        n, d = store.reserve_version(pid)  # v1 holds the spec (built only when the catalog exists)
+        atomic_write_json(d / "spec.json", spec)
+
+        def first_build(log):
+            if note:
+                log(note)
+                return {"version": 0, "note": note}
+            report = builds.runner.build("ship", d / "spec.json", d, log)
+            atomic_write_json(d / "build_report.json", report)
+            store.record_version(pid, n, report, "Created as a plain placeholder hull; research and an approved "
+                                                 "design plan shape it")
+            if not report.get("ok"):
+                raise JobError("First build failed: " + "; ".join(report.get("errors") or ["unknown"]),
+                               result={"version": n, "build_report": report})
+            return {"version": n, "build_report": report}
+
+        job_id = jobs.submit("build", first_build)
+        out = store.api_project(pid)
+        if note:
+            out["note"] = note
+        return {"project": out, "job_id": job_id}
+
+    def refuse_unplanned_build(project: dict) -> None:
+        why = needs_plan(project)
+        if why:
+            raise HTTPException(409, why)
+
+    @app.post("/api/projects/{pid}/design-plan/approve")
+    def approve_plan(pid: str):
+        project = need_project(pid)
+        if project.get("kind") != "ship" or project.get("base") != "custom":
+            raise HTTPException(400, "Only custom ships have a design plan.")
+        try:
+            plan = store.approve_design_plan(pid)
+        except PlanRefused as e:
+            raise HTTPException(409, str(e))
+
+        def work(log):
+            log("Building the approved design plan.")
+            try:
+                built = build_or_fail(pid, plan["spec"], "Built from the approved design plan", log)
+            except JobError as e:
+                store.unapprove_design_plan(pid, str(e))
+                store.add_message(pid, "AI", "The approved plan did not build, so the plan is back to draft: "
+                                             f"{e}. Ask me in Research to fix it, then approve it again.")
+                raise
+            store.mark_plan_built(pid)
+            log("Adding the plan's details.")
+            pics = reference_pictures(pid, set())
+            text = plan_build_prompt(plan)
+            prompt: str | list[dict] = content_blocks(text, pics) if pics else text
+            try:
+                session, reply = run_agent(pid, prompt, "build", log)
+            except Exception as e:
+                reply = f"I built the approved plan but could not add its details: {e}. Ask me in Build to add them."
+                store.add_message(pid, "AI", reply)
+                return dict(built, reply=reply, built_versions=[built["version"]])
+            store.add_message(pid, "AI", reply)
+            return {"version": store.load(pid)["version"], "build_report": store.report(pid, store.load(pid)["version"]),
+                    "reply": reply, "built_versions": [built["version"]] + session.built_versions}
+
+        return {"job_id": jobs.submit("build", work)}
+
+    def reference_pictures(pid: str, exclude: set[str], limit: int = 4) -> list[tuple[dict, bytes]]:
+        """The latest pictures attached earlier in this project's chat. The AI has no memory between
+        turns, so a custom ship's research and detail turns get the photos again (capped: each costs
+        tokens on every turn)."""
+        seen: list[str] = []
+        for m in reversed(store.load(pid)["messages"]):
+            for a in reversed(m.get("attachments") or []):
+                uid = a.get("id")
+                if uid and uid not in exclude and uid not in seen and str(a.get("type", "")).startswith("image/"):
+                    seen.append(uid)
+        out = []
+        for uid in seen[:limit]:
+            try:
+                out.append(store.get_upload(pid, uid))
+            except (NotFound, OSError):
+                continue
+        return list(reversed(out))
 
     @app.get("/api/projects/{pid}")
     def get_project(pid: str):
@@ -189,12 +299,17 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         locked = LOCKED_SPEC_KEYS & set(patch)
         if locked:
             raise HTTPException(400, f"These spec fields cannot be changed: {sorted(locked)}")
+        refuse_unplanned_build(project)
         if not project["version"]:
             raise HTTPException(409, "The first build has not finished yet")
         old = store.spec(pid)
         new = deep_merge(old, patch)
         if project.get("kind") == "crew":
             new = keep_crew_nulls(new, patch)
+            try:  # the same outfit vs shirt/pants rule the AI's tools apply
+                new, _notes = crew_modules.apply_module_rules(old, new)
+            except crew_modules.ModuleRuleError as e:
+                raise HTTPException(400, str(e))
         summary = summarise_change(old, new, "Edited in Inspect")
         return {"job_id": jobs.submit("build", lambda log: build_or_fail(pid, new, summary, log))}
 
@@ -205,8 +320,10 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         return {"project": store.api_project(pid)}
 
     # ---- AI: chat and pins ------------------------------------------------------------
-    def run_agent(pid: str, prompt: str | list[dict], mode: str, log, pin_id: str | None = None) -> tuple[AgentSession, str]:
-        session = AgentSession(store, builds, catalog, pid, log, settings.repo_root, pin_id=pin_id, mode=mode)
+    def run_agent(pid: str, prompt: str | list[dict], mode: str, log, pin_id: str | None = None,
+                  module: str | None = None) -> tuple[AgentSession, str]:
+        session = AgentSession(store, builds, catalog, pid, log, settings.repo_root, pin_id=pin_id, mode=mode,
+                               module=module)
         reply = agent.run(session, prompt, mode, log)
         if mode == "build" and session.dirty:
             log("The AI left unbuilt changes; rebuilding so the screen matches its reply.")
@@ -249,12 +366,21 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
 
     @app.post("/api/projects/{pid}/chat")
     def chat(pid: str, body: dict = Body(...)):
-        need_project(pid)
+        project = need_project(pid)
         message, mode = body.get("message"), body.get("mode", "build")
         if not isinstance(message, str) or not message.strip():
             raise HTTPException(400, "message is required")
         if mode not in ("build", "research"):
             raise HTTPException(400, "mode must be build or research")
+        module = body.get("module")
+        if module is not None:
+            if module not in crew_modules.MODULES:
+                raise HTTPException(400, f"module must be one of {list(crew_modules.MODULES)}")
+            if project.get("kind") != "crew" or mode != "build":
+                raise HTTPException(400, "module is only for build chats on crew projects")
+        if mode == "build":
+            refuse_unplanned_build(project)
+        custom = project.get("kind") == "ship" and project.get("base") == "custom"
         ids = body.get("attachments") or []
         if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids) or len(ids) > 10:
             raise HTTPException(400, "attachments must be a list of up to 10 upload ids")
@@ -268,15 +394,41 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             history = store.load(pid)["messages"][-12:-1]
             context = "\n".join(f"{m['who']}: {m['text']}" + attached_names(m) for m in history)
             text = (f"Earlier in this chat:\n{context}\n\n" if context else "") + f"User: {message}"
-            prompt: str | list[dict] = content_blocks(text, files) if files else text
+            if module:
+                text = module_prompt(module) + text
+            sent = list(files)
+            if custom:
+                now = store.load(pid)
+                if mode == "research":
+                    spec_now = store.spec(pid, now["version"] or 1)
+                    try:
+                        entry = catalog.entry("ship", "custom")
+                    except CatalogError:
+                        entry = {}
+                    text = custom_research_context(now, spec_now, entry) + text
+                elif (now.get("design_plan") or {}).get("summary"):
+                    text = ("The approved design plan for this ship:\n" +
+                            "\n".join(f"- {s}" for s in now["design_plan"]["summary"]) + "\n\n" + text)
+                # Earlier photos again: the AI does not remember the last turn's pictures.
+                sent = reference_pictures(pid, {meta["id"] for meta, _ in files}) + sent
+            prompt: str | list[dict] = content_blocks(text, sent) if sent else text
             try:
-                session, reply = run_agent(pid, prompt, mode, log)
+                session, reply = run_agent(pid, prompt, mode, log, module=module)
             except Exception as e:
                 store.add_message(pid, "AI", f"Sorry, I hit a problem and changed nothing: {e}")
                 raise JobError(f"AI run failed: {e}")
             store.add_message(pid, "AI", reply)
-            return {"reply": reply, "version": store.load(pid)["version"],
-                    "built_versions": session.built_versions, "research_saved": session.research_saved}
+            version = store.load(pid)["version"]
+            result = {"reply": reply, "version": version,
+                      "built_versions": session.built_versions, "research_saved": session.research_saved}
+            if custom:
+                result["plan_saved"] = session.plan_saved
+            if session.kind == "crew":
+                # What is now on screen versus what was there before the turn, so the screen can
+                # show which modules changed (a failed last build leaves the earlier version shown).
+                result["changed_modules"] = crew_modules.ordered(
+                    crew_modules.changed_modules(session.start_spec, store.spec(pid, version)))
+            return result
 
         return {"job_id": jobs.submit("chat", work)}
 
@@ -325,6 +477,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         need_project(pid)
         part, text = body.get("part"), body.get("text")
         point = body.get("point")
+        refuse_unplanned_build(store.load(pid))
         if not isinstance(part, str) or not part or not isinstance(text, str) or not text.strip():
             raise HTTPException(400, "part and text are required")
         if point is not None and not (isinstance(point, list) and len(point) == 3):
@@ -339,6 +492,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         if not isinstance(text, str) or not text.strip():
             raise HTTPException(400, "text is required")
         store.get_pin(pid, pin_id)
+        refuse_unplanned_build(store.load(pid))
         store.update_pin(pid, pin_id, status="working", message=(body.get("author") or "You", text))
         return {"job_id": jobs.submit("pin", pin_job(pid, pin_id))}
 
