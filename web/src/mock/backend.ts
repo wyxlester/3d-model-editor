@@ -658,6 +658,11 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
       ],
     }));
   }
+  if (path === '/api/unreal/open' && method === 'POST') {
+    const level = String((body as { level?: string })?.level ?? '');
+    if (!/^\/Game\/ME3D\/([A-Za-z0-9_]+)\/L_\1$/.test(level)) throw new HttpErr(400, `Not a level a Unreal test makes: ${level}`);
+    return { opened: true, level, project: '(mock) unreal/HarnessProject/Harness.uproject' };
+  }
   throw new HttpErr(404, `Mock has no route for ${method} ${path}`);
 }
 

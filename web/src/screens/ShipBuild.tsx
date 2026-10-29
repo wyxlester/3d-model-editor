@@ -8,8 +8,11 @@ import { undoHint } from '../lib/undo';
 import { AiWorking, ChatPanel, ErrorNote, JobLines, PRIORITY, TopBar, useCarried } from '../components/common';
 import { DerivedFromLink, useVariantDialog } from '../components/VariantDialog';
 import { OtherWork, useProjectWork } from '../components/JobCenter';
+import { useWatchedJobs } from '../components/ActivityFeed';
+import { BuildLive } from '../components/BuildLive';
 import { remember, useJobs, useLoad, useProject } from '../hooks';
 import { awaitingApproval, buildTabLabel } from '../lib/designPlan';
+import { liveBuildKind } from '../lib/buildProgress';
 import { blenderToGltf, type ViewName } from '../lib/frames';
 import { hiddenParts, isStationName, jointsOf, levelsFor, partLabel } from '../lib/parts';
 import { groupPins, pinSummary, shortTime } from '../lib/pins';
@@ -94,6 +97,20 @@ export function ShipBuild() {
   const afterJob = async () => { const p = await reload(); if (p) setProject(p); };
   // Work on this ship carries on while the user is on another model; when it finishes, show the result.
   const work = useProjectWork(id, () => void afterJob(), jobs);
+  // The approved design plan being built, or the model being updated from the research: followed step
+  // by step over the model, which is re-read every few seconds while it runs so each version shows as it
+  // lands (unless an older one is picked).
+  const live = useWatchedJobs(reload);
+  const liveJobs = work.active.filter((j) => liveBuildKind(j));
+  const liveKey = liveJobs.map((j) => j.id).join(',');
+  useEffect(() => {
+    liveJobs.forEach((j) => live.watch(j.id, j.label));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveKey, live.watch]);
+  const [closedLive, setClosedLive] = useState<string[]>([]);
+  const liveSection = [...live.sections].reverse().find((s) => !closedLive.includes(s.jobId)) ?? null;
+  const liveSince = Date.parse(work.active.find((j) => j.id === liveSection?.jobId)?.created ?? '');
+  const otherWork = work.others.filter((j) => !live.sections.some((s) => s.jobId === j.id));
 
   const closeThread = () => { setSelPin(null); setShownPart(null); };
   /** Open an issue's thread because the user clicked it: its part lights up. */
@@ -246,6 +263,11 @@ export function ShipBuild() {
             selectedPinId={selPin?.id ?? null}
             onPinClick={(p, x, y) => { const l = local(x, y); openPin(p, l.x, l.y); }}
             overlay={<>
+              {liveSection && (
+                <BuildLive section={liveSection} kind={liveBuildKind({ kind: 'build', label: liveSection.label }) ?? 'plan'} since={Number.isNaN(liveSince) ? undefined : liveSince} shown={shownVersion}
+                  onShow={(n) => { setViewing(n === current ? null : n); setDraft(null); }}
+                  onClose={() => setClosedLive((c) => [...c, liveSection.jobId])} />
+              )}
               {pin && project && selPin && (
                 <Thread project={project} pin={pin} n={pins.indexOf(pin) + 1} at={selPin} stage={stageRef.current} shown={shownVersion}
                   busy={busy} error={actionErr} working={aiWorking(pin)} since={aiPins[pin.id]}
@@ -266,10 +288,10 @@ export function ShipBuild() {
               )}
             </>}
           />
-          <div style={{ padding: jobs.length || work.others.length || error ? '8px 16px 0' : 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ padding: jobs.length || otherWork.length || error ? '8px 16px 0' : 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
             <ErrorNote error={error} retry={reload} />
             <JobLines jobs={jobs} dismiss={dismiss} />
-            <OtherWork jobs={work.others} />
+            <OtherWork jobs={otherWork} />
           </div>
           <div className="statusbar">
             {project && !project.model_url && <span className="faint">No build yet</span>}

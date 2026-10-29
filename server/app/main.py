@@ -10,8 +10,8 @@ from __future__ import annotations
 import copy
 import json
 import re
-import shutil
 import subprocess
+import sys
 import threading
 import uuid
 from pathlib import Path
@@ -23,7 +23,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from . import crew_modules
 from .agent import (AgentRunner, AgentSession, ClaudeAgentRunner, custom_research_context, module_prompt,
-                    plan_build_prompt, research_media_context, variant_prompt, variant_research_prompt)
+                    plan_build_prompt, research_apply_prompt, research_media_context, variant_prompt,
+                    variant_research_prompt)
 from .builder import BlenderRunner, BuilderRunner
 from .builds import Builds, built_line, summarise_change
 from .catalog import Catalog, CatalogError
@@ -38,6 +39,7 @@ from .specmerge import deep_merge, gltf_to_blender, keep_crew_nulls, label_for, 
 from .store import NotFound, PlanRefused, ProjectStore, atomic_write_json, read_json
 from .uploads import UploadRejected, check_size, content_blocks, decode, resolve_type
 from .uploads import TYPES as UPLOAD_TYPES
+from .unreal_editor import Refused, UnrealEditorWindow
 
 UnrealRunner = Callable[[Path, Callable[[str], None]], dict]
 SCENE_ID = re.compile(r"^scene_[a-z0-9]+$")
@@ -52,8 +54,8 @@ def make_unreal_runner(settings: Settings) -> UnrealRunner:
         script = settings.unreal_script
         if not script.exists():
             raise JobError(f"Unreal harness script missing: {script}")
-        if shutil.which("bash") is None:
-            raise JobError("The Unreal import test needs bash, which is not on PATH (the harness is macOS-only).")
+        if not settings.unreal_cmd.exists():
+            raise JobError(f"Unreal 5.8 not found at {settings.unreal_dir} (set ME3D_UNREAL_DIR to the engine folder).")
         report_path = package_dir / "unreal_import_report.json"
         if report_path.exists():
             report_path.unlink()
@@ -62,8 +64,10 @@ def make_unreal_runner(settings: Settings) -> UnrealRunner:
         with lock:
             log(f"$ {script} {package_dir}")
             try:
-                proc = subprocess.run(["bash", str(script), str(package_dir)], capture_output=True, text=True,
-                                      errors="replace", timeout=settings.unreal_timeout_s,
+                proc = subprocess.run([sys.executable, str(script), str(package_dir),
+                                       "--engine", str(settings.unreal_dir)],
+                                      capture_output=True, text=True, errors="replace",
+                                      timeout=settings.unreal_timeout_s,
                                       cwd=str(settings.repo_root))
             except subprocess.TimeoutExpired:
                 raise JobError(f"Unreal import test timed out after {settings.unreal_timeout_s:.0f} s.")
@@ -78,7 +82,8 @@ def make_unreal_runner(settings: Settings) -> UnrealRunner:
 
 def create_app(settings: Settings | None = None, runner: BuilderRunner | None = None,
                agent: AgentRunner | None = None, llm: LLM | None = None,
-               unreal: UnrealRunner | None = None, workers: int = 6) -> FastAPI:
+               unreal: UnrealRunner | None = None, unreal_window: UnrealEditorWindow | None = None,
+               workers: int = 6) -> FastAPI:
     settings = settings or Settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     store = ProjectStore(settings.projects_dir)
@@ -87,6 +92,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
     agent = agent or ClaudeAgentRunner(model=settings.agent_model)
     llm = llm or claude_llm(settings.route_model)
     unreal = unreal or make_unreal_runner(settings)
+    unreal_window = unreal_window or UnrealEditorWindow(settings)
     # Every project job's log is kept with the project, so its work can be reviewed later.
     jobs = JobManager(workers=workers, on_finish=lambda job: store.save_job_log(job["project"], job)
                       if job.get("project") else None)
@@ -138,7 +144,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
     @app.get("/api/health")
     def health():
         return {"blender": settings.blender.exists(), "mpfb": settings.mpfb_dir.is_dir(),
-                "ai": find_claude_cli() is not None, "unreal": settings.unreal_dir.is_dir()}
+                "ai": find_claude_cli() is not None, "unreal": settings.unreal_cmd.exists()}
 
     @app.get("/api/catalog")
     def get_catalog():
@@ -461,6 +467,33 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
 
         return {"job_id": jobs.submit("build", project=pid, label=f"Building {project['name']} from the approved plan",
                                       fn=work)}
+
+    @app.post("/api/projects/{pid}/research/apply")
+    def apply_research(pid: str):
+        """Lester, 29 Oct ("do a photo research ... and update the model accordingly"): bring a ship's
+        model in line with its research, watched on Build a version per group of changes (contract §12).
+        A custom ship is shaped by its design plan instead, which is redrafted and approved in Research."""
+        project = need_project(pid)
+        if project.get("kind") != "ship":
+            raise HTTPException(400, "Only ships have research.")
+        if project.get("base") == "custom":
+            raise HTTPException(409, "This ship is built from its design plan: redraft the plan from the research and approve it.")
+        not_a_draft(project, "changed")
+        if not project.get("research"):
+            raise HTTPException(409, "This ship has no research yet. Research it first, then update the model from it.")
+        if not project.get("version"):
+            raise HTTPException(409, "The first build has not finished yet.")
+        rev = project.get("research_rev", 0)
+        store.add_message(pid, "You", "Update the model from the research.")
+
+        def work(log):
+            log("• Reading the research to update the model")
+            session, reply = run_agent(pid, research_apply_prompt(), "build", log)
+            store.add_message(pid, "AI", reply)
+            store.set_research_applied(pid, rev)
+            return {"version": store.load(pid)["version"], "reply": reply, "built_versions": session.built_versions}
+
+        return {"job_id": jobs.submit("build", project=pid, label=f"Updating {project['name']} from the research", fn=work)}
 
     def reference_pictures(pid: str, exclude: set[str], limit: int = 4) -> list[tuple[dict, bytes]]:
         """The latest pictures attached earlier in this project's chat. The AI has no memory between
@@ -1012,11 +1045,24 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
     @app.post("/api/scenes/{sid}/unreal-test")
     def unreal_test(sid: str):
         scene = load_scene(sid)
+        try:
+            unreal_window.refuse_if_open()
+        except Refused as e:
+            raise HTTPException(e.status, str(e))
 
         def work(log):
             pkg = export_scene(scene, store, settings.packages_dir, log)
             return unreal(Path(pkg["package_dir"]), log)
         return {"job_id": jobs.submit("unreal", work, label=f"Unreal test of {scene.get('name', sid)}")}
+
+    @app.post("/api/unreal/open")
+    def unreal_open(body: dict = Body(...)):
+        if any(j["kind"] == "unreal" and j["status"] in ("queued", "running") for j in jobs.listing()):
+            raise HTTPException(409, "A Unreal test is still running; open its level when it has finished.")
+        try:
+            return unreal_window.open(str(body.get("level", "")))
+        except Refused as e:
+            raise HTTPException(e.status, str(e))
 
     # ---- files --------------------------------------------------------------------------
     @app.get("/api/files/{path:path}")

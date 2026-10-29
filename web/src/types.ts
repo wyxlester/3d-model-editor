@@ -207,6 +207,8 @@ export interface Project {
   design_plan?: DesignPlan | null;
   /** Research sources the user crossed out: the AI rests nothing on them. */
   excluded_sources?: string[];
+  /** The research revision the model was last updated from (null: never). */
+  research_applied_rev?: number | null;
   /** The request the project was made from: a custom ship's description, or what a variant was asked to change. */
   brief?: string | null;
   /** Custom ships: an approved plan has been built at least once, so Build works normally (server extra). */

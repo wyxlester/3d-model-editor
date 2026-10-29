@@ -552,7 +552,7 @@ describe('crew modules', () => {
   });
 });
 
-import { awaitingApproval, briefFromCarried, buildTabLabel, canApprove, httpErrorText, planNotice, planState, planStatusLabel, summaryLine } from './designPlan';
+import { awaitingApproval, briefFromCarried, buildTabLabel, canApprove, httpErrorText, planNotice, planState, planStatusLabel, researchUpdate, summaryLine } from './designPlan';
 import type { Attachment, DesignPlan, Message } from '../types';
 
 describe('design plan (ships of any type)', () => {
@@ -1014,5 +1014,106 @@ describe('moves made from words (CONTRACT §6 "Custom moves")', () => {
     expect(keyLine({ name: 'idle', kind: 'built_in', inModel: true })).toBe('');
     expect(refineMessage('salute', '  faster on the way up ')).toBe('Refine the move "salute": faster on the way up');
     expect(removeMovePatch({ custom_moves: [salute, point] }, 'salute')).toEqual({ custom_moves: [point] });
+  });
+});
+
+import { headline, researchProgress, tally } from './researchProgress';
+
+describe('research progress', () => {
+  const log = [
+    'Researching', 'AI → WebSearch', '• Searching the web: USS Abraham Lincoln CVN-72 dimensions',
+    '• AI: The first results give the length.', 'AI → WebFetch', '• Reading en.wikipedia.org',
+    '• Adding a photograph: starboard bow from the air', '• Searching the web: CVN-72 island',
+  ];
+  it('reads each step and what is under way now', () => {
+    const p = researchProgress(log);
+    expect(p.steps.map((s) => s.kind)).toEqual(['search', 'ai', 'read', 'photo', 'search']);
+    expect(p.now?.detail).toBe('CVN-72 island');
+    expect(headline(p.now)).toBe('Searching the web for “CVN-72 island”');
+    expect(tally(p)).toBe('2 searches · 1 page read · 1 photograph');
+  });
+  it('the AI talking is not the step under way unless nothing else has happened', () => {
+    expect(researchProgress([...log, '• AI: Now the island.']).now?.kind).toBe('search');
+    expect(headline(researchProgress(['• AI: Let me look.']).now)).toBe('Thinking it over');
+    expect(headline(researchProgress([]).now)).toBe('Starting the research');
+    expect(tally(researchProgress([]))).toBe('');
+  });
+  it('counts the photographs kept, not every one added', () => {
+    const p = researchProgress([...log, '• Removing photograph P01', '• Adding a photograph: the same, retitled', '• Removing photograph P02']);
+    expect(p.steps.filter((s) => s.kind === 'photo')).toHaveLength(4);
+    expect(p.photos).toBe(0);
+    expect(tally(p)).toBe('2 searches · 1 page read');
+  });
+});
+
+import { buildHeadline, buildProgress, liveBuildKind, shortStep, versionText } from './buildProgress';
+
+describe('build progress', () => {
+  const log = [
+    '• Building the approved design plan', '• Building version 2 in Blender: Built from the approved design plan',
+    'blender: ok', '• Version 2 built', "• Adding the plan's details", '• AI: Rails first.', '• Adding port rail',
+    '• Adding starboard rail', '• Building version 3 in Blender: Added port rail, starboard rail',
+    '• Version 3 failed to build: rail clips the deck', '• Adjusting Rail Port', '• Building version 4 in Blender: Moved the port rail',
+  ];
+  it('lists every version built, with its summary and whether it built', () => {
+    const p = buildProgress(log);
+    expect(p.versions).toEqual([
+      { n: 2, ok: true, summary: 'Built from the approved design plan', added: [] },
+      { n: 3, ok: false, summary: 'Added port rail, starboard rail', added: ['Adding port rail', 'Adding starboard rail'] },
+    ]);
+    expect(p.details).toBe(3);
+    expect(p.versions.map(versionText)).toEqual(['Built from the approved design plan', 'Adding port rail; Adding starboard rail']);
+    const done = buildProgress([...log, '• Version 4 built']);
+    expect(done.versions[2].added).toEqual(['Adjusting Rail Port']);
+  });
+  it('follows the plan build and the update from the research, nothing else', () => {
+    expect(liveBuildKind({ kind: 'build', label: 'Building Bumboat from the approved plan' })).toBe('plan');
+    expect(liveBuildKind({ kind: 'build', label: 'Updating Harmony of the Seas from the research' })).toBe('research');
+    expect(liveBuildKind({ kind: 'chat', label: 'Chat: update the model from the research' })).toBeNull();
+    expect(liveBuildKind({ kind: 'build', label: 'First build of Bumboat' })).toBeNull();
+  });
+  it('cuts a page-long failure down for the list', () => {
+    expect(shortStep('x'.repeat(500)).length).toBe(160);
+    expect(shortStep('Version 3 built')).toBe('Version 3 built');
+  });
+  it('says what is under way, and what came of it when done', () => {
+    expect(buildHeadline(buildProgress(log), true)).toBe('Building version 4 in Blender');
+    expect(buildHeadline(buildProgress(log.slice(0, 4)), true)).toBe('Version 2 built; the AI is choosing what to add next');
+    expect(buildHeadline(buildProgress(log.slice(0, 10)), true)).toBe('Version 3 did not build; the AI is fixing it');
+    expect(buildHeadline(buildProgress([...log, '• Version 4 built']), false)).toBe('Finished: version 4 is on screen');
+    expect(buildHeadline(buildProgress(['• Reading the research to update the model']), false)).toBe('Finished without a new version');
+    expect(buildHeadline(buildProgress([]), true)).toBe('Starting the build');
+  });
+});
+
+describe('updating the model from the research', () => {
+  const ship = { kind: 'ship', base: 'container', version: 8, research: { subject: 'x' }, research_rev: 3 };
+  it('is offered on a built catalog ship with research, behind until it has read this revision', () => {
+    expect(researchUpdate(ship)).toBe('behind');
+    expect(researchUpdate({ ...ship, research_applied_rev: 2 })).toBe('behind');
+    expect(researchUpdate({ ...ship, research_applied_rev: 3 })).toBe('current');
+  });
+  it('is not offered without research or a model, nor on a custom ship (its plan does that)', () => {
+    expect(researchUpdate({ ...ship, research: null })).toBe('none');
+    expect(researchUpdate({ ...ship, version: 0 })).toBe('none');
+    expect(researchUpdate({ ...ship, base: 'custom' })).toBe('none');
+    expect(researchUpdate({ ...ship, kind: 'crew' })).toBe('none');
+    expect(researchUpdate(null)).toBe('none');
+  });
+});
+
+import { PANEL_KEEP, PANEL_MIN, dragHeight } from './panel';
+
+describe('a panel resized by dragging its top edge', () => {
+  it('grows when dragged up and shrinks when dragged down', () => {
+    expect(dragHeight(220, 500, 450, 900)).toBe(270);
+    expect(dragHeight(220, 500, 560, 900)).toBe(160);
+  });
+  it('keeps the buttons row and always leaves the viewers room above it', () => {
+    expect(dragHeight(220, 500, 900, 900)).toBe(PANEL_MIN);
+    expect(dragHeight(220, 500, -400, 900)).toBe(900 - PANEL_KEEP);
+  });
+  it('a window too small for both gives the panel its minimum, not a negative height', () => {
+    expect(dragHeight(220, 500, 0, 150)).toBe(PANEL_MIN);
   });
 });

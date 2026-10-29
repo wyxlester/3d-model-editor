@@ -252,6 +252,7 @@ class ProjectStore:
             "pins": p["pins"], "messages": p["messages"], "research": p["research"],
             "research_rev": p.get("research_rev", 0), "design_plan": p.get("design_plan"),
             "excluded_sources": list(p.get("excluded_sources") or []),
+            "research_applied_rev": p.get("research_applied_rev"),
             "plan_built": bool(p.get("plan_built")),
             "derived_from": p.get("derived_from"), "brief": p.get("brief"),
             "draft": p.get("draft"), "discarded": bool(p.get("discarded")), "category": p.get("category"),
@@ -391,6 +392,11 @@ class ProjectStore:
             project["excluded_sources"] = list(ids)
             on_research_saved(project)
             return project["research_rev"]
+
+    def set_research_applied(self, pid: str, rev: int) -> None:
+        """The model was brought up to date with research revision `rev` (contract §12)."""
+        with self.edit(pid) as project:
+            project["research_applied_rev"] = rev
 
     def set_plan_params(self, pid: str, params: dict) -> dict:
         """The user's own values for the draft design plan's params; they win when it is built."""

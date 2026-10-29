@@ -7,10 +7,12 @@ import { api, errorText, researchExportUrl } from '../api';
 import { ChatPanel, ErrorNote, EvidenceChip, JobLines, Loading, PRIORITY, TopBar, useCarried } from '../components/common';
 import { OtherWork, useProjectWork } from '../components/JobCenter';
 import { ResearchMaterials, ResearchVersions } from '../components/ResearchRecord';
+import { ResearchLive } from '../components/ResearchLive';
+import { useWatchedJobs } from '../components/ActivityFeed';
 import { hexToLinear } from '../lib/describe';
 import { claimUsed, linearToHex, planRows, type PlanRow } from '../lib/planValues';
 import { remember, useJobs, useProject } from '../hooks';
-import { awaitingApproval, buildTabLabel, canApprove, isCustomShip, planNotice, planState, planStatusLabel, summaryLine } from '../lib/designPlan';
+import { awaitingApproval, buildTabLabel, canApprove, isCustomShip, planNotice, planState, planStatusLabel, researchUpdate, summaryLine } from '../lib/designPlan';
 import { partLabel } from '../lib/parts';
 import { paths } from '../lib/routing';
 import { boxText, photoStatus, provenanceRows } from '../lib/photos';
@@ -39,6 +41,16 @@ export function ShipResearch() {
   // Any work on this ship, wherever it was started: the plan cannot be approved under a research turn
   // that may redraft it, and a research turn still running from before shows as one.
   const anyWork = busy || work.others.length > 0;
+  // Research turns on this ship, wherever they were started, followed step by step on the page.
+  const live = useWatchedJobs(reload);
+  const researching = work.active.filter((j) => j.kind === 'chat' && j.label.startsWith('Research'));
+  const researchKey = researching.map((j) => j.id).join(',');
+  useEffect(() => {
+    researching.forEach((j) => live.watch(j.id, j.label));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [researchKey, live.watch]);
+  const liveSections = live.sections.filter((s) => s.phase === 'running');
+  const since = Object.fromEntries(work.active.map((j) => [j.id, Date.parse(j.created)]).filter(([, t]) => !Number.isNaN(t)));
   const [sec, setSec] = useState<Sec>('summary');
   const [sel, setSel] = useState<Sel>(null);
   const excludedIds = project?.excluded_sources ?? [];
@@ -80,18 +92,33 @@ export function ShipResearch() {
   const approve = async () => {
     if (!id) return;
     setPlanErr(null);
-    let job: { job_id: string };
     try {
-      job = await api.approvePlan(id);
+      await api.approvePlan(id);
     } catch (e) {
       setPlanErr(errorText(e)); // a 409 is the server's sentence, verbatim
       void reload();
       return;
     }
-    void reload();
-    await run('Building the approved design plan', () => Promise.resolve(job),
-      () => { nav(paths.shipBuild(id)); }, () => void reload());
+    // Watch it being built: Build follows the job, showing each version as it lands (CONTRACT §12).
+    work.refresh();
+    nav(paths.shipBuild(id));
   };
+
+  // A catalog ship: bring its model in line with the research, watched on Build like a plan build.
+  const [applyErr, setApplyErr] = useState<string | null>(null);
+  const applyResearch = async () => {
+    if (!id) return;
+    setApplyErr(null);
+    try {
+      await api.applyResearch(id);
+    } catch (e) {
+      setApplyErr(errorText(e));
+      return;
+    }
+    work.refresh();
+    nav(paths.shipBuild(id));
+  };
+  const update = researchUpdate(project);
 
   const r = project?.research ?? null;
   const custom = isCustomShip(project);
@@ -116,12 +143,18 @@ export function ShipResearch() {
             <span className="chip amber" style={{ fontSize: 12, padding: '4px 10px' }}>{(r.claims ?? []).filter((c) => /Unverified/.test(c.status)).length} unverified claims</span>
           )}
           {r && id && <>
-            <span className="faint" style={{ fontSize: 12 }}>Report:</span>
-            <a className="btn sm" href={researchExportUrl(id, 'pdf')} download>PDF</a>
-            <a className="btn sm" href={researchExportUrl(id, 'pptx')} download>PowerPoint</a>
-            <a className="btn sm" href={researchExportUrl(id, 'json')} download>JSON</a>
+            <a className="btn sm" href={researchExportUrl(id, 'pdf')} download title="Download the research report as a PDF">PDF</a>
+            <a className="btn sm" href={researchExportUrl(id, 'pptx')} download title="Download the research report as a PowerPoint deck">PowerPoint</a>
+            <a className="btn sm" href={researchExportUrl(id, 'json')} download title="Download the research record as JSON">JSON</a>
           </>}
-          {!awaitingApproval(project) && <Link to={paths.shipBuild(id)} className="btn primary" style={{ height: 34, borderRadius: 8 }}>{custom ? 'Open Build' : 'Start building'}</Link>}
+          {update !== 'none' && (
+            <button className={`btn ${update === 'behind' ? 'primary' : ''}`} style={{ height: 34, borderRadius: 8 }} disabled={anyWork}
+              title={update === 'behind' ? 'Update the model from the research: it has changed since the model was last updated from it. The AI reads it, looks at the photographs and changes the model; you watch it on Build.'
+                : 'Update the model from the research again: the model was last updated from this research, so the AI checks it against the research once more.'}
+              onClick={() => void applyResearch()}>Update the model</button>
+          )}
+          {/* With the update offered, Build is reached from the Research | Build switch: the bar has no room for both. */}
+          {!awaitingApproval(project) && update === 'none' && <Link to={paths.shipBuild(id)} className="btn primary" style={{ height: 34, borderRadius: 8 }}>{custom ? 'Open Build' : 'Start building'}</Link>}
         </div>
       </TopBar>
       <div className="workspace">
@@ -140,6 +173,7 @@ export function ShipResearch() {
             footer={<>
               {start?.note && <span className="warn" style={{ fontSize: 12 }}>{start.note}</span>}
               <ErrorNote error={start?.startError ?? null} />
+              <ErrorNote error={applyErr} />
               <JobLines jobs={jobs} dismiss={dismiss} />
               <OtherWork jobs={work.others} />
             </>}
@@ -149,9 +183,12 @@ export function ShipResearch() {
         <main className="scroll" style={{ flex: 1, minWidth: 0, background: 'var(--stage)', padding: '0 24px 22px', display: 'flex', flexDirection: 'column', gap: 18 }}>
           {loading && !project && <Loading what="the research" />}
           <ErrorNote error={error} retry={reload} />
-          {project && !r && (custom ? <EmptyCustom researching={anyWork} /> : <EmptyResearch project={project} onRun={ask} busy={busy} />)}
+          {project && !r && (liveSections.length ? <ResearchLive sections={liveSections} since={since} full />
+            : custom ? <EmptyCustom researching={anyWork} /> : <EmptyResearch project={project} onRun={ask} busy={busy} />)}
           {project && r && (
             <>
+              {/* Photographs can arrive before the findings: until there is a verdict, the steps stay in full view. */}
+              <ResearchLive sections={liveSections} since={since} full={!r.summary?.verdict} above />
               <SectionNav r={r} sec={sec} setSec={(s) => { setSec(s); setSel(null); }} />
               {sec === 'summary' && <Summary r={r} />}
               {sec === 'photos' && <PhotosTab r={r} subject={subject} selected={sel?.kind === 'photo' ? selectedId : null} onSelect={selPhoto} onInspect={openInspect} onAsk={(m) => void ask(m)} busy={anyWork} />}

@@ -62,6 +62,21 @@ export const awaitingApproval = (p: PlanHolder | null | undefined) => isCustomSh
 
 export const buildTabLabel = (p: PlanHolder | null | undefined) => (awaitingApproval(p) ? 'Build · waiting for your approval' : 'Build');
 
+interface ResearchHolder extends PlanHolder {
+  version?: number;
+  research?: unknown;
+  research_applied_rev?: number | null;
+}
+
+/**
+ * Whether Research offers "Update the model from the research" (CONTRACT §12), and whether the model is
+ * behind the research it would read. A catalog ship only: a custom ship follows its design plan instead.
+ */
+export function researchUpdate(p: ResearchHolder | null | undefined): 'none' | 'behind' | 'current' {
+  if (!p || p.kind !== 'ship' || isCustomShip(p) || !p.research || !p.version) return 'none';
+  return p.research_applied_rev === (p.research_rev ?? 0) ? 'current' : 'behind';
+}
+
 /**
  * One summary line, split for display: "Size · 38 m long" or "Size: 38 m long" bolds "Size".
  * Lines that state an assumption are flagged so the panel can highlight them.

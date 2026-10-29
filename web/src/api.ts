@@ -72,6 +72,7 @@ export const api = {
     call<{ project: Project }>('PATCH', `/api/projects/${enc(id)}/design-plan`, { params }),
   setExcludedSources: (id: string, ids: string[]) =>
     call<{ project: Project }>('PATCH', `/api/projects/${enc(id)}/research/excluded`, { excluded_sources: ids }),
+  applyResearch: (id: string) => call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/research/apply`),
   researchHistory: (id: string) => call<ResearchVersion[]>('GET', `/api/projects/${enc(id)}/research/history`),
   researchVersion: (id: string, n: number) => call<{ n: number; at: string; research: Research }>('GET', `/api/projects/${enc(id)}/research/history/${n}`),
   materials: (id: string) => call<Material[]>('GET', `/api/projects/${enc(id)}/materials`),
@@ -115,6 +116,8 @@ export const api = {
   updateScene: (id: string, spec: SceneSpec) => call<{ scene: Scene }>('PUT', `/api/scenes/${enc(id)}`, spec),
   exportScene: (id: string) => call<{ job_id: string }>('POST', `/api/scenes/${enc(id)}/export`),
   unrealTest: (id: string) => call<{ job_id: string }>('POST', `/api/scenes/${enc(id)}/unreal-test`),
+  /** Open the level a Unreal test built in the Unreal editor, with its window, on this computer. */
+  unrealOpen: (level: string) => call<{ opened: boolean; level: string; project: string }>('POST', '/api/unreal/open', { level }),
 };
 
 export type ExportJobResult = ExportResult;

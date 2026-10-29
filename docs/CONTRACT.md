@@ -362,12 +362,18 @@ frame**, taken from their station at the moment of export.
 ## 9. Unreal import harness
 
 ```
-unreal/run_import_test.sh <package_dir>
+python unreal/run_import_test.py <package_dir> [--engine <UE_5.8 folder>]
 ```
 
 This imports the package into a throwaway UE 5.8 project (`unreal/HarnessProject`), builds a
 level with the ship and its crew at their stations, saves it, reloads it, and writes
-`<package_dir>/unreal_import_report.json`:
+`<package_dir>/unreal_import_report.json`. It runs on Windows and macOS. Crew come in the way a
+user's project does once `unreal/install_import_hook.py` has set it up: Import Into Level, the
+skinned parts combined into one SkeletalMesh, and every item of equipment (section 6) attached
+to its bone by the hook `unreal/me3d_import_hook.py`. Besides the ship and placement checks, the
+report has, per crew: `crew_one_mesh:<crew_id>` (one SkeletalMesh) and, per item,
+`crew_equipment:<n>:<Equipment__name>` (attached to its bone, Movable, and within 1 cm of where
+the GLB alone puts it in the rest pose). *(Proposed 29 Oct; awaiting Lester.)*
 
 ```json
 {"ok": bool, "engine": "5.8", "level": "/Game/ME3D/<id>/L_<id>",
@@ -385,7 +391,8 @@ Every body is JSON. Long work returns `{"job_id"}`; poll `GET /api/jobs/{id}`, w
 red", "Comment on Roof › Searchlight").
 Log lines that start with `• ` are milestones written for people ("• Building version 2 in
 Blender: …", "• AI: …", "• Changing hull color"); the web app shows them as the progress feed.
-Every other line is raw detail.
+Every other line is raw detail. A job keeps its last 400 lines; past that the oldest raw lines go
+first, so the `• ` lines of a long job (a plan build's versions) stay.
 
 **Several models at once.** Jobs on different projects run side by side (Blender itself still
 builds one model at a time). Jobs on the same project run one after another, in the order sent,
@@ -405,6 +412,7 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | POST `/api/projects/{id}/design-plan/approve` | | `{"job_id"}`: builds a `custom` ship from its draft plan; 409 with a sentence when there is no current draft |
 | PATCH `/api/projects/{id}/design-plan` | `{"params":{param: value or null}}` | `{"project"}`: the user's own plan values (§12, Review); 409 unless the plan is a draft |
 | PATCH `/api/projects/{id}/research/excluded` | `{"excluded_sources":[source id]}` | `{"project"}`: sources the user crossed out (§12, Review) |
+| POST `/api/projects/{id}/research/apply` | | `{"job_id"}`: the AI brings a catalog ship's model in line with its research (§12, Updating the model from the research); 409 with a sentence for a custom ship, a ship with no research or no model yet |
 | GET `/api/projects/{id}/research/history` | | `[{"n","at","subject","verdict","sources","claims"}]` |
 | GET `/api/projects/{id}/research/history/{n}` | | `{"n","at","research"}` |
 | GET `/api/projects/{id}/materials` | | `[{"id","kind":"search\|page","title","at","chars","source"}]` |
@@ -433,7 +441,8 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | GET `/api/scenes/{id}` | | `Scene` with `stations` from the ship's parts |
 | PUT `/api/scenes/{id}` | `SceneSpec` | `{"scene"}` |
 | POST `/api/scenes/{id}/export` | | `{"job_id"}` → result `{"package_dir","zip_url"}` |
-| POST `/api/scenes/{id}/unreal-test` | | `{"job_id"}` → result: the Unreal report |
+| POST `/api/scenes/{id}/unreal-test` | | `{"job_id"}` → result: the Unreal report. 409 while an editor opened by `/api/unreal/open` is still open (a test rebuilds that level) |
+| POST `/api/unreal/open` | `{"level"}`: a report's `level` (`/Game/ME3D/<id>/L_<id>`) | `{"opened","level","project"}`: the Unreal editor, with its window, on this computer, showing the test project at that level (sun, sky and sea added by the harness; not part of the package). 400 not such a level, 404 no longer on disk, 409 a test is running or the editor is already open, 503 no Unreal 5.8. *(Proposed 29 Oct; awaiting Lester.)* |
 | GET `/api/files/{path}` | | serves files under the data folder (zips, packages) |
 
 `Project`:
@@ -650,3 +659,28 @@ values, the research photographs (not those marked excluded), every source with 
 ones marked "Excluded by you"), every claim (those resting only on crossed-out sources marked "Not
 used"), the open questions, what moves, and the record: the research's versions and every search
 and page. `export.json` is the research record itself.
+
+### Watching the build
+
+Research shows what the AI is doing while a research turn runs: the step under way, a tally of
+searches, pages read and photographs kept, and every step so far, read from the job's `• ` lines.
+Approving the design plan opens Build at once. The approved plan's hull and superstructure are built
+first; then the AI adds the plan's details in small groups of related details, rebuilding after
+each, so every group is its own version. Build shows the job over the model: the step under way,
+every version built so far (any of them can be looked at), and every step, and the model follows
+the newest version as it lands.
+
+### Updating the model from the research
+
+Lester, 29 Oct, on Harmony of the Seas: "do a photo research ... and update the model accordingly".
+Build's AI reads the research itself: `get_research` gives the verdict, every claim with what it
+changes in the model (`not_used` when it rests only on crossed-out sources), every photograph's
+observation and modelling use, every close-up and the open questions; `view_photo` shows it a stored
+photograph or close-up. Photographs are the source of truth. `get_project` is an overview small enough
+to read (custom ops without their code, one line per part); `get_custom_op` and `get_parts` give the
+detail. A tool's answer is kept under about 24,000 characters, cutting the longest list and saying how
+to read the rest. On a built catalog ship with research, Research offers "Update the model from the
+research" (`POST .../research/apply`): the AI compares the model with the research and changes what
+differs a group at a time, a version per group, watched on Build as above. When it finishes,
+`research_applied_rev` is the research revision it read; until the research changes again the button
+is no longer the main action. A custom ship follows its design plan instead.

@@ -6,8 +6,8 @@
 	"Plugins": [
 		{ "Name": "PythonScriptPlugin", "Enabled": true },
 		{ "Name": "EditorScriptingUtilities", "Enabled": true },
-		{ "Name": "Interchange", "Enabled": true },
-		{ "Name": "InterchangeEditor", "Enabled": true },
+		{ "Name": "Interchange", "Enabled": true, "SupportedTargetPlatforms": [ "Win64", "Linux", "Mac" ] },
+		{ "Name": "InterchangeEditor", "Enabled": true, "SupportedTargetPlatforms": [ "Win64", "Linux", "Mac" ] },
 		{ "Name": "InterchangeAssets", "Enabled": true }
 	]
 }

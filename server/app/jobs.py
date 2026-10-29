@@ -40,8 +40,21 @@ class JobLog:
             log = self._job["log"]
             for part in str(line).splitlines() or [""]:
                 log.append(part)
-            if len(log) > MAX_LOG_LINES:
-                del log[: len(log) - MAX_LOG_LINES]
+            trim_log(log)
+
+
+def trim_log(log: list[str], limit: int = MAX_LOG_LINES) -> None:
+    """Keep the log to `limit` lines, dropping the oldest technical lines first: the lines for people
+    ("• ", contract §10) are what Research and Build replay as steps and versions, and a plan build's
+    Blender output would otherwise push its first versions out. Only people's lines left: oldest go."""
+    extra = len(log) - limit
+    if extra <= 0:
+        return
+    drop = [i for i, line in enumerate(log) if not line.startswith("• ")][:extra]
+    for i in reversed(drop):
+        del log[i]
+    if len(log) > limit:
+        del log[: len(log) - limit]
 
 
 class JobManager:

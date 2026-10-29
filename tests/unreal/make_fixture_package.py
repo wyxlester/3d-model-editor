@@ -20,6 +20,10 @@ coincidence: the cabin is aft, the crane is forward on the starboard side.
       Deck__Crane                     moving: z slew, pivot on deck, forward starboard
         Deck__Crane__Jib              moving: y luff, pivot at top of crane column
         station__crane                crew station beside the crane, rotated 90 deg (faces port)
+
+The crew is Quaternius' Worker, baked to metres and turned to face +X, as two skinned meshes
+(Crew__Body, Crew__Head) plus Equipment__life_vest, a box hung on the Chest bone the way the crew
+builder hangs equipment.
 """
 import json
 import os
@@ -123,6 +127,36 @@ def _blender_ship(out_dir: Path):
     (out_dir / "_stations.json").write_text(json.dumps(stations, indent=1))
 
 
+def _fixture_vest(arm):
+    """Equipment as the crew builder makes it (contract section 6): a rigid mesh named
+    Equipment__life_vest, parented to a bone (here Chest), kept where it is in the rest pose.
+    Unreal drops that bone link on import; the harness checks the hook puts it back."""
+    import bmesh
+    import bpy
+    from mathutils import Matrix
+
+    bone = arm.data.bones["Chest"]
+    centre = (bone.head_local + bone.tail_local) / 2
+    bm = bmesh.new()
+    bmesh.ops.create_cube(bm, size=1.0)
+    bmesh.ops.scale(bm, vec=(0.34, 0.44, 0.30), verts=bm.verts)   # deep (x, it faces +X), wide, tall
+    mesh = bpy.data.meshes.new("Equipment__life_vest")
+    bm.to_mesh(mesh)
+    bm.free()
+    mat = bpy.data.materials.new("Equipment__life_vest")
+    mat.diffuse_color = (1.0, 0.45, 0.05, 1.0)
+    mesh.materials.append(mat)
+    vest = bpy.data.objects.new("Equipment__life_vest", mesh)
+    bpy.context.scene.collection.objects.link(vest)
+    vest.matrix_world = Matrix.Translation(centre)
+    # as blender/crew/equipment.py parent_to_bone: bone parenting that keeps the rest-pose place
+    world = vest.matrix_world.copy()
+    vest.parent, vest.parent_type, vest.parent_bone = arm, "BONE", "Chest"
+    vest.matrix_parent_inverse = Matrix.Identity(4)
+    tail = arm.matrix_world @ bone.matrix_local @ Matrix.Translation((0.0, bone.length, 0.0))
+    vest.matrix_basis = tail.inverted() @ world
+
+
 def _blender_crew(out_dir: Path, worker_glb: Path):
     import math
     import bpy
@@ -160,16 +194,21 @@ def _blender_crew(out_dir: Path, worker_glb: Path):
     with bpy.context.temp_override(active_object=arm, object=arm, selected_objects=every,
                                    selected_editable_objects=every):
         bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-    # One skinned mesh, so Unreal gets one SkeletalMesh rather than four parts.
-    names = [m.name for m in meshes]
-    with bpy.context.temp_override(active_object=meshes[0], object=meshes[0], selected_objects=meshes,
-                                   selected_editable_objects=meshes):
+    # Two skinned meshes, as a real crew has (body, clothes, hair... are separate): the harness
+    # checks that Unreal combines them into one SkeletalMesh.
+    head = next(m for m in meshes if "Head" in m.name)
+    rest = [m for m in meshes if m is not head]
+    names = [m.name for m in rest]
+    with bpy.context.temp_override(active_object=rest[0], object=rest[0], selected_objects=rest,
+                                   selected_editable_objects=rest):
         bpy.ops.object.join()
-    body = meshes[0]
+    body = rest[0]
     if any(n in bpy.data.objects for n in names[1:]):
         raise RuntimeError("crew meshes did not join")
     body.name = body.data.name = "Crew__Body"
+    head.name = head.data.name = "Crew__Head"
     arm.name = "Armature"
+    _fixture_vest(arm)
     height = max((body.matrix_world @ v.co).z for v in body.data.vertices)
     if not 1.2 < height < 2.5:
         raise RuntimeError(f"crew height {height:.2f} m after baking transforms; expected metres")
@@ -217,8 +256,10 @@ def make_package(out_root: Path) -> Path:
         indent=1))
     shutil.copyfile(pkg / "crew" / f"{CREW_ID}.glb", pkg / "crew" / f"{CREW_ID_B}.glb")
     crew = []
+    # The third entry reuses the first crew member at a second station: imported once, placed twice.
     for crew_id, station, anim in ((CREW_ID, "station__helm", "idle"),
-                                   (CREW_ID_B, "station__crane", "walk")):
+                                   (CREW_ID_B, "station__crane", "walk"),
+                                   (CREW_ID, "station__crane", "idle")):
         crew.append({"id": crew_id, "glb": f"crew/{crew_id}.glb", "station": station,
                      "animation": anim, **stations[station]})
     manifest = {
