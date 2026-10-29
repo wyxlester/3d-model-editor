@@ -332,6 +332,7 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | POST `/api/projects/{id}/variants` | `{"name"?,"version"?,"brief"?,"research"?:bool,"scene"?}` | `{"project","job_id"}` (below) |
 | POST `/api/projects/{id}/approve` | | `{"project","scene":{"id","missing_stations"}|null}` |
 | POST `/api/projects/{id}/discard` | | `{"project"}` |
+| DELETE `/api/projects/{id}` | | `{"deleted": id, "trash": "trash/<id>-<timestamp>"}`; 409 with a sentence when it can't be (below) |
 | GET `/api/jobs` | | `{"jobs":[JobSummary]}` (above) |
 | GET `/api/jobs/{id}` | | Job |
 | GET `/api/scenes` / POST `/api/scenes` | `SceneSpec` without `id` | `[Scene]` / `{"scene"}` |
@@ -422,6 +423,23 @@ or copied into another variant, and approve or discard are refused while its job
 - `discard` sets `discarded`. The project disappears from `GET /api/projects` and routing; its
   files stay on disk. The original is never changed by either.
 
+**Delete** (Lester, 29 Oct: "should also allow user to delete ship. if choose delete ship, render a
+dialog box to confirm with user, before actually deleting"). `DELETE /api/projects/{id}` works on any
+ship or crew project. It moves the project's folder to `data/trash/<id>-<UTC timestamp>/`, so it can
+be recovered by hand by moving it back; afterwards it is gone from `GET /api/projects`, routing and
+every project route (404). It is refused with 409 and a sentence for the user:
+
+- while any scene uses it, as its ship or as crew; the sentence names the scenes and the role in each
+  (there is no scene delete, and a scene's ship can't be changed, so a ship in a scene stays);
+- while one of its jobs is queued or running.
+
+Deleting a project leaves its variants alone: their `derived_from` still names it, and they list,
+open, approve and make variants as before. The screens ask for confirmation first; the server does not.
+
+**Draft or final** (screens only, no new field). The lists badge a project as a draft when it is a
+variant awaiting review (`draft` set) or a `custom` ship whose plan has never been built
+(`plan_built` false); everything else is final.
+
 **Attachments** (pictures and documents sent with a chat message). An upload is stored at once and
 returns `{"id","name","type","size","url"}`; the chat message then names it by `id`, and the AI
 receives the file itself alongside the text: pictures as images, PDFs as documents, text files as
@@ -447,6 +465,7 @@ data/projects/<id>/v<n>/{spec.json, model.glb, model.blend, parts.json, build_re
 data/projects/<id>/uploads/<upload id>.<ext>   and <upload id>.json (name, type, size)
 data/uploads/<upload id>.<ext>                 attached on Home, before a project exists
 data/scenes/<id>.json
+data/trash/<id>-<timestamp>/                   a deleted project's folder, moved here whole
 data/packages/<package_id>/...  and <package_id>.zip
 ```
 

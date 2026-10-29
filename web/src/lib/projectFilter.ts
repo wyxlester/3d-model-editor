@@ -1,12 +1,14 @@
 // Finding ships and crew on the pickers: search, filters, sorting and grouping, and the filter
 // kept in the page address. Pure, unit tested.
 import type { ProjectSummary } from '../types';
+import { isDraft } from './draft';
 
 /** The group for a project with no category (none set, and its catalog base gives none). */
 export const UNCATEGORIZED = 'Uncategorized';
 
 export type SortKey = 'recent' | 'name' | 'name_desc' | 'versions';
-export type StatusFilter = 'all' | 'approval' | 'working' | 'built' | 'unbuilt';
+/** `draft`: a variant awaiting approval or a described ship whose plan was never built (lib/draft); `final`: the rest. */
+export type StatusFilter = 'all' | 'approval' | 'draft' | 'final' | 'working' | 'built' | 'unbuilt';
 export type OriginFilter = 'all' | 'originals' | 'variants';
 
 export interface ProjectFilter {
@@ -22,10 +24,10 @@ export interface ProjectFilter {
 export const DEFAULT_FILTER: ProjectFilter = { q: '', category: null, status: 'all', origin: 'all', base: null, sort: 'recent', group: false };
 
 const SORTS: SortKey[] = ['recent', 'name', 'name_desc', 'versions'];
-const STATUSES: StatusFilter[] = ['all', 'approval', 'working', 'built', 'unbuilt'];
+const STATUSES: StatusFilter[] = ['all', 'approval', 'draft', 'final', 'working', 'built', 'unbuilt'];
 const ORIGINS: OriginFilter[] = ['all', 'originals', 'variants'];
 
-type Listed = Pick<ProjectSummary, 'id' | 'name' | 'base' | 'version' | 'updated' | 'category' | 'derived_from' | 'draft'>;
+type Listed = Pick<ProjectSummary, 'id' | 'kind' | 'name' | 'base' | 'version' | 'updated' | 'category' | 'derived_from' | 'draft' | 'plan_built'>;
 
 export interface FilterContext {
   /** Projects with a change queued or running. */
@@ -52,6 +54,8 @@ function statusOk(p: Listed, s: StatusFilter, ctx: FilterContext): boolean {
   switch (s) {
     case 'all': return true;
     case 'approval': return !!p.draft;
+    case 'draft': return isDraft(p);
+    case 'final': return !isDraft(p);
     case 'working': return ctx.working.has(p.id);
     case 'built': return !!p.version;
     case 'unbuilt': return !p.version;

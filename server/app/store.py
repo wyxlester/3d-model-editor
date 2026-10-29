@@ -15,10 +15,12 @@ import copy
 import json
 import os
 import re
+import shutil
 import tempfile
 import threading
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -145,6 +147,22 @@ class ProjectStore:
 
     def ids(self) -> list[str]:
         return sorted(p.parent.name for p in self.root.glob("*/project.json"))
+
+    def trash(self, pid: str, trash_dir: Path) -> Path:
+        """Delete a project by moving its whole folder to trash_dir/<id>-<UTC timestamp>/ (Lester,
+        29 Oct: delete, with the files kept so it can be recovered by hand). It is then gone from
+        every list and lookup, which all read data/projects. Returns the folder it was moved to."""
+        src = self._dir(pid)
+        with self.lock(pid):
+            if not (src / "project.json").exists():
+                raise NotFound(pid)
+            trash_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            dest, n = trash_dir / f"{pid}-{stamp}", 2
+            while dest.exists():  # deleted twice in one second (a recovered copy deleted again)
+                dest, n = trash_dir / f"{pid}-{stamp}-{n}", n + 1
+            shutil.move(str(src), str(dest))
+        return dest
 
     # ---- versions ---------------------------------------------------------------------
     def version_dir(self, pid: str, n: int) -> Path:
