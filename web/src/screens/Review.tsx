@@ -86,7 +86,8 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
   const pinAction = (pin: Pin) => {
     if (!p) return;
     if (pin.status === 'open') {
-      void run('Sending to the AI', () => api.replyPin(p.id, pin.id, 'Please make this change.'), reloadShip);
+      // Reload once the job starts, so the card shows "AI working" with its spinner straight away.
+      void run('Sending to the AI', async () => { const r = await api.replyPin(p.id, pin.id, 'Please make this change.'); reloadShip(); return r; }, reloadShip, reloadShip);
     } else if (pin.status === 'waiting') {
       api.setPinStatus(p.id, pin.id, 'resolved').then(reloadShip, (e) => setErr(errorText(e)));
     } else if (pin.status === 'resolved' && pin.before_version != null && pin.after_version != null) {
@@ -268,7 +269,9 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
                 <span style={{ lineHeight: 1.5 }}>“{pin.messages[0]?.text ?? ''}”</span>
                 {pin.messages.length > 1 && <span className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>AI: {pin.messages[pin.messages.length - 1].text}</span>}
                 <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span className={`chip ${STATUS_CHIP[pin.status] ?? 'grey'}`} style={{ fontSize: 12, padding: '3px 8px' }}>{STATUS_TEXT[pin.status] ?? pin.status}</span>
+                  <span className={`chip ${STATUS_CHIP[pin.status] ?? 'grey'}`} style={{ fontSize: 12, padding: '3px 8px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    {pin.status === 'working' && <span className="spinner" aria-hidden="true" />}{STATUS_TEXT[pin.status] ?? pin.status}
+                  </span>
                   <button className="btn sm" disabled={pin.status === 'working' || (pin.status === 'resolved' && pin.after_version == null)}
                     onClick={(e) => { e.stopPropagation(); pinAction(pin); }}>{actionLabel(pin)}</button>
                 </span>

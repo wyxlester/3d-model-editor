@@ -1,4 +1,4 @@
-import { Component, useState, type ReactNode } from 'react';
+import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import { MOCK } from '../api';
 import { recall, useTicker, type RunningJob } from '../hooks';
@@ -57,6 +57,18 @@ export function JobLines({ jobs, dismiss }: { jobs: RunningJob[]; dismiss: (k: n
   );
 }
 
+/** A spinner while the AI works, with seconds counting, so a wait never looks like a frozen screen (Lester, 29 Oct). */
+export function AiWorking({ text = 'AI is working…', since }: { text?: string; since?: number }) {
+  useTicker(since != null);
+  const secs = since != null ? Math.max(0, Math.round((Date.now() - since) / 1000)) : null;
+  return (
+    <span className="ai-working" role="status">
+      <span className="spinner" aria-hidden="true" />
+      <span>{text}{secs != null && <span className="faint"> · {secs} s</span>}</span>
+    </span>
+  );
+}
+
 const bubbleClass = (who: string) => (who === 'You' ? 'me' : who === 'Customer' ? 'customer' : 'ai');
 
 /** The chat panel every screen carries (Lester, 29 Oct). */
@@ -74,16 +86,25 @@ export function ChatPanel(props: {
 }) {
   const [draft, setDraft] = useState(() => [...(props.carried ?? [])].reverse().find((m) => m.who === 'You')?.text ?? '');
   const [err, setErr] = useState(false);
+  // What was just sent, until the AI's job finishes: shown at once, with a spinner under it.
+  const [waiting, setWaiting] = useState<{ text: string; from: number; since: number } | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
   const send = async () => {
     const t = draft.trim();
     if (!t) { setErr(true); return; }
     setDraft('');
-    await props.onSend(t);
+    setWaiting({ text: t, from: props.messages.length, since: Date.now() });
+    try { await props.onSend(t); } finally { setWaiting(null); }
   };
   const lastAi = [...props.messages].map((m, i) => [m, i] as const).reverse().find(([m]) => m.who === 'AI')?.[1];
+  const echoed = !!waiting && props.messages.slice(waiting.from).some((m) => m.who === 'You' && m.text === waiting.text);
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [props.messages.length, waiting]);
   return (
     <div className="chat">
-      <div className="chat-log">
+      <div className="chat-log" ref={logRef}>
         {props.intro}
         {props.carried && props.carried.length > 0 && (
           <>
@@ -100,6 +121,8 @@ export function ChatPanel(props: {
             {i === lastAi && props.afterLastAi}
           </div>
         ))}
+        {waiting && !echoed && <div className="bubble me">{waiting.text}</div>}
+        {waiting && <div className="bubble ai"><AiWorking since={waiting.since} /></div>}
       </div>
       <div className="chat-input">
         {props.footer}
