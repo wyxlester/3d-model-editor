@@ -2,7 +2,7 @@
 // VITE_MOCK=1 routes every call to an in-browser mock (src/mock) for development before the
 // server exists. The default build always talks to the real /api.
 import type {
-  Catalog, ExportResult, Health, Job, Part, Pin, Project, ProjectBase, ProjectKind, ProjectSummary,
+  Attachment, Catalog, ExportResult, Health, Job, Part, Pin, Project, ProjectBase, ProjectKind, ProjectSummary,
   RouteResult, Scene, SceneSpec, UnrealReport, Vec3,
 } from './types';
 
@@ -65,8 +65,10 @@ export const api = {
   project: (id: string) => call<Project>('GET', `/api/projects/${enc(id)}`),
   parts: (id: string, n: number) => call<Part[]>('GET', `/api/projects/${enc(id)}/versions/${n}/parts.json`),
   patchSpec: (id: string, patch: Record<string, unknown>) => call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/spec`, { patch }),
-  chat: (id: string, message: string, mode: 'build' | 'research') =>
-    call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/chat`, { message, mode }),
+  chat: (id: string, message: string, mode: 'build' | 'research', attachments: string[] = []) =>
+    call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/chat`, attachments.length ? { message, mode, attachments } : { message, mode }),
+  upload: (id: string, file: { name: string; type: string; data: string }) =>
+    call<{ attachment: Attachment }>('POST', `/api/projects/${enc(id)}/uploads`, file),
   addPin: (id: string, pin: { part: string; point: Vec3; text: string; author: string }) =>
     call<{ pin: Pin; job_id: string }>('POST', `/api/projects/${enc(id)}/pins`, pin),
   replyPin: (id: string, pinId: string, text: string) =>

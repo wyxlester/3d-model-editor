@@ -38,10 +38,20 @@ export interface BuildReport {
 
 export type PinStatus = 'open' | 'working' | 'waiting' | 'resolved';
 
+/** A picture or document sent with a chat message (contract §10, Attachments). */
+export interface Attachment {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  url: string;
+}
+
 export interface Message {
   who: 'You' | 'AI' | 'Customer' | string;
   text: string;
   at: string;
+  attachments?: Attachment[];
 }
 
 export interface Pin {

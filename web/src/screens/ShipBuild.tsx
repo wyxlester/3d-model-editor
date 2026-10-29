@@ -10,7 +10,7 @@ import { blenderToGltf, type ViewName } from '../lib/frames';
 import { hiddenParts, isStationName, jointsOf, levelsFor, partLabel } from '../lib/parts';
 import { groupPins, pinSummary, shortTime } from '../lib/pins';
 import { paths } from '../lib/routing';
-import type { Part, Pin, Project, Vec3 } from '../types';
+import type { Attachment, Part, Pin, Project, Vec3 } from '../types';
 import { PIN_COLORS, ShipViewer, ViewButtons, type JointPreview, type PickResult } from '../viewer/Viewer';
 import { ModeSwitch } from './ShipResearch';
 
@@ -122,9 +122,9 @@ export function ShipBuild() {
     try { await fn(); await afterJob(); } catch (e) { setActionErr(errorText(e)); }
   };
 
-  const chat = async (message: string) => {
+  const chat = async (message: string, atts: Attachment[] = []) => {
     if (!id) return;
-    await run('Working on the ship', async () => { const r = await api.chat(id, message, 'build'); void afterJob(); return r; }, afterJob, afterJob);
+    await run('Working on the ship', async () => { const r = await api.chat(id, message, 'build', atts.map((a) => a.id)); void afterJob(); return r; }, afterJob, afterJob);
   };
 
   const undo = () => pinAction(async () => { if (id) { const r = await api.undo(id); setProject(r.project); } });
@@ -156,7 +156,7 @@ export function ShipBuild() {
             <button role="tab" className={`tab ${tab === 'comments' ? 'on' : ''}`} onClick={() => setTab('comments')}>Comments ({pins.length})</button>
           </div>
           {tab === 'chat' ? (
-            <ChatPanel messages={project?.messages ?? []} carried={carried} onSend={chat} busy={busy}
+            <ChatPanel messages={project?.messages ?? []} carried={carried} onSend={chat} busy={busy} projectId={id}
               label="Ask about the whole ship" placeholder="What's still unverified?"
               empty="For a change to one part, pin a comment on it: the AI will know exactly which part you mean. Use this chat for the whole ship." />
           ) : (

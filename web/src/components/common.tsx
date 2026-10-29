@@ -1,10 +1,11 @@
 import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
-import { MOCK } from '../api';
+import { MOCK, api, errorText } from '../api';
+import { ACCEPT, fileType, isImage, readAsDataUrl, refuse, sizeText } from '../lib/attachments';
 import { recall, useTicker, type RunningJob } from '../hooks';
 import { describe } from '../lib/jobs';
 import { paths } from '../lib/routing';
-import type { EvidenceStatus, Message } from '../types';
+import type { Attachment, EvidenceStatus, Message } from '../types';
 
 export function Logo() {
   return (
@@ -71,12 +72,27 @@ export function AiWorking({ text = 'AI is working…', since }: { text?: string;
 
 const bubbleClass = (who: string) => (who === 'You' ? 'me' : who === 'Customer' ? 'customer' : 'ai');
 
-/** The chat panel every screen carries (Lester, 29 Oct). */
+/** Pictures and documents on a message: thumbnails for pictures, a labelled link for the rest. */
+export function AttachmentList({ items }: { items: Attachment[] }) {
+  if (!items.length) return null;
+  return (
+    <span className="attach-list">
+      {items.map((a) => isImage(a.type)
+        ? <a key={a.id} href={a.url} target="_blank" rel="noreferrer" title={a.name}><img className="attach-thumb" src={a.url} alt={a.name} /></a>
+        : <a key={a.id} className="attach-file" href={a.url} target="_blank" rel="noreferrer">{a.type === 'application/pdf' ? 'PDF' : 'Text'} · {a.name} · {sizeText(a.size)}</a>)}
+    </span>
+  );
+}
+
+interface Picked { key: number; name: string; state: 'uploading' | 'ready' | 'error'; att?: Attachment; error?: string; preview?: string }
+
+/** The chat panel every screen carries (Lester, 29 Oct). With `projectId`, it also takes pictures and documents. */
 export function ChatPanel(props: {
   messages: Message[];
-  onSend: (text: string) => Promise<unknown> | void;
+  onSend: (text: string, attachments: Attachment[]) => Promise<unknown> | void;
   label: string;
   placeholder: string;
+  projectId?: string;
   carried?: Message[] | null;
   busy?: boolean;
   intro?: ReactNode;
@@ -87,14 +103,47 @@ export function ChatPanel(props: {
   const [draft, setDraft] = useState(() => [...(props.carried ?? [])].reverse().find((m) => m.who === 'You')?.text ?? '');
   const [err, setErr] = useState(false);
   // What was just sent, until the AI's job finishes: shown at once, with a spinner under it.
-  const [waiting, setWaiting] = useState<{ text: string; from: number; since: number } | null>(null);
+  const [waiting, setWaiting] = useState<{ text: string; atts: Attachment[]; from: number; since: number } | null>(null);
+  const [picked, setPicked] = useState<Picked[]>([]);
+  const [dragging, setDragging] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const keyRef = useRef(0);
+  const canAttach = !!props.projectId;
+  const uploading = picked.some((f) => f.state === 'uploading');
+  const ready = picked.filter((f) => f.state === 'ready').map((f) => f.att!);
+
+  const addFiles = (files: File[]) => {
+    if (!props.projectId) return;
+    const pid = props.projectId;
+    for (const file of files) {
+      const key = ++keyRef.current;
+      const update = (patch: Partial<Picked>) => setPicked((ps) => ps.map((f) => (f.key === key ? { ...f, ...patch } : f)));
+      const why = refuse(file.name, file.type, file.size);
+      const preview = !why && isImage(fileType(file.name, file.type)) ? URL.createObjectURL(file) : undefined;
+      setPicked((ps) => [...ps, { key, name: file.name, state: why ? 'error' : 'uploading', error: why ?? undefined, preview }]);
+      if (why) continue;
+      readAsDataUrl(file)
+        .then((data) => api.upload(pid, { name: file.name, type: fileType(file.name, file.type), data }))
+        .then((r) => update({ state: 'ready', att: r.attachment }), (e) => update({ state: 'error', error: `${file.name}: ${errorText(e)}` }));
+    }
+  };
+  const remove = (key: number) => setPicked((ps) => {
+    const gone = ps.find((f) => f.key === key);
+    if (gone?.preview) URL.revokeObjectURL(gone.preview);
+    return ps.filter((f) => f.key !== key);
+  });
+
   const send = async () => {
-    const t = draft.trim();
+    if (uploading) return;
+    const t = draft.trim() || (ready.length ? (ready.length === 1 ? 'Please look at the attached file.' : 'Please look at the attached files.') : '');
     if (!t) { setErr(true); return; }
+    const atts = ready;
     setDraft('');
-    setWaiting({ text: t, from: props.messages.length, since: Date.now() });
-    try { await props.onSend(t); } finally { setWaiting(null); }
+    picked.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
+    setPicked([]);
+    setWaiting({ text: t, atts, from: props.messages.length, since: Date.now() });
+    try { await props.onSend(t, atts); } finally { setWaiting(null); }
   };
   const lastAi = [...props.messages].map((m, i) => [m, i] as const).reverse().find(([m]) => m.who === 'AI')?.[1];
   const echoed = !!waiting && props.messages.slice(waiting.from).some((m) => m.who === 'You' && m.text === waiting.text);
@@ -102,8 +151,13 @@ export function ChatPanel(props: {
     const el = logRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [props.messages.length, waiting]);
+  const dropProps = canAttach ? {
+    onDragOver: (e: React.DragEvent) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } },
+    onDragLeave: (e: React.DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); },
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); setDragging(false); addFiles([...e.dataTransfer.files]); },
+  } : {};
   return (
-    <div className="chat">
+    <div className={`chat ${dragging ? 'dropping' : ''}`} {...dropProps}>
       <div className="chat-log" ref={logRef}>
         {props.intro}
         {props.carried && props.carried.length > 0 && (
@@ -117,25 +171,48 @@ export function ChatPanel(props: {
         {props.messages.map((m, i) => (
           <div key={i} className={`bubble ${bubbleClass(m.who)}`}>
             {m.who === 'Customer' && <span className="who">Customer</span>}
+            <AttachmentList items={m.attachments ?? []} />
             {m.text}
             {i === lastAi && props.afterLastAi}
           </div>
         ))}
-        {waiting && !echoed && <div className="bubble me">{waiting.text}</div>}
+        {waiting && !echoed && <div className="bubble me"><AttachmentList items={waiting.atts} />{waiting.text}</div>}
         {waiting && <div className="bubble ai"><AiWorking since={waiting.since} /></div>}
       </div>
       <div className="chat-input">
         {props.footer}
         <label htmlFor="chat-ask">{props.label}</label>
+        {picked.length > 0 && (
+          <div className="attach-chips">
+            {picked.map((f) => (
+              <span key={f.key} className={`attach-chip ${f.state}`}>
+                {f.preview ? <img src={f.preview} alt="" /> : null}
+                {f.state === 'uploading' && <span className="spinner" aria-hidden="true" />}
+                <span className="attach-name">{f.state === 'error' ? f.error : f.name}</span>
+                <button type="button" aria-label={`Remove ${f.name}`} onClick={() => remove(f.key)}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 8 }}>
+          {canAttach && <>
+            <button type="button" className="btn muted" style={{ width: 40, height: 40, justifyContent: 'center', fontSize: 18, padding: 0 }}
+              aria-label="Attach pictures or documents" title="Attach pictures, PDFs or text files. You can also drop or paste them here."
+              onClick={() => fileRef.current?.click()}>+</button>
+            <input ref={fileRef} type="file" multiple accept={ACCEPT} hidden
+              onChange={(e) => { addFiles([...(e.target.files ?? [])]); e.target.value = ''; }} />
+          </>}
           <input
-            id="chat-ask" className="field" style={{ flex: 1 }} value={draft} placeholder={props.placeholder}
+            id="chat-ask" className="field" style={{ flex: 1, minWidth: 0 }} value={draft} placeholder={props.placeholder}
             onChange={(e) => { setDraft(e.target.value); setErr(false); }}
             onKeyDown={(e) => { if (e.key === 'Enter') void send(); }}
+            onPaste={(e) => { if (canAttach && e.clipboardData.files.length) { e.preventDefault(); addFiles([...e.clipboardData.files]); } }}
           />
-          <button className="btn primary lg" style={{ height: 40 }} onClick={() => void send()} disabled={props.busy}>Send</button>
+          <button className="btn primary lg" style={{ height: 40 }} onClick={() => void send()} disabled={props.busy || uploading}>Send</button>
         </div>
         {err && <span className="bad" style={{ fontSize: 12 }}>Type a request first.</span>}
+        {uploading && <span className="faint" style={{ fontSize: 12 }}>Uploading… Send is ready when it finishes.</span>}
+        {picked.length > 0 && !uploading && <span className="faint" style={{ fontSize: 12 }}>Files go to the AI in the cloud with your message: public material only.</span>}
       </div>
     </div>
   );

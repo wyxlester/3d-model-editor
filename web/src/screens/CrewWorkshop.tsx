@@ -160,6 +160,7 @@ export function CrewWorkshop() {
             placeholder="Animation: brace as we come alongside"
             empty="Ask for anything the pickers don't have: a life vest like the boarding team wears, a beard, a move."
             onSend={sendChat}
+            projectId={id}
             afterLastAi={offerPicker ? (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                 <button className="btn primary" style={{ height: 36, padding: '0 14px', borderRadius: 8 }} onClick={() => { setPickerName(''); setDialog(true); }}>Add as a picker</button>

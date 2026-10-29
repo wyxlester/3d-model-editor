@@ -208,7 +208,8 @@ Every body is JSON. Long work returns `{"job_id"}`; poll `GET /api/jobs/{id}`, w
 | GET `/api/projects/{id}/versions/{n}/model.glb` | | the GLB |
 | GET `/api/projects/{id}/versions/{n}/parts.json` | | the parts list |
 | POST `/api/projects/{id}/spec` | `{"patch": {...}}` (deep-merged into the spec; Inspect drawer edits) | `{"job_id"}` → new version |
-| POST `/api/projects/{id}/chat` | `{"message","mode":"build|research"}` | `{"job_id"}` |
+| POST `/api/projects/{id}/uploads` | `{"name","type","data"}` (`data` is base64; see Attachments) | `{"attachment"}` |
+| POST `/api/projects/{id}/chat` | `{"message","mode":"build|research","attachments"?:[upload id]}` | `{"job_id"}` |
 | POST `/api/projects/{id}/pins` | `{"part","point":[x,y,z],"text","author"}` | `{"pin","job_id"}` |
 | POST `/api/projects/{id}/pins/{pin_id}/reply` | `{"text"}` | `{"job_id"}` |
 | PATCH `/api/projects/{id}/pins/{pin_id}` | `{"status":"open|resolved"}` | `{"pin"}` |
@@ -233,10 +234,24 @@ Every body is JSON. Long work returns `{"job_id"}`; poll `GET /api/jobs/{id}`, w
   "pins": [{"id": "pin_1", "part": "Roof__Searchlight", "point": [x,y,z], "status": "open|working|waiting|resolved",
             "author": "You", "messages": [{"who": "You|AI|Customer", "text": "...", "at": "..."}],
             "before_version": 2, "after_version": 3}],
-  "messages": [{"who": "You|AI", "text": "...", "at": "..."}],
+  "messages": [{"who": "You|AI", "text": "...", "at": "...", "attachments"?: [Attachment]}],
   "research": null
 }
 ```
+
+**Attachments** (pictures and documents sent with a chat message). An upload is stored at once and
+returns `{"id","name","type","size","url"}`; the chat message then names it by `id`, and the AI
+receives the file itself alongside the text: pictures as images, PDFs as documents, text files as
+text. Accepted types and limits (the model's own limits):
+
+| Kind | MIME types | Max size |
+|---|---|---|
+| Picture | `image/png`, `image/jpeg`, `image/webp`, `image/gif` | 5 MB |
+| Document | `application/pdf` | 20 MB |
+| Text | `text/plain`, `text/markdown`, `text/csv` | 1 MB |
+
+Anything else is refused with 400 and a sentence saying what to do (e.g. save a Word file as PDF).
+Uploads go to a cloud LLM with the message, so the public-sources-only rule applies to them too.
 
 The pin `point` is in **glTF/three.js coordinates** (Y-up), because that is where the click
 happened; `part` is the clicked mesh's node name.
@@ -246,6 +261,7 @@ happened; `part` is the clicked mesh's node name.
 ```
 data/projects/<id>/project.json
 data/projects/<id>/v<n>/{spec.json, model.glb, model.blend, parts.json, build_report.json}
+data/projects/<id>/uploads/<upload id>.<ext>   and <upload id>.json (name, type, size)
 data/scenes/<id>.json
 data/packages/<package_id>/...  and <package_id>.zip
 ```

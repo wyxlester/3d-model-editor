@@ -5,6 +5,7 @@ import { MAX_POLL_FAILURES, describe as describePoll, nextDelayMs, pollReducer, 
 import { blenderToGltf, cameraFor, gltfToBlender, jointAxisGltf } from './frames';
 import { assetLabel, clothesSlot, mergePatch, toggleIn } from './spec';
 import { targetFor } from './routing';
+import { fileType, refuse, sizeText } from './attachments';
 
 const part = (path: string, parent: string | null, extra: Partial<Part> = {}): Part => ({
   path, label: '', parent, joint: null, station: null,
@@ -198,5 +199,32 @@ describe('comment summaries', () => {
     expect(shortTime('nonsense')).toBe('');
     expect(shortTime(null)).toBe('');
     expect(shortTime('2026-10-29T00:39:39Z')).toMatch(/^\d{1,2} Oct, \d{2}:\d{2}$/);
+  });
+});
+
+describe('chat attachments', () => {
+  const MB = 1024 * 1024;
+  it('accepts pictures, PDFs and text, fixing common wrong types', () => {
+    expect(refuse('bow.png', 'image/png', 1000)).toBeNull();
+    expect(fileType('bow.jpg', 'image/jpg')).toBe('image/jpeg');
+    expect(fileType('notes.md', '')).toBe('text/markdown');
+    expect(refuse('drawing.pdf', 'application/pdf', 20 * MB)).toBeNull();
+  });
+  it('refuses with a sentence saying what to do', () => {
+    expect(refuse('spec.docx', 'application/msword', 10)).toMatch(/PDF/);
+    expect(refuse('IMG.HEIC', 'image/heic', 10)).toMatch(/JPEG/);
+    expect(refuse('model.glb', 'model/gltf-binary', 10)).toMatch(/only pictures/);
+    expect(refuse('x.png.exe', '', 10)).toMatch(/only pictures/);
+  });
+  it('holds the same size limits as the server', () => {
+    expect(refuse('a.png', 'image/png', 5 * MB)).toBeNull();
+    expect(refuse('a.png', 'image/png', 5 * MB + 1)).toMatch(/limit for this kind of file is 5 MB/);
+    expect(refuse('a.pdf', 'application/pdf', 20 * MB + 1)).toMatch(/20 MB/);
+    expect(refuse('a.txt', 'text/plain', 0)).toMatch(/empty/);
+  });
+  it('writes sizes for people', () => {
+    expect(sizeText(900)).toBe('900 B');
+    expect(sizeText(2048)).toBe('2 KB');
+    expect(sizeText(3.25 * MB)).toBe('3.3 MB');
   });
 });

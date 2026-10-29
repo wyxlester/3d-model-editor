@@ -8,7 +8,7 @@ import { remember, useJobs, useLoad, useProject } from '../hooks';
 import type { ViewName } from '../lib/frames';
 import { partLabel } from '../lib/parts';
 import { paths } from '../lib/routing';
-import type { ExportResult, Pin, Scene, UnrealReport, Vec3 } from '../types';
+import type { Attachment, ExportResult, Pin, Scene, UnrealReport, Vec3 } from '../types';
 import { PIN_COLORS, ShipViewer, ViewButtons } from '../viewer/Viewer';
 import { ScenePicker } from './AssemblyScenePicker';
 import { specOf } from './Assembly';
@@ -69,7 +69,7 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
   const partPaths = (p?.parts ?? []).map((x) => x.path);
 
   const reloadShip = () => { void ship.reload(); };
-  const chat = (text: string) => p ? run('Working on it', () => api.chat(p.id, text, 'build'), reloadShip) : undefined;
+  const chat = (text: string, atts: Attachment[] = []) => p ? run('Working on it', () => api.chat(p.id, text, 'build', atts.map((a) => a.id)), reloadShip) : undefined;
 
   const sendPin = () => {
     if (!p || !draft || !draftText.trim()) return;
@@ -192,7 +192,7 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
             {p && !versions.length && <span className="faint">No versions yet.</span>}
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', borderTop: '1px solid var(--border)', marginTop: 4 }}>
-            <ChatPanel messages={p?.messages ?? []} onSend={chat} busy={busy} label="Chat" placeholder="Do all open feedback" />
+            <ChatPanel messages={p?.messages ?? []} onSend={chat} busy={busy} projectId={p?.id} label="Chat" placeholder="Do all open feedback" />
           </div>
         </aside>
 

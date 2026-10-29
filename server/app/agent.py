@@ -489,7 +489,7 @@ def system_prompt(kind: str, mode: str) -> str:
 # ---- runners ----------------------------------------------------------------------------
 
 class AgentRunner(Protocol):
-    def run(self, session: AgentSession, prompt: str, mode: str, log: Log) -> str: ...
+    def run(self, session: AgentSession, prompt: str | list[dict], mode: str, log: Log) -> str: ...
 
 
 class ClaudeAgentRunner:
@@ -498,10 +498,10 @@ class ClaudeAgentRunner:
     def __init__(self, model: str = "claude-opus-5-5", max_turns: int = 24, timeout_s: float = 1200):
         self.model, self.max_turns, self.timeout_s = model, max_turns, timeout_s
 
-    def run(self, session: AgentSession, prompt: str, mode: str, log: Log) -> str:
+    def run(self, session: AgentSession, prompt: str | list[dict], mode: str, log: Log) -> str:
         return asyncio.run(asyncio.wait_for(self._run(session, prompt, mode, log), self.timeout_s))
 
-    async def _run(self, session: AgentSession, prompt: str, mode: str, log: Log) -> str:
+    async def _run(self, session: AgentSession, prompt: str | list[dict], mode: str, log: Log) -> str:
         from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock,
                                       ToolUseBlock, create_sdk_mcp_server, query, tool)
 
@@ -526,7 +526,12 @@ class ClaudeAgentRunner:
             cwd=str(session.store.version_dir(session.pid, 0).parent))
         texts: list[str] = []
         final: str | None = None
-        async for m in query(prompt=prompt, options=opts):
+        async def turn():
+            # Content blocks (attached pictures and PDFs) go as one streamed user message.
+            yield {"type": "user", "session_id": "", "parent_tool_use_id": None,
+                   "message": {"role": "user", "content": prompt}}
+
+        async for m in query(prompt=prompt if isinstance(prompt, str) else turn(), options=opts):
             if isinstance(m, AssistantMessage):
                 for b in m.content:
                     if isinstance(b, TextBlock) and b.text.strip():
@@ -546,10 +551,10 @@ class ScriptedAgent:
     def __init__(self, steps: list[tuple[str, dict]] | None = None, reply: str = "Done."):
         self.steps = steps or []
         self.reply = reply
-        self.prompts: list[str] = []
+        self.prompts: list[str | list[dict]] = []
         self.results: list[tuple[str, str, bool]] = []
 
-    def run(self, session: AgentSession, prompt: str, mode: str, log: Log) -> str:
+    def run(self, session: AgentSession, prompt: str | list[dict], mode: str, log: Log) -> str:
         self.prompts.append(prompt)
         for name, args in self.steps:
             args = {k: (v.format(pin_id=session.pin_id) if isinstance(v, str) else v) for k, v in args.items()}

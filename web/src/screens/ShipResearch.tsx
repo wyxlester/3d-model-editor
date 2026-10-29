@@ -8,7 +8,7 @@ import { ChatPanel, ErrorNote, EvidenceChip, JobLines, Loading, PRIORITY, TopBar
 import { remember, useJobs, useProject } from '../hooks';
 import { partLabel } from '../lib/parts';
 import { paths } from '../lib/routing';
-import type { Project, Research } from '../types';
+import type { Attachment, Project, Research } from '../types';
 
 type Sec = 'summary' | 'photos' | 'platform' | 'closeups' | 'articulation' | 'plan' | 'questions' | 'sources';
 type Sel = { kind: 'claim'; i: number } | { kind: 'source'; i: number } | { kind: 'photo'; i: number } | { kind: 'question'; i: number } | null;
@@ -26,10 +26,10 @@ export function ShipResearch() {
   const [excluded, setExcluded] = useState<Record<string, boolean>>({});
   useEffect(() => { if (id) remember('ship', id); }, [id]);
 
-  const ask = async (message: string) => {
+  const ask = async (message: string, atts: Attachment[] = []) => {
     if (!id) return;
     await run('Researching', async () => {
-      const r = await api.chat(id, message, 'research');
+      const r = await api.chat(id, message, 'research', atts.map((a) => a.id));
       void reload();
       return r;
     }, () => void reload(), () => void reload());
@@ -55,6 +55,7 @@ export function ShipResearch() {
             messages={project?.messages ?? []}
             carried={carried}
             onSend={ask}
+            projectId={id}
             busy={busy}
             label="Ask or direct the research"
             placeholder="Find a true overhead photo"

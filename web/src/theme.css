@@ -178,3 +178,15 @@ h1.title { margin: 0; font-size: 24px; font-weight: 500; }
 
 input[type='range'] { accent-color: var(--accent); width: 100%; }
 select.field { height: 34px; padding: 0 8px; }
+
+/* chat attachments */
+.chat.dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.attach-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.attach-thumb { display: block; width: 96px; height: 72px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); }
+.attach-file { font-size: 12px; padding: 4px 8px; border-radius: 6px; background: var(--bg); color: var(--accent-link); overflow-wrap: anywhere; }
+.attach-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.attach-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; font-size: 12px; padding: 4px 4px 4px 6px; border-radius: 8px; background: var(--bubble); }
+.attach-chip img { width: 28px; height: 28px; object-fit: cover; border-radius: 4px; }
+.attach-chip.error { background: var(--red-bg); color: var(--red-text); }
+.attach-chip .attach-name { min-width: 0; overflow-wrap: anywhere; }
+.attach-chip button { width: 22px; height: 22px; flex-shrink: 0; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }

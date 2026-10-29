@@ -4,7 +4,7 @@
 import { ApiError } from '../api';
 import { mergePatch } from '../lib/spec';
 import type {
-  Catalog, Job, Message, Part, Pin, Project, ProjectSummary, RouteResult, Scene, SceneSpec, UnrealReport, VersionInfo,
+  Attachment, Catalog, Job, Message, Part, Pin, Project, ProjectSummary, RouteResult, Scene, SceneSpec, UnrealReport, VersionInfo,
 } from '../types';
 import shipPartsJson from '../../public/mock/ship_parts.json';
 import { mockResearch } from './research';
@@ -98,6 +98,9 @@ export function resetMock() {
   store = seed();
   save();
 }
+
+// Uploads live for this page load only (object URLs); mock mode never sends them anywhere.
+const mockUploads: Record<string, Attachment> = {};
 
 function startJob(steps: string[], finish: () => unknown, fail?: string): { job_id: string } {
   const id = `job_${++store.seq}`;
@@ -212,9 +215,18 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
       return { version: n };
     });
   }
+  if ((r = m(/^\/api\/projects\/([^/]+)\/uploads$/)) && method === 'POST') {
+    proj(r[1]);
+    const raw = atob(String(body.data).replace(/^data:[^,]*,/, ''));
+    const blob = new Blob([Uint8Array.from(raw, (c) => c.charCodeAt(0))], { type: body.type || 'application/octet-stream' });
+    const a: Attachment = { id: `u_${(++store.seq).toString(16).padStart(8, '0')}`, name: String(body.name), type: body.type || 'text/plain', size: blob.size, url: URL.createObjectURL(blob) };
+    mockUploads[a.id] = a;
+    return { attachment: a };
+  }
   if ((r = m(/^\/api\/projects\/([^/]+)\/chat$/)) && method === 'POST') {
     const p = proj(r[1]);
-    p.messages = [...p.messages, { who: 'You', text: String(body.message), at: now() }];
+    const attachments = ((body.attachments ?? []) as string[]).map((id) => mockUploads[id]).filter(Boolean);
+    p.messages = [...p.messages, { who: 'You', text: String(body.message), at: now(), ...(attachments.length ? { attachments } : {}) }];
     save();
     const research = body.mode === 'research';
     return startJob(research ? ['Reading the research', 'Searching sources', 'Updating the research'] : ['Reading the request', ...buildSteps], () => {
