@@ -2,6 +2,7 @@
 
 data/projects/<id>/project.json                 metadata, pins, messages, research, undo stack
 data/projects/<id>/v<n>/{spec.json, model.glb, model.blend, parts.json, build_report.json}
+data/projects/<id>/uploads/<upload id>.<ext> and .json   chat attachments
 
 A build always makes a new version folder. A version becomes *current* when its build is ok
 (or when the project has no current version yet, so a first failed build still leaves a spec to
@@ -23,6 +24,7 @@ from typing import Any, Iterator
 from .jobs import now_iso
 
 ID_RE = re.compile(r"^[a-z0-9_]+$")
+UPLOAD_ID_RE = re.compile(r"^u_[a-f0-9]{8}$")
 
 
 def atomic_write_json(path: Path, data: Any) -> None:
@@ -215,11 +217,54 @@ class ProjectStore:
                 "discarded": bool(p.get("discarded"))}
 
     # ---- messages, pins, research -----------------------------------------------------
-    def add_message(self, pid: str, who: str, text: str) -> dict:
+    def add_message(self, pid: str, who: str, text: str, attachments: list[dict] | None = None) -> dict:
         msg = {"who": who, "text": text, "at": now_iso()}
+        if attachments:
+            msg["attachments"] = attachments
         with self.edit(pid) as project:
             project["messages"].append(msg)
         return msg
+
+    # ---- uploads (chat attachments) ---------------------------------------------------
+    def add_upload(self, pid: str, name: str, mime: str, ext: str, raw: bytes) -> dict:
+        uid = "u_" + uuid.uuid4().hex[:8]
+        d = self._dir(pid) / "uploads"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{uid}{ext}").write_bytes(raw)
+        meta = {"id": uid, "name": name, "type": mime, "size": len(raw),
+                "url": f"/api/files/projects/{pid}/uploads/{uid}{ext}"}
+        atomic_write_json(d / f"{uid}.json", meta)
+        return meta
+
+    @property
+    def inbox(self) -> Path:
+        """Files attached on Home, before there is a project: data/uploads/."""
+        return self.root.parent / "uploads"
+
+    def add_inbox_upload(self, name: str, mime: str, ext: str, raw: bytes) -> dict:
+        uid = "u_" + uuid.uuid4().hex[:8]
+        self.inbox.mkdir(parents=True, exist_ok=True)
+        (self.inbox / f"{uid}{ext}").write_bytes(raw)
+        meta = {"id": uid, "name": name, "type": mime, "size": len(raw), "url": f"/api/files/uploads/{uid}{ext}"}
+        atomic_write_json(self.inbox / f"{uid}.json", meta)
+        return meta
+
+    def get_upload(self, pid: str, uid: str) -> tuple[dict, bytes]:
+        """An upload of this project; one attached on Home is copied in on first use."""
+        if not UPLOAD_ID_RE.match(uid):
+            raise NotFound(uid)
+        d = self._dir(pid) / "uploads"
+        meta = read_json(d / f"{uid}.json")
+        if meta is None:
+            held = read_json(self.inbox / f"{uid}.json")
+            if held is None:
+                raise NotFound(uid)
+            fname = Path(held["url"]).name
+            d.mkdir(parents=True, exist_ok=True)
+            (d / fname).write_bytes((self.inbox / fname).read_bytes())
+            meta = dict(held, url=f"/api/files/projects/{pid}/uploads/{fname}")
+            atomic_write_json(d / f"{uid}.json", meta)
+        return meta, (d / Path(meta["url"]).name).read_bytes()
 
     def add_pin(self, pid: str, part: str, point: list, text: str, author: str) -> dict:
         with self.edit(pid) as project:

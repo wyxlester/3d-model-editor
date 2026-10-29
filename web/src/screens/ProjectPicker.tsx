@@ -1,5 +1,5 @@
 // /ship and /crew without a project: pick one or start a new one.
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { ErrorNote, JobLines, TopBar } from '../components/common';
 import { useVariantDialog } from '../components/VariantDialog';
@@ -9,6 +9,8 @@ import type { ProjectBase, ProjectKind } from '../types';
 
 export function ProjectPicker({ kind }: { kind: ProjectKind }) {
   const nav = useNavigate();
+  // Home's conversation (and files) passes through this picker to the project chosen.
+  const carried = useLocation().state;
   const projects = useProjects();
   const catalog = useCatalog();
   const { jobs, run, dismiss, busy } = useJobs();
@@ -25,7 +27,7 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
       const r = await api.createProject(kind, base);
       id = r.project.id;
       return { job_id: r.job_id };
-    }, () => { remember(kind, id); nav(open(id)); });
+    }, () => { remember(kind, id); nav(open(id), { state: carried }); });
   };
 
   return (
@@ -38,7 +40,7 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
           <ErrorNote error={projects.error} retry={projects.reload} />
           {mine.map((p) => (
             <div key={p.id} style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
-              <Link to={projectPath(p)} onClick={() => remember(kind, p.id)} className="card" style={{ flex: 1, minWidth: 0, color: 'var(--text)', display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+              <Link to={projectPath(p)} state={carried} onClick={() => remember(kind, p.id)} className="card" style={{ flex: 1, minWidth: 0, color: 'var(--text)', display: 'flex', justifyContent: 'space-between', gap: 12 }}>
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                   <span style={{ fontWeight: 500 }}>{p.name}</span>
                   {p.derived_from && <span className="faint" style={{ fontSize: 12 }}>Variant of {p.derived_from.name} v{p.derived_from.version}</span>}

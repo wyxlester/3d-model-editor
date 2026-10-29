@@ -38,10 +38,20 @@ export interface BuildReport {
 
 export type PinStatus = 'open' | 'working' | 'waiting' | 'resolved';
 
+/** A picture or document sent with a chat message (contract §10, Attachments). */
+export interface Attachment {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  url: string;
+}
+
 export interface Message {
   who: 'You' | 'AI' | 'Customer' | string;
   text: string;
   at: string;
+  attachments?: Attachment[];
 }
 
 export interface Pin {
@@ -96,11 +106,20 @@ export interface CrewSpec {
     muscle: number;
     age_years: number;
     skin: string;
+    /** [r,g,b] 0..1 or null; absent in the default spec (CONTRACT §6 "Made by description"). */
+    hair_color?: Vec3 | null;
   };
-  clothes: { suit: string | null; shoes: string | null; hat: string | null; suit_color: Vec3 | null };
+  clothes: {
+    suit: string | null; shoes: string | null; hat: string | null; suit_color: Vec3 | null;
+    shoes_color?: Vec3 | null; hat_color?: Vec3 | null;
+  };
   equipment: string[];
   animations: string[];
+  /** Things the AI made from a description: Blender Python creating Clothes__* / Equipment__* objects. */
+  custom_items?: CustomItem[];
 }
+
+export interface CustomItem { id: string; description: string; code: string }
 
 /** A project's spec: a ship spec (§5) or a crew spec (§6), depending on `kind`. */
 export type ProjectSpec = { schema?: string } & Partial<Omit<ShipSpec, 'schema'>> & Partial<Omit<CrewSpec, 'schema' | 'id' | 'name'>> & Record<string, unknown>;

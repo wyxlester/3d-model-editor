@@ -5,6 +5,7 @@ import { MAX_POLL_FAILURES, describe as describePoll, nextDelayMs, pollReducer, 
 import { blenderToGltf, cameraFor, gltfToBlender, jointAxisGltf } from './frames';
 import { assetLabel, clothesSlot, mergePatch, toggleIn } from './spec';
 import { targetFor } from './routing';
+import { fileType, refuse, sizeText } from './attachments';
 
 const part = (path: string, parent: string | null, extra: Partial<Part> = {}): Part => ({
   path, label: '', parent, joint: null, station: null,
@@ -235,5 +236,87 @@ describe('variant review', () => {
     expect(projectPath({ kind: 'ship', id: 'p1', draft: { stage: 'ready' } })).toBe('/variant/p1');
     expect(projectPath({ kind: 'ship', id: 'p1', draft: null })).toBe('/ship/p1/build');
     expect(projectPath({ kind: 'crew', id: 'c1' })).toBe('/crew/c1');
+  });
+});
+
+describe('chat attachments', () => {
+  const MB = 1024 * 1024;
+  it('accepts pictures, PDFs and text, fixing common wrong types', () => {
+    expect(refuse('bow.png', 'image/png', 1000)).toBeNull();
+    expect(fileType('bow.jpg', 'image/jpg')).toBe('image/jpeg');
+    expect(fileType('notes.md', '')).toBe('text/markdown');
+    expect(refuse('drawing.pdf', 'application/pdf', 20 * MB)).toBeNull();
+  });
+  it('refuses with a sentence saying what to do', () => {
+    expect(refuse('spec.docx', 'application/msword', 10)).toMatch(/PDF/);
+    expect(refuse('IMG.HEIC', 'image/heic', 10)).toMatch(/JPEG/);
+    expect(refuse('model.glb', 'model/gltf-binary', 10)).toMatch(/only pictures/);
+    expect(refuse('x.png.exe', '', 10)).toMatch(/only pictures/);
+  });
+  it('holds the same size limits as the server', () => {
+    expect(refuse('a.png', 'image/png', 5 * MB)).toBeNull();
+    expect(refuse('a.png', 'image/png', 5 * MB + 1)).toMatch(/limit for this kind of file is 5 MB/);
+    expect(refuse('a.pdf', 'application/pdf', 20 * MB + 1)).toMatch(/20 MB/);
+    expect(refuse('a.txt', 'text/plain', 0)).toMatch(/empty/);
+  });
+  it('writes sizes for people', () => {
+    expect(sizeText(900)).toBe('900 B');
+    expect(sizeText(2048)).toBe('2 KB');
+    expect(sizeText(3.25 * MB)).toBe('3.3 MB');
+  });
+});
+
+import { HAIR_SWATCHES, describeMessage, hexToLinear, itemKind, itemsFor, madeSomethingNew, removeItemPatch, selectedSwatch } from './describe';
+
+describe('made by description', () => {
+  const item = (id: string, code: string, description = 'thing') => ({ id, code, description });
+
+  it('converts a screen colour to the linear colour Blender takes', () => {
+    expect(hexToLinear('#FFFFFF')).toEqual([1, 1, 1]);
+    expect(hexToLinear('#000000')).toEqual([0, 0, 0]);
+    // sRGB mid-grey is ~0.216 linear, not 0.5: sending 0.5 would look much paler
+    expect(hexToLinear('#808080')[0]).toBeCloseTo(0.216, 2);
+  });
+
+  it('lights the swatch the spec holds, default when unset, none for an AI-chosen colour', () => {
+    const blonde = hexToLinear(HAIR_SWATCHES.find((s) => s.id === 'blonde')!.hex);
+    expect(selectedSwatch(blonde, HAIR_SWATCHES)).toBe('blonde');
+    expect(selectedSwatch(null, HAIR_SWATCHES)).toBe('default');
+    expect(selectedSwatch(undefined, HAIR_SWATCHES)).toBe('default');
+    expect(selectedSwatch([0.2, 0.9, 0.2], HAIR_SWATCHES)).toBeNull();
+  });
+
+  it('prefixes the slot and refuses a blank description', () => {
+    expect(describeMessage('Clothes', '  a white   singlet ')).toBe('Clothes: a white singlet');
+    expect(describeMessage('Equipment', '   ')).toBeNull();
+  });
+
+  it('sorts items into tabs by the object names their code makes', () => {
+    expect(itemKind(item('a', 'crew.garment("Clothes__Singlet", ...)', 'white singlet'))).toBe('clothes');
+    expect(itemKind(item('b', 'crew.garment("Clothes__Cap", ...)', 'navy cap with badge'))).toBe('head');
+    expect(itemKind(item('c', 'o.name = "Equipment__Boat_hook"', 'boat hook'))).toBe('equipment');
+    expect(itemKind(item('d', 'pass', 'mystery'))).toBe('other');
+    const items = [item('a', 'Clothes__X'), item('c', 'Equipment__Y'), item('d', 'pass'), item('b', 'Clothes__Z', 'a beard')];
+    expect(itemsFor(items, 'Clothes').map((i) => i.id)).toEqual(['a', 'd']);
+    expect(itemsFor(items, 'Equipment').map((i) => i.id)).toEqual(['c']);
+    expect(itemsFor(items, 'Head').map((i) => i.id)).toEqual(['b']);
+    expect(itemsFor(undefined, 'Clothes')).toEqual([]);
+  });
+
+  it('removes one item and sends the whole remaining list', () => {
+    const items = [item('a', 'Clothes__X'), item('b', 'Equipment__Y')];
+    expect(removeItemPatch(items, 'a')).toEqual({ custom_items: [items[1]] });
+    expect(removeItemPatch(items, 'zzz').custom_items).toHaveLength(2);
+    expect(removeItemPatch(undefined, 'a')).toEqual({ custom_items: [] });
+  });
+});
+
+describe('picker offer', () => {
+  const item = (id: string) => ({ id, description: 'x', code: "crew.garment('Clothes__X', ['torso'], (1, 1, 1))" });
+  it('follows only a newly made item', () => {
+    expect(madeSomethingNew(['item_1'], [item('item_1')])).toBe(false);   // a reply that made nothing
+    expect(madeSomethingNew(['item_1'], [item('item_1'), item('item_2')])).toBe(true);
+    expect(madeSomethingNew(null, [item('item_1')])).toBe(false);         // page just opened
+    expect(madeSomethingNew([], undefined)).toBe(false);
   });
 });

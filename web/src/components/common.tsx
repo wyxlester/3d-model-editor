@@ -1,10 +1,11 @@
-import { Component, useState, type ReactNode } from 'react';
+import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
-import { MOCK } from '../api';
+import { MOCK, api, errorText } from '../api';
+import { ACCEPT, fileType, isImage, readAsDataUrl, refuse, sizeText } from '../lib/attachments';
 import { recall, useTicker, type RunningJob } from '../hooks';
 import { describe } from '../lib/jobs';
 import { paths } from '../lib/routing';
-import type { EvidenceStatus, Message } from '../types';
+import type { Attachment, EvidenceStatus, Message } from '../types';
 
 export function Logo() {
   return (
@@ -57,14 +58,114 @@ export function JobLines({ jobs, dismiss }: { jobs: RunningJob[]; dismiss: (k: n
   );
 }
 
+/** A spinner while the AI works, with seconds counting, so a wait never looks like a frozen screen (Lester, 29 Oct). */
+export function AiWorking({ text = 'AI is working…', since }: { text?: string; since?: number }) {
+  useTicker(since != null);
+  const secs = since != null ? Math.max(0, Math.round((Date.now() - since) / 1000)) : null;
+  return (
+    <span className="ai-working" role="status">
+      <span className="spinner" aria-hidden="true" />
+      <span>{text}{secs != null && <span className="faint"> · {secs} s</span>}</span>
+    </span>
+  );
+}
+
 const bubbleClass = (who: string) => (who === 'You' ? 'me' : who === 'Customer' ? 'customer' : 'ai');
 
-/** The chat panel every screen carries (Lester, 29 Oct). */
+/** Pictures and documents on a message: thumbnails for pictures, a labelled link for the rest. */
+export function AttachmentList({ items }: { items: Attachment[] }) {
+  if (!items.length) return null;
+  return (
+    <span className="attach-list">
+      {items.map((a) => isImage(a.type)
+        ? <a key={a.id} href={a.url} target="_blank" rel="noreferrer" title={a.name}><img className="attach-thumb" src={a.url} alt={a.name} /></a>
+        : <a key={a.id} className="attach-file" href={a.url} target="_blank" rel="noreferrer">{a.type === 'application/pdf' ? 'PDF' : 'Text'} · {a.name} · {sizeText(a.size)}</a>)}
+    </span>
+  );
+}
+
+interface Picked { key: number; name: string; state: 'uploading' | 'ready' | 'error'; att?: Attachment; error?: string; preview?: string }
+type Upload = (file: { name: string; type: string; data: string }) => Promise<{ attachment: Attachment }>;
+
+/**
+ * Picking files to send with a message: the + button, drop, paste, and chips with a spinner while
+ * each uploads. Shared by every chat panel and Home. `upload` null hides it all.
+ */
+export function useAttachPicker(upload: Upload | null, initial: Attachment[] = []) {
+  const keyRef = useRef(0);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [picked, setPicked] = useState<Picked[]>(() => initial.map((att) => ({
+    key: ++keyRef.current, name: att.name, state: 'ready', att, preview: isImage(att.type) ? att.url : undefined,
+  })));
+  const [dragging, setDragging] = useState(false);
+  const uploading = picked.some((f) => f.state === 'uploading');
+  const ready = picked.filter((f) => f.state === 'ready').map((f) => f.att!);
+
+  const addFiles = (files: File[]) => {
+    if (!upload) return;
+    for (const file of files) {
+      const key = ++keyRef.current;
+      const update = (patch: Partial<Picked>) => setPicked((ps) => ps.map((f) => (f.key === key ? { ...f, ...patch } : f)));
+      const why = refuse(file.name, file.type, file.size);
+      const preview = !why && isImage(fileType(file.name, file.type)) ? URL.createObjectURL(file) : undefined;
+      setPicked((ps) => [...ps, { key, name: file.name, state: why ? 'error' : 'uploading', error: why ?? undefined, preview }]);
+      if (why) continue;
+      readAsDataUrl(file)
+        .then((data) => upload({ name: file.name, type: fileType(file.name, file.type), data }))
+        .then((r) => update({ state: 'ready', att: r.attachment }), (e) => update({ state: 'error', error: `${file.name}: ${errorText(e)}` }));
+    }
+  };
+  const revoke = (f: Picked) => { if (f.preview?.startsWith('blob:')) URL.revokeObjectURL(f.preview); };
+  const remove = (key: number) => setPicked((ps) => {
+    const gone = ps.find((f) => f.key === key);
+    if (gone) revoke(gone);
+    return ps.filter((f) => f.key !== key);
+  });
+  const clear = () => { picked.forEach(revoke); setPicked([]); };
+
+  const dropProps = upload ? {
+    onDragOver: (e: React.DragEvent) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } },
+    onDragLeave: (e: React.DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); },
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); setDragging(false); addFiles([...e.dataTransfer.files]); },
+  } : {};
+  const onPaste = (e: React.ClipboardEvent) => { if (upload && e.clipboardData.files.length) { e.preventDefault(); addFiles([...e.clipboardData.files]); } };
+
+  const button = upload ? <>
+    <button type="button" className="btn muted" style={{ width: 40, height: 40, justifyContent: 'center', fontSize: 18, padding: 0, flexShrink: 0 }}
+      aria-label="Attach pictures or documents" title="Attach pictures, PDFs or text files. You can also drop or paste them here."
+      onClick={() => fileRef.current?.click()}>+</button>
+    <input ref={fileRef} type="file" multiple accept={ACCEPT} hidden
+      onChange={(e) => { addFiles([...(e.target.files ?? [])]); e.target.value = ''; }} />
+  </> : null;
+  const chips = picked.length > 0 ? (
+    <div className="attach-chips">
+      {picked.map((f) => (
+        <span key={f.key} className={`attach-chip ${f.state}`}>
+          {f.preview ? <img src={f.preview} alt="" /> : null}
+          {f.state === 'uploading' && <span className="spinner" aria-hidden="true" />}
+          <span className="attach-name">{f.state === 'error' ? f.error : f.name}</span>
+          <button type="button" aria-label={`Remove ${f.name}`} onClick={() => remove(f.key)}>×</button>
+        </span>
+      ))}
+    </div>
+  ) : null;
+  const note = uploading
+    ? <span className="faint" style={{ fontSize: 12 }}>Uploading… Send is ready when it finishes.</span>
+    : picked.length > 0 ? <span className="faint" style={{ fontSize: 12 }}>Files go to the AI in the cloud with your message: public material only.</span> : null;
+
+  return { picked, ready, uploading, dragging, addFiles, clear, dropProps, onPaste, button, chips, note };
+}
+
+/** The text sent when only files were attached. */
+export const filesOnlyText = (n: number) => (n === 1 ? 'Please look at the attached file.' : 'Please look at the attached files.');
+
+/** The chat panel every screen carries (Lester, 29 Oct). With `projectId`, it also takes pictures and documents. */
 export function ChatPanel(props: {
   messages: Message[];
-  onSend: (text: string) => Promise<unknown> | void;
+  onSend: (text: string, attachments: Attachment[]) => Promise<unknown> | void;
   label: string;
   placeholder: string;
+  projectId?: string;
   carried?: Message[] | null;
   busy?: boolean;
   intro?: ReactNode;
@@ -72,23 +173,41 @@ export function ChatPanel(props: {
   afterLastAi?: ReactNode;
   empty?: string;
 }) {
-  const [draft, setDraft] = useState(() => [...(props.carried ?? [])].reverse().find((m) => m.who === 'You')?.text ?? '');
+  const lastCarried = [...(props.carried ?? [])].reverse().find((m) => m.who === 'You');
+  const [draft, setDraft] = useState(() => lastCarried?.text ?? '');
   const [err, setErr] = useState(false);
+  // What was just sent, until the AI's job finishes: shown at once, with a spinner under it.
+  const [waiting, setWaiting] = useState<{ text: string; atts: Attachment[]; from: number; since: number } | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  const pid = props.projectId;
+  // Files attached on Home come along pre-attached, ready to send with the carried request.
+  const files = useAttachPicker(pid ? (f) => api.upload(pid, f) : null, lastCarried?.attachments ?? []);
+  const { uploading, ready } = files;
+
   const send = async () => {
-    const t = draft.trim();
+    if (uploading) return;
+    const t = draft.trim() || (ready.length ? filesOnlyText(ready.length) : '');
     if (!t) { setErr(true); return; }
+    const atts = ready;
     setDraft('');
-    await props.onSend(t);
+    files.clear();
+    setWaiting({ text: t, atts, from: props.messages.length, since: Date.now() });
+    try { await props.onSend(t, atts); } finally { setWaiting(null); }
   };
   const lastAi = [...props.messages].map((m, i) => [m, i] as const).reverse().find(([m]) => m.who === 'AI')?.[1];
+  const echoed = !!waiting && props.messages.slice(waiting.from).some((m) => m.who === 'You' && m.text === waiting.text);
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [props.messages.length, waiting]);
   return (
-    <div className="chat">
-      <div className="chat-log">
+    <div className={`chat ${files.dragging ? 'dropping' : ''}`} {...files.dropProps}>
+      <div className="chat-log" ref={logRef}>
         {props.intro}
         {props.carried && props.carried.length > 0 && (
           <>
             <div className="chat-carried">From Home</div>
-            {props.carried.map((m, i) => <div key={`c${i}`} className={`bubble ${bubbleClass(m.who)}`}>{m.text}</div>)}
+            {props.carried.map((m, i) => <div key={`c${i}`} className={`bubble ${bubbleClass(m.who)}`}><AttachmentList items={m.attachments ?? []} />{m.text}</div>)}
             <div className="chat-carried">Nothing has been sent here yet. Edit the request below, then Send.</div>
           </>
         )}
@@ -96,23 +215,30 @@ export function ChatPanel(props: {
         {props.messages.map((m, i) => (
           <div key={i} className={`bubble ${bubbleClass(m.who)}`}>
             {m.who === 'Customer' && <span className="who">Customer</span>}
+            <AttachmentList items={m.attachments ?? []} />
             {m.text}
             {i === lastAi && props.afterLastAi}
           </div>
         ))}
+        {waiting && !echoed && <div className="bubble me"><AttachmentList items={waiting.atts} />{waiting.text}</div>}
+        {waiting && <div className="bubble ai"><AiWorking since={waiting.since} /></div>}
       </div>
       <div className="chat-input">
         {props.footer}
         <label htmlFor="chat-ask">{props.label}</label>
+        {files.chips}
         <div style={{ display: 'flex', gap: 8 }}>
+          {files.button}
           <input
-            id="chat-ask" className="field" style={{ flex: 1 }} value={draft} placeholder={props.placeholder}
+            id="chat-ask" className="field" style={{ flex: 1, minWidth: 0 }} value={draft} placeholder={props.placeholder}
             onChange={(e) => { setDraft(e.target.value); setErr(false); }}
             onKeyDown={(e) => { if (e.key === 'Enter') void send(); }}
+            onPaste={files.onPaste}
           />
-          <button className="btn primary lg" style={{ height: 40 }} onClick={() => void send()} disabled={props.busy}>Send</button>
+          <button className="btn primary lg" style={{ height: 40 }} onClick={() => void send()} disabled={props.busy || uploading}>Send</button>
         </div>
         {err && <span className="bad" style={{ fontSize: 12 }}>Type a request first.</span>}
+        {files.note}
       </div>
     </div>
   );

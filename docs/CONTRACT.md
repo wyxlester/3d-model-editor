@@ -114,6 +114,25 @@ the exit code**: Blender returns 0 even when a script raises an error, unless th
 }
 ```
 
+**Made by description** (Lester, 29 Oct: "describe in words what the human should wear … what
+equipment the human should hold"). Optional fields, all absent in the default spec:
+
+| Field | Meaning |
+|---|---|
+| `body.hair_color` | `[r,g,b]` 0..1 or null. Recolours hair *and* eyebrows to read as that colour (blonde must look blonde, not a darkened tint), keeping the strand texture. |
+| `clothes.shoes_color`, `clothes.hat_color` | `[r,g,b]` or null, like `suit_color`. |
+| `custom_items` | `[{"id":"item_1","description":str,"code":str}]`: Blender Python the AI writes, run after the human and catalog equipment are built and **before** animations bake, with `bpy`, `mathutils` and helper module `crew` (`blender/crew/custom.py`) in scope. Same code rules as ship custom ops (no os/sys/subprocess, open, eval, exec). |
+
+Objects a custom item creates are named `Clothes__<Name>` (worn, skinned to the skeleton) or
+`Equipment__<Name>` (held or attached, parented to a bone), `[A-Za-z0-9_]` only, and are listed
+in `parts.json` like catalog items. Garments are cut from the body's own surface for the bones
+they cover and pushed out, so they fit every body slider setting and deform with every animation.
+`blender/crew/custom.py` exposes, each with a one-line docstring (the AI's tool docs are generated
+from them): `body()`, `armature()`, `REGIONS` (named bone sets: torso, upper_arms, forearms, hands,
+pelvis, thighs, shins, feet, neck, head), `garment(name, regions, color, ...)`,
+`hold(obj, hand)`, `attach(obj, bone)`, `material(name, color)`, and the low-poly mesh helpers used
+by catalog equipment. A failing item is reported as a build error naming its id and line.
+
 - **Rig:** MPFB2 `game_engine` skeleton for every human, the same skeleton for all.
 - Animations are **glTF animations named exactly as listed**, on that skeleton.
 - Equipment is a mesh named `Equipment__<Name>`, parented to a bone.
@@ -209,14 +228,16 @@ Every other line is raw detail.
 |---|---|---|
 | GET `/api/health` | | `{"blender":bool,"mpfb":bool,"ai":bool,"unreal":bool}` |
 | GET `/api/catalog` | | `{"ships":[{"type","name","description"}],"crew":[{"id","name"}],"clothes":[str],"equipment":[str],"animations":[str]}` |
-| POST `/api/route` | `{"message"}` | `{"destination":"ship_research|ship_build|ship_variant|crew|crew_variant|animation|assembly|review|clarify","reason","project_id":str|null}` |
+| POST `/api/route` | `{"message","attachments"?:[file name]}` (names only; the files go with the carried message) | `{"destination":"ship_research|ship_build|ship_variant|crew|crew_variant|animation|assembly|review|clarify","reason","project_id":str|null}` |
 | GET `/api/projects` | | `[ProjectSummary]` |
 | POST `/api/projects` | `{"kind":"ship|crew","base":"container|sampan|tanker|male_default","name"?}` | `{"project", "job_id"}` (first build) |
 | GET `/api/projects/{id}` | | `Project` (below) |
 | GET `/api/projects/{id}/versions/{n}/model.glb` | | the GLB |
 | GET `/api/projects/{id}/versions/{n}/parts.json` | | the parts list |
 | POST `/api/projects/{id}/spec` | `{"patch": {...}}` (deep-merged into the spec; Inspect drawer edits) | `{"job_id"}` → new version |
-| POST `/api/projects/{id}/chat` | `{"message","mode":"build|research"}` | `{"job_id"}` |
+| POST `/api/uploads` | same as below, before there is a project (Home) | `{"attachment"}`; copied into the project when a chat there names it |
+| POST `/api/projects/{id}/uploads` | `{"name","type","data"}` (`data` is base64; see Attachments) | `{"attachment"}` |
+| POST `/api/projects/{id}/chat` | `{"message","mode":"build|research","attachments"?:[upload id]}` | `{"job_id"}` |
 | POST `/api/projects/{id}/pins` | `{"part","point":[x,y,z],"text","author"}` | `{"pin","job_id"}` |
 | POST `/api/projects/{id}/pins/{pin_id}/reply` | `{"text"}` | `{"job_id"}` |
 | PATCH `/api/projects/{id}/pins/{pin_id}` | `{"status":"open|resolved"}` | `{"pin"}` |
@@ -244,7 +265,7 @@ Every other line is raw detail.
   "pins": [{"id": "pin_1", "part": "Roof__Searchlight", "point": [x,y,z], "status": "open|working|waiting|resolved",
             "author": "You", "messages": [{"who": "You|AI|Customer", "text": "...", "at": "..."}],
             "before_version": 2, "after_version": 3}],
-  "messages": [{"who": "You|AI", "text": "...", "at": "..."}],
+  "messages": [{"who": "You|AI", "text": "...", "at": "...", "attachments"?: [Attachment]}],
   "research": null,
   "derived_from": {"project": "p_9f00", "version": 4, "name": "PC 303"},
   "brief": "Fit a 25 mm gun on the foredeck in place of the 12.7 mm"
@@ -286,6 +307,20 @@ or copied into another variant, and approve or discard are refused while its job
 - `discard` sets `discarded`. The project disappears from `GET /api/projects` and routing; its
   files stay on disk. The original is never changed by either.
 
+**Attachments** (pictures and documents sent with a chat message). An upload is stored at once and
+returns `{"id","name","type","size","url"}`; the chat message then names it by `id`, and the AI
+receives the file itself alongside the text: pictures as images, PDFs as documents, text files as
+text. Accepted types and limits (the model's own limits):
+
+| Kind | MIME types | Max size |
+|---|---|---|
+| Picture | `image/png`, `image/jpeg`, `image/webp`, `image/gif` | 5 MB |
+| Document | `application/pdf` | 20 MB |
+| Text | `text/plain`, `text/markdown`, `text/csv` | 1 MB |
+
+Anything else is refused with 400 and a sentence saying what to do (e.g. save a Word file as PDF).
+Uploads go to a cloud LLM with the message, so the public-sources-only rule applies to them too.
+
 The pin `point` is in **glTF/three.js coordinates** (Y-up), because that is where the click
 happened; `part` is the clicked mesh's node name.
 
@@ -294,6 +329,8 @@ happened; `part` is the clicked mesh's node name.
 ```
 data/projects/<id>/project.json
 data/projects/<id>/v<n>/{spec.json, model.glb, model.blend, parts.json, build_report.json}
+data/projects/<id>/uploads/<upload id>.<ext>   and <upload id>.json (name, type, size)
+data/uploads/<upload id>.<ext>                 attached on Home, before a project exists
 data/scenes/<id>.json
 data/packages/<package_id>/...  and <package_id>.zip
 ```

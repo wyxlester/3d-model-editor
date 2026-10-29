@@ -142,6 +142,7 @@ export function Moves() {
             placeholder="Hand signal to the coxswain: slow ahead"
             empty="Describe a move, e.g. 'brace as we come alongside, one hand on the rail', or a change: 'faster on the way up'."
             onSend={sendChat}
+            projectId={id}
             footer={
               <div className="kv" style={{ gridTemplateColumns: '110px minmax(0, 1fr)', fontSize: 12 }}>
                 <span>Plays</span><span>{inGlb ? 'Loops in this preview' : '—'}</span>

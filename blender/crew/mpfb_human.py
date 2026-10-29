@@ -179,8 +179,14 @@ def build_human(spec, warnings, log):
         for i, slot in enumerate(o.material_slots):
             if slot.material is not None:
                 slot.material.name = path + ("" if i == 0 else "_%d" % i)
-    if c.get("suit_color") and "Clothes__Suit" in objects:
-        tint_material(objects["Clothes__Suit"], c["suit_color"])
+    for key, path in (("suit_color", "Clothes__Suit"), ("shoes_color", "Clothes__Shoes"),
+                      ("hat_color", "Clothes__Hat")):
+        if c.get(key) and path in objects:
+            tint_material(objects[path], c[key])
+    if b.get("hair_color"):
+        for path in ("Head__Hair", "Head__Eyebrows"):
+            if path in objects:
+                recolour_hair(objects[path], b["hair_color"], log)
     for path, o in objects.items():
         set_alpha_mode(o, "MASK" if path in ALPHA_CLIPPED else "OPAQUE")
     return armature, objects, barefoot_h, height_macro
@@ -284,6 +290,87 @@ def _transform_armature(armature, mat):
 def _world_min_z(obj):
     mw = obj.matrix_world
     return min((mw @ v.co).z for v in obj.data.vertices)
+
+
+HAIR_MAX_PX = 1024
+
+
+def _srgb_to_linear(c):
+    import numpy as np
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def _linear_to_srgb(c):
+    import numpy as np
+    c = np.clip(c, 0.0, 1.0)
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1.0 / 2.4) - 0.055)
+
+
+def recolour_pixels(px, rgb, is_float=False):
+    """Recolour flat RGBA pixels to average ``rgb`` (linear 0..1) over the visible (alpha > 0.5)
+    texels, keeping the strand pattern as relative brightness. A multiply tint cannot do this: dark
+    brown times yellow is darker brown. Here the pattern is first reduced to luminance relative to
+    its own mean, softened (bright blonde hair has less contrast than dark hair), then scaled so the
+    clipped result still averages the target. Alpha is untouched."""
+    import numpy as np
+    a = px.reshape(-1, 4)
+    lin = a[:, :3] if is_float else _srgb_to_linear(a[:, :3])
+    lum = lin @ np.array([0.2126, 0.7152, 0.0722])
+    vis = a[:, 3] > 0.5
+    if not vis.any():
+        vis = np.ones(len(a), dtype=bool)
+    rel = np.maximum(lum / max(float(lum[vis].mean()), 1e-4), 0.0) ** 0.6
+    rel /= max(float(rel[vis].mean()), 1e-4)
+    target = np.array(rgb[:3], dtype=np.float64)
+    t_lum = float(target @ np.array([0.2126, 0.7152, 0.0722]))
+    s = 1.0
+    for _ in range(8):   # clipping at 1.0 pulls the mean down; push the scale back up to compensate
+        out = np.clip(target[None, :] * (rel * s)[:, None], 0.0, 1.0)
+        got = float((out[vis] @ np.array([0.2126, 0.7152, 0.0722])).mean())
+        if got <= 1e-6 or abs(got - t_lum) < 0.002:
+            break
+        s *= t_lum / got
+    res = a.astype(np.float64).copy()
+    res[:, :3] = out if is_float else _linear_to_srgb(out)
+    return res.astype(np.float32).ravel()
+
+
+def recolour_hair(obj, rgb, log=print):
+    """Replace the base-colour texture of a hair-like part with a recoloured copy (alpha kept, so
+    the MASK cut-out still works). Baked into pixels, so it survives glTF export and Unreal."""
+    import numpy as np
+    for slot in obj.material_slots:
+        mat = slot.material
+        if mat is None or not mat.use_nodes:
+            continue
+        nt = mat.node_tree
+        bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if bsdf is None or not bsdf.inputs["Base Color"].is_linked:
+            if bsdf is not None:
+                bsdf.inputs["Base Color"].default_value = (rgb[0], rgb[1], rgb[2], 1.0)
+            continue
+        src = bsdf.inputs["Base Color"].links[0].from_node
+        if src.type != "TEX_IMAGE" or src.image is None:
+            continue
+        img = src.image
+        work = img.copy()
+        w, h = work.size
+        if max(w, h) > HAIR_MAX_PX:
+            f = HAIR_MAX_PX / float(max(w, h))
+            work.scale(max(1, int(w * f)), max(1, int(h * f)))
+            w, h = work.size
+        px = np.empty(w * h * 4, dtype=np.float32)
+        work.pixels.foreach_get(px)
+        out = recolour_pixels(px, rgb, is_float=work.is_float)
+        bpy.data.images.remove(work)
+        new = bpy.data.images.new(obj.name + "_recoloured", w, h, alpha=True)
+        new.colorspace_settings.name = "sRGB"
+        new.pixels.foreach_set(out)
+        new.pack()
+        for n in nt.nodes:
+            if n.type == "TEX_IMAGE" and n.image is img:
+                n.image = new
+        log("%s recoloured to %s (%dx%d texture)" % (obj.name, [round(x, 3) for x in rgb], w, h))
 
 
 def tint_material(obj, rgb):

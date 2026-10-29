@@ -4,14 +4,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, errorText, modelUrl } from '../api';
-import { ChatPanel, ErrorNote, JobLines, PRIORITY, TopBar, useCarried } from '../components/common';
+import { AiWorking, ChatPanel, ErrorNote, JobLines, PRIORITY, TopBar, useCarried } from '../components/common';
 import { DerivedFromLink, useVariantDialog } from '../components/VariantDialog';
 import { remember, useJobs, useLoad, useProject } from '../hooks';
 import { blenderToGltf, type ViewName } from '../lib/frames';
 import { hiddenParts, isStationName, jointsOf, levelsFor, partLabel } from '../lib/parts';
 import { groupPins, pinSummary, shortTime } from '../lib/pins';
 import { paths } from '../lib/routing';
-import type { Part, Pin, Project, Vec3 } from '../types';
+import type { Attachment, Part, Pin, Project, Vec3 } from '../types';
 import { PIN_COLORS, ShipViewer, ViewButtons, type JointPreview, type PickResult } from '../viewer/Viewer';
 import { ModeSwitch } from './ShipResearch';
 
@@ -43,6 +43,14 @@ export function ShipBuild() {
   const [joints, setJoints] = useState<JointPreview>({});
   const [viewing, setViewing] = useState<number | null>(null); // an older version, read-only
   const [actionErr, setActionErr] = useState<string | null>(null);
+  // Pins with an AI job in flight, and when it started: the spinner shows from the moment you send.
+  const [aiPins, setAiPins] = useState<Record<string, number>>({});
+  const trackPin = (pinId: string, on: boolean) => setAiPins((m) => {
+    const next = { ...m };
+    if (on) next[pinId] = Date.now(); else delete next[pinId];
+    return next;
+  });
+  const aiWorking = (p: Pin) => p.status === 'working' || p.id in aiPins;
 
   useEffect(() => { if (id) remember('ship', id); }, [id]);
   useEffect(() => { if (search.get('part')) { setSelPart(search.get('part')); setInspect(true); } }, [search]);
@@ -97,13 +105,23 @@ export function ShipBuild() {
     if (!draftText.trim()) { setDraftErr('Write what you want changed first.'); return; }
     const d = draft, text = draftText;
     setDraft(null);
+    let pinId: string | null = null;
     void run(`Working on ${partLabel(d.chosen!)}`, async () => {
       const r = await api.addPin(id, { part: d.chosen!, point: d.point, text, author: 'You' });
+      pinId = r.pin.id;
+      trackPin(pinId, true);
       await afterJob();
       setSelPin({ id: r.pin.id, x: d.x, y: d.y });
       setTab('comments');
       return r;
-    }, afterJob, afterJob);
+    }, afterJob, afterJob).finally(() => { if (pinId) trackPin(pinId, false); });
+  };
+
+  const replyPin = (pinId: string, part: string, text: string) => {
+    if (!id) return;
+    trackPin(pinId, true);
+    void run(`Working on ${partLabel(part)}`, async () => { const r = await api.replyPin(id, pinId, text); void afterJob(); return r; }, afterJob, afterJob)
+      .finally(() => trackPin(pinId, false));
   };
 
   const pinAction = async (fn: () => Promise<unknown>) => {
@@ -111,9 +129,9 @@ export function ShipBuild() {
     try { await fn(); await afterJob(); } catch (e) { setActionErr(errorText(e)); }
   };
 
-  const chat = async (message: string) => {
+  const chat = async (message: string, atts: Attachment[] = []) => {
     if (!id) return;
-    await run('Working on the ship', async () => { const r = await api.chat(id, message, 'build'); void afterJob(); return r; }, afterJob, afterJob);
+    await run('Working on the ship', async () => { const r = await api.chat(id, message, 'build', atts.map((a) => a.id)); void afterJob(); return r; }, afterJob, afterJob);
   };
 
   const undo = () => pinAction(async () => { if (id) { const r = await api.undo(id); setProject(r.project); } });
@@ -151,11 +169,11 @@ export function ShipBuild() {
             <button role="tab" className={`tab ${tab === 'comments' ? 'on' : ''}`} onClick={() => setTab('comments')}>Comments ({pins.length})</button>
           </div>
           {tab === 'chat' ? (
-            <ChatPanel messages={project?.messages ?? []} carried={carried} onSend={chat} busy={busy}
+            <ChatPanel messages={project?.messages ?? []} carried={carried} onSend={chat} busy={busy} projectId={id}
               label="Ask about the whole ship" placeholder="What's still unverified?"
               empty="For a change to one part, pin a comment on it: the AI will know exactly which part you mean. Use this chat for the whole ship." />
           ) : (
-            <CommentsTab pins={pins} parts={parts} selected={selPin?.id ?? null} viewingOld={!!viewing}
+            <CommentsTab pins={pins} parts={parts} selected={selPin?.id ?? null} viewingOld={!!viewing} working={aiWorking}
               onPick={(p) => { setSelPin({ id: p.id, x: 40, y: 40 }); setSelPart(p.part); setDraft(null); }}
               onHidden={startHiddenDraft} />
           )}
@@ -191,12 +209,12 @@ export function ShipBuild() {
             overlay={<>
               {pin && project && selPin && (
                 <Thread project={project} pin={pin} n={pins.indexOf(pin) + 1} at={selPin} stage={stageRef.current} shown={shownVersion}
-                  busy={busy} error={actionErr}
+                  busy={busy} error={actionErr} working={aiWorking(pin)} since={aiPins[pin.id]}
                   onClose={() => setSelPin(null)}
                   onKeep={() => void pinAction(() => api.setPinStatus(project.id, pin.id, 'resolved'))}
                   onUndo={() => void pinAction(async () => { const r = await api.undo(project.id); setProject(r.project); await api.setPinStatus(project.id, pin.id, 'open'); })}
                   onReopen={() => void pinAction(() => api.setPinStatus(project.id, pin.id, 'open'))}
-                  onReply={(text) => void run(`Working on ${partLabel(pin.part)}`, async () => { const r = await api.replyPin(project.id, pin.id, text); void afterJob(); return r; }, afterJob, afterJob)}
+                  onReply={(text) => replyPin(pin.id, pin.part, text)}
                   onInspect={() => { setSelPart(pin.part); setInspect(true); }}
                   onShowVersion={(n) => setViewing(n === current ? null : n)}
                 />
@@ -235,8 +253,8 @@ export function ShipBuild() {
   );
 }
 
-function CommentsTab({ pins, parts, selected, onPick, onHidden, viewingOld }: {
-  pins: Pin[]; parts: Part[]; selected: string | null; viewingOld: boolean;
+function CommentsTab({ pins, parts, selected, onPick, onHidden, viewingOld, working }: {
+  pins: Pin[]; parts: Part[]; selected: string | null; viewingOld: boolean; working: (p: Pin) => boolean;
   onPick: (p: Pin) => void; onHidden: (p: Part) => void;
 }) {
   const hidden = hiddenParts(parts);
@@ -259,7 +277,7 @@ function CommentsTab({ pins, parts, selected, onPick, onHidden, viewingOld }: {
                     <span style={{ fontWeight: 500 }}>{partLabel(p.part)}</span>
                     <span style={{ fontSize: 12 }}>{s.first}</span>
                     {s.latest && s.replies > 0 && <span className="muted" style={{ fontSize: 12, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{s.latest.who}: {s.latest.text}</span>}
-                    <span style={{ fontSize: 11, color: STATUS_COLOR[p.status] }}>{STATUS_TEXT[p.status] ?? p.status} · {s.replies} {s.replies === 1 ? 'reply' : 'replies'}{s.lastAt ? ` · ${shortTime(s.lastAt)}` : ''}</span>
+                    <span style={{ fontSize: 11, color: STATUS_COLOR[working(p) ? 'working' : p.status], display: 'flex', alignItems: 'center', gap: 6 }}>{working(p) && <span className="spinner" aria-hidden="true" />}{STATUS_TEXT[working(p) ? 'working' : p.status] ?? p.status} ·{s.replies} {s.replies === 1 ? 'reply' : 'replies'}{s.lastAt ? ` · ${shortTime(s.lastAt)}` : ''}</span>
                   </span>
                 </button>
               );
@@ -290,8 +308,9 @@ function boxStyle(x: number, y: number, stage: HTMLElement | null): React.CSSPro
   return { left, top };
 }
 
-function Thread({ project, pin, n, at, stage, shown, busy, error, onClose, onKeep, onUndo, onReopen, onReply, onInspect, onShowVersion }: {
+function Thread({ project, pin, n, at, stage, shown, busy, error, working, since, onClose, onKeep, onUndo, onReopen, onReply, onInspect, onShowVersion }: {
   project: Project; pin: Pin; n: number; at: { x: number; y: number }; stage: HTMLElement | null; busy: boolean; error: string | null;
+  working: boolean; since?: number;
   onClose: () => void; onKeep: () => void; onUndo: () => void; onReopen: () => void; onReply: (t: string) => void; onInspect: () => void; onShowVersion: (n: number) => void;
   shown: number;
 }) {
@@ -314,7 +333,7 @@ function Thread({ project, pin, n, at, stage, shown, busy, error, onClose, onKee
           <span className="faint" style={{ fontSize: 11 }}>{m.who}{m.at ? ` · ${shortTime(m.at)}` : ''}</span><span>{m.text}</span>
         </div>
       ))}
-      {pin.status === 'working' && <span style={{ display: 'flex', gap: 8, alignItems: 'center' }} className="muted"><span className="spinner" />The AI is making this change…</span>}
+      {working && <AiWorking text="The AI is making this change…" since={since} />}
       {pin.before_version != null && pin.after_version != null && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6, fontSize: 11 }}>
           {[['Before', pin.before_version!], ['After', pin.after_version!]].map(([label, v]) => (
@@ -345,7 +364,7 @@ function Thread({ project, pin, n, at, stage, shown, busy, error, onClose, onKee
       {!old && <>
         <label htmlFor="reply" className="sr-only">Reply</label>
         <input id="reply" className="field dark" style={{ height: 34, fontSize: 12 }} placeholder="Reply or ask for another change" value={reply}
-          onChange={(e) => setReply(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') send(); }} disabled={pin.status === 'working'} />
+          onChange={(e) => setReply(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') send(); }} disabled={working} />
       </>}
     </div>
   );

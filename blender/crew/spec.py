@@ -34,11 +34,20 @@ DEFAULT_SPEC = {
     "id": "crew_male_default",
     "name": "Default male crew",
     "body": {"gender": "male", "height_cm": 178, "weight": 0.5, "muscle": 0.5, "age_years": 30,
-             "skin": "medium", "hair": None},
-    "clothes": {"suit": "male_worksuit01", "shoes": "shoes01", "hat": None, "suit_color": None},
+             "skin": "medium", "hair": None, "hair_color": None},
+    "clothes": {"suit": "male_worksuit01", "shoes": "shoes01", "hat": None, "suit_color": None,
+                "shoes_color": None, "hat_color": None},
     "equipment": ["life_vest"],
     "animations": list(ANIMATIONS),
+    "custom_items": [],
 }
+
+# Same code rules as ship custom ops (server/app/agent.py FORBIDDEN_CODE): geometry only. The
+# server checks first; this is the second check, on the machine that actually runs the code.
+FORBIDDEN_CODE = [r"\bimport\s+(os|sys|subprocess|socket|shutil|urllib|requests|http|ctypes|pathlib)\b",
+                  r"\bfrom\s+(os|sys|subprocess|socket|shutil|urllib|requests|http|ctypes|pathlib)\b",
+                  r"__import__", r"\bopen\s*\(", r"\beval\s*\(", r"\bexec\s*\(",
+                  r"bpy\.ops\.wm\.(quit|save|open)", r"bpy\.ops\.export", r"\bcompile\s*\("]
 
 DEFAULT_HAIR = {"male": "short02", "female": "bob02"}
 SKIN_RACE = {"light": "caucasian", "medium": "asian", "dark": "african"}
@@ -102,6 +111,61 @@ def _color(name, v, errors):
     return None
 
 
+def _strict_color(name, v, errors):
+    """A colour for the made-by-description fields: null or [r,g,b] (linear, as a Blender Base
+    Color) with every channel a number in 0..1. Out-of-range is an error, not clamped."""
+    if v is None:
+        return None
+    if (isinstance(v, (list, tuple)) and len(v) == 3
+            and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in v)):
+        if all(0.0 <= float(c) <= 1.0 for c in v):
+            return [float(c) for c in v]
+    errors.append("%s must be null or [r,g,b] with each value between 0 and 1, got %r" % (name, v))
+    return None
+
+
+def custom_items(items, errors):
+    """Validate custom_items: a list of {"id", "description", "code"} with unique [A-Za-z0-9_] ids,
+    code that compiles and uses none of the forbidden calls. Returns the cleaned list."""
+    if items is None:
+        return []
+    if not isinstance(items, list):
+        errors.append("custom_items must be a list, got %r" % type(items).__name__)
+        return []
+    out, ids = [], set()
+    for k, item in enumerate(items):
+        if not isinstance(item, dict):
+            errors.append("custom_items[%d] must be {\"id\", \"description\", \"code\"}, got %r" % (k, item))
+            continue
+        iid = item.get("id")
+        if not isinstance(iid, str) or not _ID.match(iid):
+            errors.append("custom_items[%d].id must match [A-Za-z0-9_]+, got %r" % (k, iid))
+            continue
+        if iid in ids:
+            errors.append("custom_items id %r is used twice; ids must be unique" % iid)
+            continue
+        ids.add(iid)
+        desc = item.get("description", "")
+        if not isinstance(desc, str):
+            errors.append("custom_items %s: description must be text, got %r" % (iid, desc))
+            desc = str(desc)
+        code = item.get("code")
+        if not isinstance(code, str) or not code.strip():
+            errors.append("custom_items %s: code must be non-empty Python text" % iid)
+            continue
+        bad = [p for p in FORBIDDEN_CODE if re.search(p, code)]
+        if bad:
+            errors.append("custom_items %s: code uses a forbidden call (%s); geometry only" % (iid, bad[0]))
+            continue
+        try:
+            compile(code, "<custom_item %s>" % iid, "exec")
+        except SyntaxError as e:
+            errors.append("custom_items %s (%s) failed at line %s: SyntaxError: %s" % (iid, desc, e.lineno, e.msg))
+            continue
+        out.append({"id": iid, "description": desc, "code": code})
+    return out
+
+
 def normalize(spec):
     """Merge a spec over the defaults and validate it. Returns (spec, errors, warnings).
 
@@ -144,6 +208,7 @@ def normalize(spec):
         body["hair"] = DEFAULT_HAIR[body["gender"]]
     elif body["hair"] not in HAIRS and body["hair"] != "none":
         errors.append("body.hair must be one of %s or \"none\", got %r" % (HAIRS, body["hair"]))
+    body["hair_color"] = _strict_color("body.hair_color", body.get("hair_color"), errors)
 
     clothes = spec["clothes"]
     if clothes.get("suit") is not None and clothes["suit"] not in SUITS:
@@ -153,6 +218,8 @@ def normalize(spec):
     if clothes.get("hat") is not None and clothes["hat"] not in HATS:
         errors.append("clothes.hat must be one of %s or null, got %r" % (HATS, clothes["hat"]))
     clothes["suit_color"] = _color("clothes.suit_color", clothes.get("suit_color"), errors)
+    for key in ("shoes_color", "hat_color"):
+        clothes[key] = _strict_color("clothes." + key, clothes.get(key), errors)
 
     eq_out, seen = [], set()
     for item in spec.get("equipment") or []:
@@ -178,6 +245,7 @@ def normalize(spec):
     if bad:
         errors.append("animations must be from %s, got unknown %s" % (ANIMATIONS, bad))
     spec["animations"] = [a for a in anims if a in ANIMATIONS]
+    spec["custom_items"] = custom_items(spec.get("custom_items"), errors)
     return spec, errors, warnings
 
 

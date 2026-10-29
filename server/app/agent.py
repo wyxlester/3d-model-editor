@@ -29,6 +29,11 @@ from .store import ProjectStore
 Log = Callable[[str], None]
 
 PART_RE = re.compile(r"^[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*__[A-Za-z0-9_]+$")
+# Objects a crew custom item creates (contract §6): worn clothes or held/attached equipment.
+CREW_ITEM_RE = re.compile(r"^(Clothes|Equipment)__[A-Za-z0-9][A-Za-z0-9_]*$")
+# Named colours blender/crew/spec.py accepts for equipment (EQUIPMENT_COLORS there).
+EQUIPMENT_COLOR_NAMES = ["orange", "navy", "yellow", "white", "red", "black"]
+CREW_HELPERS_WITH_NAME = ("garment", "box", "cylinder", "object_from_bmesh")
 EVIDENCE_STATUSES = ["Official", "Photographed", "Photo reading", "Inference", "Comparison only",
                      "Secondary lead", "Unverified"]
 OVERRIDE_KEYS = {"offset_m": 3, "rotate_deg": 3, "scale": 3, "color": 3}
@@ -50,20 +55,77 @@ def _obj(props: dict, required: list[str]) -> dict:
 VEC3 = {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
 
 
-def me3d_helpers(repo_root: Path) -> str:
-    """Public functions in blender/common.py, as one line each, for the add_custom_op docs."""
-    path = repo_root / "blender" / "common.py"
+def module_helpers(path: Path, alias: str) -> str:
+    """Public functions (and UPPERCASE constants) of a Blender helper module, one line each, read
+    with ast so the AI's tool docs follow the module without importing bpy. Degrades to a note
+    when the file is missing or broken, so a half-written helper never breaks the agent."""
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-    except (OSError, SyntaxError):
-        return "(blender/common.py not readable; use bpy directly)"
+        tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, ValueError):
+        return f"(helper module {alias} not readable; use bpy directly)"
     lines = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
-            args = ", ".join(a.arg for a in node.args.args)
+            a = node.args
+            names = [x.arg for x in a.posonlyargs + a.args]
+            defaults = [None] * (len(names) - len(a.defaults)) + list(a.defaults)
+            parts = [n if d is None else f"{n}={ast.unparse(d)}" for n, d in zip(names, defaults)]
+            if a.vararg:
+                parts.append("*" + a.vararg.arg)
+            elif a.kwonlyargs:
+                parts.append("*")
+            parts += [k.arg if d is None else f"{k.arg}={ast.unparse(d)}"
+                      for k, d in zip(a.kwonlyargs, a.kw_defaults)]
+            if a.kwarg:
+                parts.append("**" + a.kwarg.arg)
             doc = (ast.get_docstring(node) or "").strip().splitlines()
-            lines.append(f"me3d.{node.name}({args})" + (f" — {doc[0]}" if doc else ""))
-    return "\n".join(lines) or "(no public helpers found)"
+            lines.append(f"{alias}.{node.name}({', '.join(parts)})" + (f" — {doc[0]}" if doc else ""))
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+            if name.isupper() and not name.startswith("_"):
+                if isinstance(node.value, ast.Dict):
+                    keys = [k.value for k in node.value.keys if isinstance(k, ast.Constant)]
+                    lines.append(f"{alias}.{name}: keys {', '.join(map(str, keys))}")
+                else:
+                    lines.append(f"{alias}.{name}")
+    return "\n".join(lines) or f"(no public helpers found in {alias})"
+
+
+def me3d_helpers(repo_root: Path) -> str:
+    """Public functions in blender/common.py, as one line each, for the add_custom_op docs."""
+    return module_helpers(repo_root / "blender" / "common.py", "me3d")
+
+
+def crew_helpers(repo_root: Path) -> str:
+    """Public functions in blender/crew/custom.py, for the add_custom_item docs."""
+    return module_helpers(repo_root / "blender" / "crew" / "custom.py", "crew")
+
+
+def _rgb(v) -> bool:
+    return (isinstance(v, list) and len(v) == 3 and
+            all(isinstance(x, (int, float)) and not isinstance(x, bool) and 0 <= x <= 1 for x in v))
+
+
+def check_code(code: str) -> None:
+    """Shared safety and syntax checks for AI-written Blender Python (ship ops and crew items)."""
+    for pat in FORBIDDEN_CODE:
+        if re.search(pat, code):
+            raise ToolError(f"Code rejected: matches forbidden pattern {pat!r}. Geometry only.")
+    try:
+        compile(code, "<custom_code>", "exec")
+    except SyntaxError as e:
+        raise ToolError(f"Python syntax error: {e}")
+
+
+def crew_object_names(code: str) -> list[str]:
+    """Object names a crew custom item sets literally: `.name = '...'`, `objects.new('...')`, and the
+    first argument of the crew helpers that create an object when it is a full Group__Name."""
+    names = re.findall(r"""\.name\s*=\s*['"]([^'"]+)['"]""", code)
+    names += re.findall(r"""objects\.new\(\s*['"]([^'"]+)['"]""", code)
+    helper = "|".join(CREW_HELPERS_WITH_NAME)
+    names += [n for n in re.findall(rf"""\bcrew\.(?:{helper})\(\s*(?:name\s*=\s*)?['"]([^'"]+)['"]""", code)
+              if "__" in n]
+    return names
 
 
 def _options_list(value) -> list | None:
@@ -134,15 +196,26 @@ class AgentSession:
                  _obj({"description": {"type": "string"}, "code": {"type": "string"}}, ["description", "code"])),
                 ("remove_custom_op", "Remove a custom op by id.", _obj({"id": {"type": "string"}}, ["id"])),
             ] + common[1:]
+        rgb_or_name = {"oneOf": [{"type": "string"}, VEC3]}
+        equipment_item = {"oneOf": [
+            {"type": "string"},
+            {"type": "object", "properties": {"name": {"type": "string"}, "color": rgb_or_name},
+             "required": ["name"]}]}
         return common[:1] + [
-            ("set_body", "Patch body sliders (gender, height_cm, weight, muscle, age_years, skin).",
-             _obj({"patch": {"type": "object"}}, ["patch"])),
-            ("set_clothes", "Patch clothes slots (suit, shoes, hat, suit_color). Use catalog options only; "
-             "null empties a slot.", _obj({"patch": {"type": "object"}}, ["patch"])),
-            ("set_equipment", "Replace the equipment list.",
-             _obj({"equipment": {"type": "array", "items": {"type": "string"}}}, ["equipment"])),
+            ("set_body", "Patch body fields: gender, height_cm, weight, muscle, age_years, skin, hair (a catalog "
+             "style), hair_color ([r,g,b] 0..1 recolouring hair and eyebrows, e.g. blonde [0.85, 0.7, 0.4]; "
+             "null for natural).", _obj({"patch": {"type": "object"}}, ["patch"])),
+            ("set_clothes", "Patch clothes: suit, shoes, hat from the catalog options (null empties the slot, "
+             "e.g. suit null when a custom garment replaces the outfit); suit_color, shoes_color, hat_color "
+             "[r,g,b] 0..1 tints, or null.", _obj({"patch": {"type": "object"}}, ["patch"])),
+            ("set_equipment", "Replace the catalog equipment list. Entries are a catalog name or "
+             "{\"name\", \"color\"} with color one of " + ", ".join(EQUIPMENT_COLOR_NAMES) + " or [r,g,b] 0..1.",
+             _obj({"equipment": {"type": "array", "items": equipment_item}}, ["equipment"])),
             ("set_animations", "Replace the animation list.",
              _obj({"animations": {"type": "array", "items": {"type": "string"}}}, ["animations"])),
+            ("add_custom_item", self._custom_item_doc(),
+             _obj({"description": {"type": "string"}, "code": {"type": "string"}}, ["description", "code"])),
+            ("remove_custom_item", "Remove a custom item by id.", _obj({"id": {"type": "string"}}, ["id"])),
         ] + common[1:]
 
     def _custom_op_doc(self) -> str:
@@ -153,6 +226,17 @@ class AgentSession:
                 "parent it to the part it sits on. Moving parts: origin at the pivot and custom property "
                 "me3d_joint. No file, network or OS access (imports of os/sys/subprocess, open(), eval, "
                 "exec are rejected). Helpers:\n" + me3d_helpers(self.repo_root))
+
+    def _custom_item_doc(self) -> str:
+        return ("Make clothing or equipment the catalog does not have (a singlet, shorts, a torch, a clipboard). "
+                "`code` is Python run inside Blender after the human and catalog equipment are built and before "
+                "animations bake, with `bpy`, `mathutils` and helper module `crew` in scope. Worn things: "
+                "crew.garment over the body regions they cover, so they fit any body and move with every "
+                "animation; name them Clothes__<Name>. Held or attached things: build a low-poly mesh, then "
+                "crew.hold(obj, hand) or crew.attach(obj, bone); name them Equipment__<Name>. Names use "
+                "letters/digits/underscore only, e.g. Clothes__Singlet, Equipment__Torch. Colours via "
+                "crew.material. No file, network or OS access (imports of os/sys/subprocess, open(), eval, exec "
+                "are rejected). Helpers:\n" + crew_helpers(self.repo_root))
 
     def call(self, name: str, args: dict) -> tuple[str, bool]:
         """Run one tool. Returns (text for the model, is_error)."""
@@ -286,13 +370,7 @@ class AgentSession:
             raise ToolError("custom ops are for ship projects.")
         if not description.strip() or not code.strip():
             raise ToolError("description and code are both required")
-        for pat in FORBIDDEN_CODE:
-            if re.search(pat, code):
-                raise ToolError(f"Code rejected: matches forbidden pattern {pat!r}. Geometry only.")
-        try:
-            compile(code, "<custom_op>", "exec")
-        except SyntaxError as e:
-            raise ToolError(f"Python syntax error: {e}")
+        check_code(code)
         for name in re.findall(r"""\.name\s*=\s*['"]([^'"]+)['"]""", code):
             if not (PART_RE.match(name) or name.startswith("station__") or name.startswith("socket_")):
                 raise ToolError(f"Object name {name!r} breaks the naming rule Group__Part ([A-Za-z0-9_]).")
@@ -331,8 +409,15 @@ class AgentSession:
         self._check_crew()
         docs = self.cat_entry.get("param_docs") or {}
         body_docs = docs.get("body", docs) if isinstance(docs, dict) else {}
-        known = set(self.spec.get("body", {})) | set(body_docs)
+        known = set(self.spec.get("body", {})) | set(body_docs) | {"hair", "hair_color"}
+        if not isinstance(patch, dict) or not patch:
+            raise ToolError("patch must be a non-empty object")
         for k, v in patch.items():
+            if k == "hair_color":
+                if v is not None and not _rgb(v):
+                    raise ToolError("hair_color is [r,g,b] with each value 0..1 (blonde is about "
+                                    "[0.85, 0.7, 0.4]), or null")
+                continue
             if k not in known:
                 raise ToolError(f"Unknown body field {k!r}. Known: {sorted(known)}")
             d = body_docs.get(k)
@@ -343,35 +428,64 @@ class AgentSession:
                 allowed = _options_list(d.get("options") or d.get("values"))
                 if allowed and v not in allowed:
                     raise ToolError(f"{k} must be one of {allowed}")
-        self.spec = deep_merge(self.spec, {"body": patch})
+        self.spec = self._set_section("body", patch)
         return "Body updated. Call rebuild."
 
     def t_set_clothes(self, patch: dict) -> str:
         self._check_crew()
+        if not isinstance(patch, dict) or not patch:
+            raise ToolError("patch must be a non-empty object")
         for slot, v in patch.items():
-            if slot == "suit_color":
-                if v is not None and not (isinstance(v, list) and len(v) == 3 and all(0 <= x <= 1 for x in v)):
-                    raise ToolError("suit_color is [r,g,b] in 0..1, or null")
+            if slot in ("suit_color", "shoes_color", "hat_color"):
+                if v is not None and not _rgb(v):
+                    raise ToolError(f"{slot} is [r,g,b] with each value 0..1, or null")
                 continue
             allowed = self._crew_options(slot)
             if allowed is None and slot not in self.spec.get("clothes", {}):
                 raise ToolError(f"Unknown clothes slot {slot!r}")
             if v is not None and allowed is not None and v not in allowed:
-                raise ToolError(f"{slot} must be one of {allowed} (or null). New items need adding to the catalog.")
-        self.spec = deep_merge(self.spec, {"clothes": patch})
+                raise ToolError(f"{slot} must be one of {allowed} (or null). For anything else, set the slot "
+                                "to null if it is replaced and make the item with add_custom_item.")
+        self.spec = self._set_section("clothes", patch)
         return "Clothes updated. Call rebuild."
 
-    def _check_list(self, slot: str, values: list) -> None:
-        if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
-            raise ToolError(f"{slot} must be a list of names")
+    def _set_section(self, section: str, patch: dict) -> dict:
+        """Set fields of body/clothes keeping explicit nulls. deep_merge deletes a key on None, and
+        the Blender side then refills it from its defaults: {"suit": null} would bring the work suit
+        back. Here null must mean "empty slot" / "no tint", so it is stored as null."""
+        spec = copy.deepcopy(self.spec)
+        current = spec.get(section)
+        spec[section] = dict(current) if isinstance(current, dict) else {}
+        spec[section].update(copy.deepcopy(patch))
+        return spec
+
+    def _check_list(self, slot: str, values: list, allow_color: bool = False) -> None:
+        if not isinstance(values, list):
+            raise ToolError(f"{slot} must be a list")
+        names = []
+        for v in values:
+            if allow_color and isinstance(v, dict):
+                extra = set(v) - {"name", "color"}
+                if not isinstance(v.get("name"), str) or extra:
+                    raise ToolError(f"{slot} entries are a name or {{\"name\", \"color\"}}, got {v!r}")
+                c = v.get("color")
+                if c is not None and c not in EQUIPMENT_COLOR_NAMES and not _rgb(c):
+                    raise ToolError(f"color must be one of {EQUIPMENT_COLOR_NAMES} or [r,g,b] 0..1, got {c!r}")
+                names.append(v["name"])
+            elif isinstance(v, str):
+                names.append(v)
+            else:
+                raise ToolError(f"{slot} must be a list of names" +
+                                (" or {\"name\", \"color\"} objects" if allow_color else ""))
         allowed = self._crew_options(slot)
-        bad = [v for v in values if allowed is not None and v not in allowed]
+        bad = [v for v in names if allowed is not None and v not in allowed]
         if bad:
-            raise ToolError(f"Not in the catalog: {bad}. Options: {allowed}")
+            raise ToolError(f"Not in the catalog: {bad}. Options: {allowed}" +
+                            (". For anything else use add_custom_item." if slot == "equipment" else ""))
 
     def t_set_equipment(self, equipment: list) -> str:
         self._check_crew()
-        self._check_list("equipment", equipment)
+        self._check_list("equipment", equipment, allow_color=True)
         self.spec = deep_merge(self.spec, {"equipment": equipment})
         return "Equipment updated. Call rebuild."
 
@@ -380,6 +494,33 @@ class AgentSession:
         self._check_list("animations", animations)
         self.spec = deep_merge(self.spec, {"animations": animations})
         return "Animations updated. Call rebuild."
+
+    def t_add_custom_item(self, description: str, code: str) -> str:
+        self._check_crew()
+        if not isinstance(description, str) or not isinstance(code, str) or not description.strip() or not code.strip():
+            raise ToolError("description and code are both required")
+        check_code(code)
+        for name in crew_object_names(code):
+            if not CREW_ITEM_RE.match(name):
+                raise ToolError(f"Object name {name!r} breaks the naming rule: Clothes__<Name> for worn things, "
+                                "Equipment__<Name> for held or attached things ([A-Za-z0-9_]).")
+        items = list(self.spec.get("custom_items", []))
+        taken = {o.get("id") for o in items}
+        i = 1
+        while f"item_{i}" in taken:
+            i += 1
+        items.append({"id": f"item_{i}", "description": description, "code": code})
+        self.spec = deep_merge(self.spec, {"custom_items": items})
+        return f"Custom item item_{i} added. Call rebuild to run it."
+
+    def t_remove_custom_item(self, id: str) -> str:
+        self._check_crew()
+        items = list(self.spec.get("custom_items", []))
+        kept = [o for o in items if o.get("id") != id]
+        if len(kept) == len(items):
+            raise ToolError(f"No custom item {id!r}. Ids: {[o.get('id') for o in items]}")
+        self.spec = deep_merge(self.spec, {"custom_items": kept})
+        return f"Removed {id}. Call rebuild."
 
     # ---- research ---------------------------------------------------------------------
     def t_save_research(self, research: dict) -> str:
@@ -470,7 +611,13 @@ The user is Lester: ex-navy, the product owner, not an engineer.
 SHIP_PROMPT = """You edit one ship model for a maritime simulator. Blender builds the model from a JSON spec (me3d.ship_spec/1); you change the spec only through your tools: params (the builder's own knobs), per-part overrides, joint limits, and custom ops (Blender Python, for geometry no knob covers).
 """ + COMMON_RULES
 
-CREW_PROMPT = """You edit one human crew member for a maritime simulator. Blender (MPFB2) builds the person from a JSON spec (me3d.crew_spec/1): body sliders, clothes, equipment and animations, all chosen from the catalog options shown by get_project. Something not in the catalog cannot be made yet: say so.
+CREW_PROMPT = """You edit one human crew member for a maritime simulator. Blender (MPFB2) builds the person from a JSON spec (me3d.crew_spec/1): body sliders, clothes, equipment and animations, plus custom items (Blender Python, for anything the catalog lacks).
+- The catalog options shown by get_project are a starting point, not a limit. Make what is asked for:
+  - A colour change: the colour fields (hair_color in set_body; suit_color, shoes_color, hat_color in set_clothes; an equipment entry's color).
+  - Hair: a style from the options plus hair_color (blonde is about [0.85, 0.7, 0.4]).
+  - Clothing not in the catalog (a singlet, shorts, gloves, a cap): add_custom_item with crew.garment over the body regions it covers. If it replaces the outfit (singlet and shorts), set suit to null.
+  - Things held or worn on the body (a torch, a clipboard, a rope, a tool belt): add_custom_item, a low-poly mesh with crew.hold or crew.attach.
+- Never answer that something is not available when you can make it. If part of a request truly cannot be built (cloth that flows in the wind, real physics), make the closest thing and say plainly what you made instead.
 """ + COMMON_RULES
 
 RESEARCH_PROMPT = """You research one real vessel so a 3D model of it can be built for a maritime simulator. The user is Lester: ex-navy, not an engineer.
@@ -510,6 +657,8 @@ def describe_tool(name: str, args: dict | None) -> str | None:
         "set_joint_limits": f"Setting how far {part} can move",
         "add_custom_op": f"Adding {_lower_first(str(a.get('description') or 'new geometry'))}",
         "remove_custom_op": "Removing an added piece",
+        "add_custom_item": f"Making {_lower_first(str(a.get('description') or 'a new item'))}",
+        "remove_custom_item": "Removing a made item",
         "set_body": f"Changing the body: {_words(patch)}",
         "set_clothes": f"Changing clothes: {_words(patch)}",
         "set_equipment": f"Setting equipment: {_words(a.get('equipment') or ['none'])}",
@@ -548,7 +697,7 @@ def system_prompt(kind: str, mode: str) -> str:
 # ---- runners ----------------------------------------------------------------------------
 
 class AgentRunner(Protocol):
-    def run(self, session: AgentSession, prompt: str, mode: str, log: Log) -> str: ...
+    def run(self, session: AgentSession, prompt: str | list[dict], mode: str, log: Log) -> str: ...
 
 
 class ClaudeAgentRunner:
@@ -557,10 +706,10 @@ class ClaudeAgentRunner:
     def __init__(self, model: str = "claude-opus-5-5", max_turns: int = 24, timeout_s: float = 1200):
         self.model, self.max_turns, self.timeout_s = model, max_turns, timeout_s
 
-    def run(self, session: AgentSession, prompt: str, mode: str, log: Log) -> str:
+    def run(self, session: AgentSession, prompt: str | list[dict], mode: str, log: Log) -> str:
         return asyncio.run(asyncio.wait_for(self._run(session, prompt, mode, log), self.timeout_s))
 
-    async def _run(self, session: AgentSession, prompt: str, mode: str, log: Log) -> str:
+    async def _run(self, session: AgentSession, prompt: str | list[dict], mode: str, log: Log) -> str:
         from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock,
                                       ToolUseBlock, create_sdk_mcp_server, query, tool)
 
@@ -585,7 +734,12 @@ class ClaudeAgentRunner:
             cwd=str(session.store.version_dir(session.pid, 0).parent))
         texts: list[str] = []
         final: str | None = None
-        async for m in query(prompt=prompt, options=opts):
+        async def turn():
+            # Content blocks (attached pictures and PDFs) go as one streamed user message.
+            yield {"type": "user", "session_id": "", "parent_tool_use_id": None,
+                   "message": {"role": "user", "content": prompt}}
+
+        async for m in query(prompt=prompt if isinstance(prompt, str) else turn(), options=opts):
             if isinstance(m, AssistantMessage):
                 for b in m.content:
                     if isinstance(b, TextBlock) and b.text.strip():
@@ -611,11 +765,11 @@ class ScriptedAgent:
     def __init__(self, steps: list[tuple[str, dict]] | None = None, reply: str = "Done."):
         self.steps = steps or []
         self.reply = reply
-        self.prompts: list[str] = []
+        self.prompts: list[str | list[dict]] = []
         self.modes: list[str] = []
         self.results: list[tuple[str, str, bool]] = []
 
-    def run(self, session: AgentSession, prompt: str, mode: str, log: Log) -> str:
+    def run(self, session: AgentSession, prompt: str | list[dict], mode: str, log: Log) -> str:
         self.prompts.append(prompt)
         self.modes.append(mode)
         for name, args in self.steps:

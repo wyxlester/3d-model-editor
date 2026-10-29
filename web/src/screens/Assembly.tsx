@@ -9,7 +9,7 @@ import { remember, useJobs, useLoad, useProject } from '../hooks';
 import type { ViewName } from '../lib/frames';
 import { isStationName, partLabel } from '../lib/parts';
 import { paths } from '../lib/routing';
-import type { Project, Scene, SceneCrew, SceneSpec } from '../types';
+import type { Attachment, Project, Scene, SceneCrew, SceneSpec } from '../types';
 import { AttachTo, CrewModel, ShipViewer, ViewButtons, stationObjects } from '../viewer/Viewer';
 import { ScenePicker } from './AssemblyScenePicker';
 
@@ -135,9 +135,9 @@ function AssemblyScene({ sceneId }: { sceneId: string }) {
   const stationData = sel && sel.station && typeof sel.station === 'object' ? Object.entries(sel.station) : [];
   const url = modelUrl(s.ship.project, s.ship.version);
 
-  const chatSend = (text: string) => {
+  const chatSend = (text: string, atts: Attachment[] = []) => {
     if (!ship.data) return;
-    return run('Working on it', () => api.chat(ship.data!.id, text, 'build'), () => { void ship.reload(); });
+    return run('Working on it', () => api.chat(ship.data!.id, text, 'build', atts.map((a) => a.id)), () => { void ship.reload(); });
   };
 
   return (
@@ -278,7 +278,7 @@ function AssemblyScene({ sceneId }: { sceneId: string }) {
             <span className="faint" style={{ fontSize: 12 }}>Chat</span>
             <span className="faint" style={{ fontSize: 11 }}>Goes to the ship's chat: the API has no scene chat yet.</span>
             <div style={{ flex: 1, minHeight: 200, display: 'flex', flexDirection: 'column', border: '1px solid var(--border)', borderRadius: 10 }}>
-              <ChatPanel messages={ship.data?.messages ?? []} onSend={chatSend} busy={busy}
+              <ChatPanel messages={ship.data?.messages ?? []} onSend={chatSend} busy={busy} projectId={ship.data?.id}
                 label="Message the AI" placeholder="Navigator watches the target, not the screens" />
             </div>
             <JobLines jobs={jobs} dismiss={dismiss} />

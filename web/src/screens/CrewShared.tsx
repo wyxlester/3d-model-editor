@@ -2,6 +2,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { api } from '../api';
 import { mergePatch } from '../lib/spec';
+import type { Attachment } from '../types';
 
 type Run = <R>(label: string, start: () => Promise<{ job_id: string }>, onDone?: (r: R) => void | Promise<void>) => Promise<R | undefined>;
 
@@ -37,10 +38,10 @@ export function useSpecEditor(projectId: string | undefined, run: Run, reload: (
 
 /** Send a chat message to the crew project and reload when the AI is done. */
 export function useCrewChat(projectId: string | undefined, run: Run, reload: () => Promise<unknown>) {
-  return useCallback(async (text: string) => {
+  return useCallback(async (text: string, atts: Attachment[] = []) => {
     if (!projectId) return;
     await run('AI is working on it', async () => {
-      const r = await api.chat(projectId, text, 'build');
+      const r = await api.chat(projectId, text, 'build', atts.map((a) => a.id));
       void reload(); // show the sent message while the AI works
       return r;
     }, async () => { await reload(); });

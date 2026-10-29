@@ -2,8 +2,8 @@
 // VITE_MOCK=1 routes every call to an in-browser mock (src/mock) for development before the
 // server exists. The default build always talks to the real /api.
 import type {
-  ApproveResult, Catalog, ExportResult, Health, Job, Part, Pin, Project, ProjectBase, ProjectKind, ProjectSummary,
-  RouteResult, Scene, SceneSpec, UnrealReport, VariantRequest, Vec3,
+  ApproveResult, Attachment, Catalog, ExportResult, Health, Job, Part, Pin, Project, ProjectBase, ProjectKind,
+  ProjectSummary, RouteResult, Scene, SceneSpec, UnrealReport, VariantRequest, Vec3,
 } from './types';
 
 export const MOCK = import.meta.env.VITE_MOCK === '1';
@@ -57,7 +57,8 @@ const enc = encodeURIComponent;
 export const api = {
   health: () => call<Health>('GET', '/api/health'),
   catalog: () => call<Catalog>('GET', '/api/catalog'),
-  route: (message: string) => call<RouteResult>('POST', '/api/route', { message }),
+  route: (message: string, attachments: string[] = []) =>
+    call<RouteResult>('POST', '/api/route', attachments.length ? { message, attachments } : { message }),
 
   projects: () => call<ProjectSummary[]>('GET', '/api/projects'),
   createProject: (kind: ProjectKind, base: ProjectBase, name?: string) =>
@@ -65,8 +66,12 @@ export const api = {
   project: (id: string) => call<Project>('GET', `/api/projects/${enc(id)}`),
   parts: (id: string, n: number) => call<Part[]>('GET', `/api/projects/${enc(id)}/versions/${n}/parts.json`),
   patchSpec: (id: string, patch: Record<string, unknown>) => call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/spec`, { patch }),
-  chat: (id: string, message: string, mode: 'build' | 'research') =>
-    call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/chat`, { message, mode }),
+  chat: (id: string, message: string, mode: 'build' | 'research', attachments: string[] = []) =>
+    call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/chat`, attachments.length ? { message, mode, attachments } : { message, mode }),
+  uploadHome: (file: { name: string; type: string; data: string }) =>
+    call<{ attachment: Attachment }>('POST', '/api/uploads', file),
+  upload: (id: string, file: { name: string; type: string; data: string }) =>
+    call<{ attachment: Attachment }>('POST', `/api/projects/${enc(id)}/uploads`, file),
   addPin: (id: string, pin: { part: string; point: Vec3; text: string; author: string }) =>
     call<{ pin: Pin; job_id: string }>('POST', `/api/projects/${enc(id)}/pins`, pin),
   replyPin: (id: string, pinId: string, text: string) =>

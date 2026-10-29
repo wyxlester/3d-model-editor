@@ -63,6 +63,8 @@ def test_describe_tool_says_what_the_ai_is_doing_in_plain_words():
     assert describe_tool("add_custom_op", {"description": "Small searchlight", "code": "..."}) == "Adding small searchlight"
     assert describe_tool("add_custom_op", {"description": "PC 303 horn", "code": "..."}) == "Adding PC 303 horn"
     assert describe_tool("set_clothes", {"patch": {"hat": "cap01"}}) == "Changing clothes: hat"
+    assert describe_tool("add_custom_item", {"description": "White singlet", "code": "..."}) == "Making white singlet"
+    assert describe_tool("remove_custom_item", {"id": "item_1"}) == "Removing a made item"
     assert describe_tool("set_equipment", {"equipment": ["life_vest", "binoculars"]}) == "Setting equipment: life vest, binoculars"
     assert describe_tool("WebSearch", {"query": "PC 303 gun"}) == "Searching the web: PC 303 gun"
     assert describe_tool("WebFetch", {"url": "https://www.example.gov.sg/a/b"}) == "Reading www.example.gov.sg"

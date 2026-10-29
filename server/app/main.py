@@ -29,8 +29,10 @@ from .config import Settings, find_claude_cli
 from .jobs import JobError, JobManager
 from .packaging import export_scene, stations_of
 from .router import LLM, claude_llm, route
-from .specmerge import deep_merge, gltf_to_blender, label_for, variant_id
+from .specmerge import deep_merge, gltf_to_blender, keep_crew_nulls, label_for, variant_id
 from .store import NotFound, ProjectStore, atomic_write_json, read_json
+from .uploads import UploadRejected, check_size, content_blocks, decode, resolve_type
+from .uploads import TYPES as UPLOAD_TYPES
 
 UnrealRunner = Callable[[Path, Callable[[str], None]], dict]
 SCENE_ID = re.compile(r"^scene_[a-z0-9]+$")
@@ -140,7 +142,10 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         msg = body.get("message")
         if not isinstance(msg, str) or not msg.strip():
             raise HTTPException(400, "message is required")
-        return route(msg, listed_projects(), llm)
+        names = body.get("attachments") or []
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+            raise HTTPException(400, "attachments must be a list of file names")
+        return route(msg, listed_projects(), llm, names[:10])
 
     # ---- projects -----------------------------------------------------------------------
     def listed_projects() -> list[dict]:
@@ -317,6 +322,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             raise HTTPException(409, "The first build has not finished yet")
         old = store.spec(pid)
         new = deep_merge(old, patch)
+        if project.get("kind") == "crew":
+            new = keep_crew_nulls(new, patch)
         summary = summarise_change(old, new, "Edited in Inspect")
         return {"job_id": jobs.submit("build", lambda log: build_or_fail(pid, new, summary, log))}
 
@@ -327,7 +334,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         return {"project": store.api_project(pid)}
 
     # ---- AI: chat and pins ------------------------------------------------------------
-    def run_agent(pid: str, prompt: str, mode: str, log, pin_id: str | None = None) -> tuple[AgentSession, str]:
+    def run_agent(pid: str, prompt: str | list[dict], mode: str, log, pin_id: str | None = None) -> tuple[AgentSession, str]:
         session = AgentSession(store, builds, catalog, pid, log, settings.repo_root, pin_id=pin_id, mode=mode)
         reply = agent.run(session, prompt, mode, log)
         if mode == "build" and session.dirty:
@@ -339,6 +346,36 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             reply += f"\n\n(The last rebuild failed, so the previous version is still shown: {errs})"
         return session, reply or "(no reply)"
 
+    def attached_names(m: dict) -> str:
+        """Earlier attachments are named in the history, not re-sent: one copy per message is enough."""
+        names = [a.get("name", "") for a in m.get("attachments") or []]
+        return f" [attached: {', '.join(names)}]" if names else ""
+
+    def checked_upload(body: dict) -> tuple[str, str, bytes]:
+        name, mime, data = body.get("name"), body.get("type"), body.get("data")
+        if not isinstance(name, str) or not name.strip() or not isinstance(data, str):
+            raise HTTPException(400, "name and data are required")
+        name = Path(name.replace("\\", "/")).name[:120] or "file"
+        try:
+            mime = resolve_type(name, mime if isinstance(mime, str) else "")
+            raw = decode(data)
+            check_size(name, mime, len(raw))
+        except UploadRejected as e:
+            raise HTTPException(400, str(e))
+        return name, mime, raw
+
+    @app.post("/api/projects/{pid}/uploads")
+    def upload(pid: str, body: dict = Body(...)):
+        need_project(pid)
+        name, mime, raw = checked_upload(body)
+        return {"attachment": store.add_upload(pid, name, mime, UPLOAD_TYPES[mime][0], raw)}
+
+    @app.post("/api/uploads")
+    def upload_from_home(body: dict = Body(...)):
+        """Home has no project yet: hold the file until the chat it is carried into names it."""
+        name, mime, raw = checked_upload(body)
+        return {"attachment": store.add_inbox_upload(name, mime, UPLOAD_TYPES[mime][0], raw)}
+
     @app.post("/api/projects/{pid}/chat")
     def chat(pid: str, body: dict = Body(...)):
         need_project(pid)
@@ -347,12 +384,20 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             raise HTTPException(400, "message is required")
         if mode not in ("build", "research"):
             raise HTTPException(400, "mode must be build or research")
-        store.add_message(pid, "You", message)
+        ids = body.get("attachments") or []
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids) or len(ids) > 10:
+            raise HTTPException(400, "attachments must be a list of up to 10 upload ids")
+        try:
+            files = [store.get_upload(pid, i) for i in ids]
+        except NotFound as e:
+            raise HTTPException(400, f"Attachment {e} was not found; attach it again")
+        store.add_message(pid, "You", message, [meta for meta, _ in files])
 
         def work(log):
             history = store.load(pid)["messages"][-12:-1]
-            context = "\n".join(f"{m['who']}: {m['text']}" for m in history)
-            prompt = (f"Earlier in this chat:\n{context}\n\n" if context else "") + f"User: {message}"
+            context = "\n".join(f"{m['who']}: {m['text']}" + attached_names(m) for m in history)
+            text = (f"Earlier in this chat:\n{context}\n\n" if context else "") + f"User: {message}"
+            prompt: str | list[dict] = content_blocks(text, files) if files else text
             try:
                 session, reply = run_agent(pid, prompt, mode, log)
             except Exception as e:

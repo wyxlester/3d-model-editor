@@ -4,7 +4,7 @@
 import { ApiError } from '../api';
 import { mergePatch } from '../lib/spec';
 import type {
-  Catalog, Job, Message, Part, Pin, Project, ProjectSummary, RouteResult, Scene, SceneSpec, UnrealReport, VersionInfo,
+  Attachment, Catalog, Job, Message, Part, Pin, Project, ProjectSummary, RouteResult, Scene, SceneSpec, UnrealReport, VersionInfo,
 } from '../types';
 import shipPartsJson from '../../public/mock/ship_parts.json';
 import { mockResearch } from './research';
@@ -99,6 +99,9 @@ export function resetMock() {
   save();
 }
 
+// Uploads live for this page load only (object URLs); mock mode never sends them anywhere.
+const mockUploads: Record<string, Attachment> = {};
+
 function startJob(steps: string[], finish: () => unknown, fail?: string): { job_id: string } {
   const id = `job_${++store.seq}`;
   jobs[id] = { job: { id, status: 'queued', log: [], result: null, error: null }, created: Date.now(), steps, finish, finished: false, fail };
@@ -145,6 +148,26 @@ function newVersion(p: Store['projects'][string], summary: string) {
   p.model_url = p.glbs[n];
   p.versions = [...p.versions, { n, at: now(), summary, ok: true } as VersionInfo];
   return n;
+}
+
+/**
+ * A crew chat sent from a "describe it" box ("Clothes: a white singlet") makes a fake custom item,
+ * so the "Made by description" list has something in it. Hair gets blonde if the words say so.
+ */
+function mockDescribed(p: Store['projects'][string], message: string) {
+  if (p.kind !== 'crew') return;
+  const m = message.match(/^(Clothes|Head|Equipment|Hair):\s*(.+)$/s);
+  if (!m) return;
+  const spec = p.spec as Record<string, unknown>;
+  if (m[1] === 'Hair') {
+    if (/blond/i.test(m[2])) p.spec = mergePatch(spec, { body: { hair_color: [0.687, 0.479, 0.188] } }) as Project['spec'];
+    return;
+  }
+  const items = (spec.custom_items as { id: string; description: string; code: string }[] | undefined) ?? [];
+  const n = items.length + 1;
+  const kind = m[1] === 'Equipment' ? 'Equipment' : 'Clothes';
+  const code = `# (mock) nothing is built in mock mode\nobj = crew.garment("${kind}__Mock_${n}", ["torso"], (1, 1, 1))`;
+  p.spec = { ...spec, custom_items: [...items, { id: `item_${++store.seq}`, description: m[2].trim(), code }] } as Project['spec'];
 }
 
 const buildSteps = ['Merging the spec', 'Running the builder in Blender', 'Applying overrides', 'Exporting glTF', 'Checking the build report'];
@@ -213,14 +236,24 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
       return { version: n };
     });
   }
+  if (((r = m(/^\/api\/projects\/([^/]+)\/uploads$/)) || (r = m(/^\/api\/uploads$/))) && method === 'POST') {
+    if (r[1]) proj(r[1]);
+    const raw = atob(String(body.data).replace(/^data:[^,]*,/, ''));
+    const blob = new Blob([Uint8Array.from(raw, (c) => c.charCodeAt(0))], { type: body.type || 'application/octet-stream' });
+    const a: Attachment = { id: `u_${(++store.seq).toString(16).padStart(8, '0')}`, name: String(body.name), type: body.type || 'text/plain', size: blob.size, url: URL.createObjectURL(blob) };
+    mockUploads[a.id] = a;
+    return { attachment: a };
+  }
   if ((r = m(/^\/api\/projects\/([^/]+)\/chat$/)) && method === 'POST') {
     const p = proj(r[1]);
-    p.messages = [...p.messages, { who: 'You', text: String(body.message), at: now() }];
+    const attachments = ((body.attachments ?? []) as string[]).map((id) => mockUploads[id]).filter(Boolean);
+    p.messages = [...p.messages, { who: 'You', text: String(body.message), at: now(), ...(attachments.length ? { attachments } : {}) }];
     save();
     const research = body.mode === 'research';
     return startJob(research ? ['Reading the research', 'Searching sources', 'Updating the research'] : ['Reading the request', ...buildSteps], () => {
       const reply: Message = { who: 'AI', text: research ? `(mock) Noted for the research: “${body.message}”. No real search runs in mock mode.` : `(mock) Done: “${body.message}”. Rebuilt as a new version.`, at: now() };
       p.messages = [...p.messages, reply];
+      if (!research) mockDescribed(p, String(body.message));
       if (!research) newVersion(p, String(body.message).slice(0, 60));
       return { message: reply };
     });
