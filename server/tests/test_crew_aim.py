@@ -48,7 +48,7 @@ def test_aim_from_the_equipment_module(make_client):
     spec = proj["spec"]
     assert spec["custom_items"][0]["stance"] == "aim"
     assert spec["animations"] == ["idle", "walk", "raise_to_aim"]      # the test catalog crew has idle and walk
-    assert job["result"]["changed_modules"] == ["equipment"]
+    assert job["result"]["changed_modules"] == ["equipment", "moves"]   # the raise move is a move
     assert "set_stance aim" in agent.prompts[0]                 # the scoped prompt says how
 
 

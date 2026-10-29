@@ -66,6 +66,15 @@ def _obj(props: dict, required: list[str]) -> dict:
 
 
 VEC3 = {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+# add_move / refine_move arguments (contract §6 "Custom moves"; the format is blender/crew/moves.py).
+MOVE_FIELDS = {
+    "description": {"type": "string"},
+    "duration_s": {"type": "number"},
+    "loop": {"type": "boolean"},
+    "feet": {"type": "string", "enum": ["planted", "free"]},
+    "keys": {"type": "array", "items": {"type": "object", "properties": {
+        "t": {"type": "number"}, "pose": {"type": "object"}}, "required": ["t", "pose"]}},
+}
 
 
 # Lester, 29 Oct: "when user describe a equipment, user will also need to describe how the human
@@ -127,6 +136,44 @@ def me3d_helpers(repo_root: Path) -> str:
 def crew_helpers(repo_root: Path) -> str:
     """Public functions in blender/crew/custom.py, for the add_custom_item docs."""
     return module_helpers(repo_root / "blender" / "crew" / "custom.py", "crew")
+
+
+_MOVES_MODULES: dict[Path, Any] = {}
+
+
+def crew_moves(repo_root: Path):
+    """blender/crew/moves.py, the one definition of the move format and its joint limits (contract §6
+    "Custom moves"). Its validation is pure Python (bpy is only imported inside its Blender functions),
+    so the server checks the AI's moves with exactly the rules the builder applies."""
+    import importlib.util
+    path = (Path(repo_root) / "blender" / "crew" / "moves.py").resolve()
+    if path not in _MOVES_MODULES:
+        spec = importlib.util.spec_from_file_location("me3d_crew_moves", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _MOVES_MODULES[path] = mod
+    return _MOVES_MODULES[path]
+
+
+# Lester's plan, "Animation editor": prompted moves built as key poses on the shared skeleton, refined
+# in words ("faster on the way up"). The recipes below were solved and rendered on the default male
+# (blender/crew/moves.py; tests/blender/test_crew_moves.py), so the AI starts from poses that work.
+MOVE_RULES = (
+    "Moves (a gesture, a signal, a salute, pointing, waving, looking around): add_move with a few timed key "
+    "poses; change one with refine_move ('faster on the way up' = bring the first held key earlier and keep "
+    "the rest; 'hold it longer' = later return keys and a longer duration_s; 'slower' = time_scale above 1). "
+    "Rebuild after each change and fix what the build reports (an arm through the body, a joint past its "
+    "limit) by changing the keys it names. While an item is carried in both hands the arms stay on it, so "
+    "a move's arm keys are not used (say so if the user asks for an arm move then).")
+MOVE_RECIPES = (
+    "Tested recipes (right arm; mirror for the left): salute = upperarm_r {twist: 60, out: 90, forward: 40}, "
+    "lowerarm_r {bend: 110, twist: 60}, head {forward: -3} (fingertips at the right brow, palm down), held "
+    "0.6-1.6 s of 2.4 s, with a key on the way up (0.3 s) and down (1.95 s) of upperarm_r {twist: 20, out: 35, "
+    "forward: 35}, lowerarm_r {bend: 125, twist: 30} so the elbow bends first and the hand rises close in front "
+    "of the body (without it the hand swings out wide). "
+    "Point forward = upperarm_r {forward: 90}, lowerarm_r {bend: -20}, fingers_r \"point\". An arm raised out "
+    "to the side bends its elbow forward, across the chest, unless the upper arm is twisted outward "
+    "(twist 60-90): then the elbow bends upward.")
 
 
 def _rgb(v) -> bool:
@@ -311,8 +358,18 @@ class AgentSession:
              ", ".join(cm.ACCESSORIES) + " or the catalog's accessories options) or {\"name\", \"color\": "
              "[r,g,b] 0..1}. Hats are set_clothes hat.",
              _obj({"accessories": {"type": "array", "items": accessory_item}}, ["accessories"])),
-            ("set_animations", "Replace the animation list (not part of any module: main chat only).",
+            ("set_animations", "Module moves: replace the list of built-in animations (the catalog's options; "
+             "raise_to_aim needs an item in both hands). Moves made from words are add_move, not this list.",
              _obj({"animations": {"type": "array", "items": {"type": "string"}}}, ["animations"])),
+            ("add_move", self._move_doc(), _obj(dict(MOVE_FIELDS, name={"type": "string"}),
+                                                ["name", "duration_s", "keys"])),
+            ("refine_move", "Module moves: change a move made from words. Give its name and only what changes: "
+             "keys (the whole new list), duration_s, loop, feet, description, new_name, or time_scale (multiplies "
+             "every key time and the duration: 0.5 = twice as fast). Same format and checks as add_move.",
+             _obj(dict(MOVE_FIELDS, name={"type": "string"}, new_name={"type": "string"},
+                       time_scale={"type": "number"}), ["name"])),
+            ("remove_move", "Module moves: remove a move made from words by name.",
+             _obj({"name": {"type": "string"}}, ["name"])),
             ("add_custom_item", self._custom_item_doc(),
              _obj({"description": {"type": "string"}, "code": {"type": "string"},
                    "module": {"type": "string", "enum": list(cm.CUSTOM_ITEM_MODULES)},
@@ -321,6 +378,18 @@ class AgentSession:
                   ["description", "code", "module"])),
             ("remove_custom_item", "Remove a custom item by id.", _obj({"id": {"type": "string"}}, ["id"])),
         ] + common[1:]
+
+    def _move_doc(self) -> str:
+        mv = crew_moves(self.repo_root)
+        doc = (mv.__doc__ or "").split("The pose convention (what the AI writes)", 1)[-1]
+        doc = doc.split("The pure part", 1)[0]
+        return ("Module moves: make a new move from words, as a few timed key poses on the shared skeleton, "
+                "baked into the model like the built-in clips (a glTF animation named `name`: lower-case, "
+                "digits, _). duration_s 0.3-20 s; loop false (a gesture: starts and ends standing) or true (a "
+                "cycle); feet 'planted' (default; the feet never move) or 'free'. keys: [{\"t\": seconds, "
+                "\"pose\": {bone: {motion: degrees}, ...}}], each key a pose to reach at t (hold a pose with two "
+                "keys holding the same values). " + MOVE_RULES + " " + MOVE_RECIPES + "\nConvention:" + doc +
+                "\nLimits per motion (degrees): " + mv.joint_docs())
 
     def _custom_op_doc(self) -> str:
         return ("Add geometry no builder param covers. `code` is Python run inside Blender after the build "
@@ -841,6 +910,75 @@ class AgentSession:
         return (f"Custom item item_{i} added to {module}" +
                 (f", replacing {', '.join(map(str, removed))}" if removed else "") + ". Call rebuild to run it.")
 
+    # ---- moves made from words (contract §6 "Custom moves") -----------------------------
+    def _moves(self) -> list:
+        return [m for m in self.spec.get("custom_moves") or [] if isinstance(m, dict)]
+
+    def _set_moves(self, moves: list, name: str) -> str:
+        mv = crew_moves(self.repo_root)
+        errors, warnings = [], []
+        clean = mv.validate(moves, errors, warnings)
+        if errors:
+            raise ToolError("Not saved: " + " ".join(errors[:8]) + (" ..." if len(errors) > 8 else ""))
+        spec = copy.deepcopy(self.spec)
+        spec["custom_moves"] = clean
+        self.spec = spec
+        move = next((m for m in clean if m["name"] == name), None)
+        note = ""
+        both = [i for i in spec.get("custom_items") or [] if isinstance(i, dict) and i.get("place") == "both_hands"]
+        if move and both and mv.arm_keys(move):
+            note = (f" Note: {both[0].get('description') or both[0].get('id')} is carried in both hands, so this "
+                    f"move's arm keys ({', '.join(mv.arm_keys(move))}) are not used: the arms stay on it.")
+        return note
+
+    def t_add_move(self, name: str, duration_s: float, keys: list, loop: bool = False, feet: str = "planted",
+                   description: str = "") -> str:
+        self._check_crew()
+        if any(m.get("name") == name for m in self._moves()):
+            raise ToolError(f"There is already a move named {name!r}: change it with refine_move, or pick another name.")
+        move = {"name": name, "description": description, "duration_s": duration_s, "loop": loop, "feet": feet,
+                "keys": keys}
+        note = self._set_moves(self._moves() + [move], name)
+        return (f"Move {name} saved ({len(keys)} keys, {duration_s} s).{note} Call rebuild, then check what it "
+                "reports.")
+
+    def t_refine_move(self, name: str, keys: list | None = None, duration_s: float | None = None,
+                      loop: bool | None = None, feet: str | None = None, description: str | None = None,
+                      new_name: str | None = None, time_scale: float | None = None) -> str:
+        self._check_crew()
+        moves = copy.deepcopy(self._moves())
+        move = next((m for m in moves if m.get("name") == name), None)
+        if move is None:
+            raise ToolError(f"No move named {name!r}. Moves made from words: {[m.get('name') for m in moves]}.")
+        for k, v in (("keys", keys), ("duration_s", duration_s), ("loop", loop), ("feet", feet),
+                     ("description", description)):
+            if v is not None:
+                move[k] = v
+        if time_scale is not None:
+            if not isinstance(time_scale, (int, float)) or not 0.1 <= time_scale <= 10:
+                raise ToolError("time_scale is a number from 0.1 to 10 (0.5 = twice as fast)")
+            move["duration_s"] = round(float(move["duration_s"]) * time_scale, 4)
+            for key in move.get("keys") or []:
+                if isinstance(key, dict) and isinstance(key.get("t"), (int, float)):
+                    key["t"] = round(key["t"] * time_scale, 4)
+        if new_name is not None:
+            if any(m.get("name") == new_name for m in moves if m is not move):
+                raise ToolError(f"There is already a move named {new_name!r}.")
+            move["name"] = new_name
+        note = self._set_moves(moves, move["name"])
+        return f"Move {move['name']} changed.{note} Call rebuild, then check what it reports."
+
+    def t_remove_move(self, name: str) -> str:
+        self._check_crew()
+        moves = self._moves()
+        kept = [m for m in moves if m.get("name") != name]
+        if len(kept) == len(moves):
+            raise ToolError(f"No move named {name!r}. Moves made from words: {[m.get('name') for m in moves]}.")
+        spec = copy.deepcopy(self.spec)
+        spec["custom_moves"] = kept
+        self.spec = spec
+        return f"Removed move {name}. Call rebuild."
+
     def t_remove_custom_item(self, id: str) -> str:
         self._check_crew()
         items = list(self.spec.get("custom_items", []))
@@ -1227,6 +1365,7 @@ CREW_PROMPT = """You edit one human crew member for a maritime simulator. Blende
   - Carried in both hands ("carry the rifle in both hands", "left hand on the barrel, right hand on the trigger", a ready carry): place both_hands (set_place for an item that exists). The builder holds it across the body, muzzle forward-down, right hand on the grip and left on the barrel, in every animation. Declare the grip and support with crew.two_hand_grips when you write the item.
   - Aiming ("raise the rifle up to shooting position", "aim the rifle", "shoulder it"): set_stance aim on the item in both hands. The builder puts the stock in the right shoulder, the muzzle level and forward, the cheek on the stock, the left hand on the handguard, in idle, walk, brace and squat, and adds the raise_to_aim move (ready carry up to the aim in about a second, then hold). "Lower it" / "back to the ready" is set_stance ready. Never say aiming is not possible.
   - Gloves, sunglasses, ear defenders, caps: set_accessories, or add_custom_item with module accessories.
+  - What the person does (module moves): the built-in animations (set_animations) and new moves from words ("salute", "point forward", "wave the boat in"): add_move with timed key poses, refine_move for changes ("faster on the way up"), remove_move.
 - Never answer that something is not available when you can make it. If part of a request truly cannot be built (cloth that flows in the wind, real physics), make the closest thing and say plainly what you made instead.
 - The person is nine modules: gender, skin, hair, shirt, pants, outfit, shoes, equipment, accessories (get_project lists what each owns). Where an item is held or carried (its place) is part of equipment. Work out which module or modules the request is about and change only those. Leave every other module exactly as it is: never remove, recolour, replace or reset anything the user did not mention. Matching a photo or a description is still one change per module it mentions, not a rebuild of the whole person.
 - Describing a module (hair, shirt, pants, shoes, equipment, accessories) is add_custom_item with that module; it replaces that module's earlier described item and nothing else. Equipment items take a place; moving one is set_place.
@@ -1333,6 +1472,8 @@ def module_prompt(module: str) -> str:
             "the other module.").replace("{module}", module)
     if module == "equipment":
         text += " " + CARRY_RULE + " " + AIM_RULE
+    if module == "moves":
+        text += " " + MOVE_RULES + " " + MOVE_RECIPES
     return text + "\n\n"
 
 

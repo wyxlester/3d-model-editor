@@ -2,7 +2,7 @@
 // VITE_MOCK=1 routes every call to an in-browser mock (src/mock) for development before the
 // server exists. The default build always talks to the real /api.
 import type {
-  ApproveResult, Attachment, Catalog, ExportResult, Health, Job, JobLogRecord, JobSummary, Material, ModuleId, Part, Pin, Project, ProjectBase,
+  ApproveResult, Attachment, Catalog, ChatModule, ExportResult, Health, Job, JobLogRecord, JobSummary, Material, Part, Pin, Project, ProjectBase,
   ProjectKind, ProjectSummary, Research, ResearchVersion, RouteResult, Scene, SceneSpec, UnrealReport, VariantRequest, Vec3,
 } from './types';
 import { httpErrorText } from './lib/designPlan';
@@ -81,7 +81,7 @@ export const api = {
   parts: (id: string, n: number) => call<Part[]>('GET', `/api/projects/${enc(id)}/versions/${n}/parts.json`),
   patchSpec: (id: string, patch: Record<string, unknown>) => call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/spec`, { patch }),
   /** `module` scopes a crew chat to one module (CONTRACT §6 "Scoped AI"); omitted = the whole person. */
-  chat: (id: string, message: string, mode: 'build' | 'research', attachments: string[] = [], module?: ModuleId) =>
+  chat: (id: string, message: string, mode: 'build' | 'research', attachments: string[] = [], module?: ChatModule) =>
     call<{ job_id: string }>('POST', `/api/projects/${enc(id)}/chat`, {
       message, mode, ...(attachments.length ? { attachments } : {}), ...(module ? { module } : {}),
     }),

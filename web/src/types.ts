@@ -127,6 +127,8 @@ export interface PartOverride {
  * owns its items and where each is carried (the old "placement" module was merged into it).
  */
 export type ModuleId = 'gender' | 'skin' | 'hair' | 'shirt' | 'pants' | 'outfit' | 'shoes' | 'equipment' | 'accessories';
+/** What a scoped crew chat may change: one of the nine modules, or `moves` (what the person does: the Moves screen). */
+export type ChatModule = ModuleId | 'moves';
 
 /** Where a held or attached equipment item goes (§6 "Placement", part of equipment). Absent = the item's fixed spot. */
 export type Place = 'right_hand' | 'left_hand' | 'chest' | 'back' | 'hip' | 'head' | 'both_hands';
@@ -169,7 +171,13 @@ export interface CrewSpec {
   accessories?: Accessory[];
   /** Things the AI made from a description: Blender Python creating Clothes__* / Equipment__* objects. */
   custom_items?: CustomItem[];
+  /** Moves made from words (§6 "Custom moves"): timed key poses, baked as glTF clips named `name`. */
+  custom_moves?: CustomMove[];
 }
+
+/** One key pose: at `t` seconds, bones by named motion in degrees from the neutral stance (blender/crew/moves.py). */
+export interface MoveKey { t: number; pose: Record<string, unknown> }
+export interface CustomMove { name: string; description?: string; duration_s: number; loop?: boolean; feet?: 'planted' | 'free'; keys: MoveKey[] }
 
 /** How an item carried in both hands is held (§6 "Stance"): the low ready carry, or aimed (stock in the shoulder). */
 export type Stance = 'ready' | 'aim';

@@ -6,7 +6,7 @@ import { httpErrorText } from '../lib/designPlan';
 import { mergePatch } from '../lib/spec';
 import { MODULES, isModuleId, moduleOfItem, placeLabel } from '../lib/modules';
 import type {
-  Attachment, Catalog, CustomItem, Job, JobSummary, Message, ModuleId, Part, Pin, Place, Project, ProjectSummary, Research, RouteResult, Scene,
+  Attachment, Catalog, CustomItem, CustomMove, Job, JobSummary, Message, ModuleId, Part, Pin, Place, Project, ProjectSummary, Research, RouteResult, Scene,
   SceneSpec, UnrealReport, VersionInfo,
 } from '../types';
 import shipPartsJson from '../../public/mock/ship_parts.json';
@@ -182,6 +182,7 @@ function mockCarry(text: string): { place: Place; said: boolean } {
  */
 function mockDescribed(p: Store['projects'][string], message: string, module: unknown): { changed: ModuleId[]; note?: string } {
   if (p.kind !== 'crew') return { changed: [] };
+  if (module === 'moves') return mockMove(p, message);
   // "placement" is the old id of the equipment module (CONTRACT §6); the server accepts it too.
   let m: ModuleId | null = module === 'placement' ? 'equipment' : isModuleId(module) ? module : null;
   let text = message;
@@ -210,6 +211,23 @@ function mockDescribed(p: Store['projects'][string], message: string, module: un
   // Like the server: a shirt or pants change that clears the outfit reports the outfit as changed too.
   const note = carry ? (carry.said ? ` Carried: ${placeLabel(carry.place).toLowerCase()}.` : ` You didn't say how it's held, so I put it in ${placeLabel(carry.place).toLowerCase()}; move it under Equipment.`) : undefined;
   return { changed: (m === 'shirt' || m === 'pants') && hadSuit ? [m, 'outfit'] : [m], note };
+}
+
+/**
+ * The Moves screen's chat (scoped to `moves`, CONTRACT §6 "Custom moves"): a described move becomes a
+ * placeholder move made from words (one key, the right arm forward); "Refine the move "x": ..." only
+ * notes it. Mock GLBs have no such clip, so the move shows as waiting for the rebuild.
+ */
+function mockMove(p: Store['projects'][string], message: string): { changed: ModuleId[]; note?: string } {
+  const spec = p.spec as Record<string, unknown>;
+  const moves = (spec.custom_moves as CustomMove[] | undefined) ?? [];
+  const refine = message.match(/^Refine the move "([^"]+)":/);
+  if (refine) return { changed: [], note: ` (mock) ${refine[1]} would be re-keyed; nothing is baked in mock mode.` };
+  const name = message.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').split('_').slice(0, 3).join('_') || 'move';
+  const move: CustomMove = { name: /^[a-z]/.test(name) ? name : `move_${name}`, description: message.trim(), duration_s: 2, loop: false,
+    keys: [{ t: 1, pose: { upperarm_r: { forward: 90 } } }] };
+  p.spec = { ...spec, custom_moves: [...moves.filter((m) => m.name !== move.name), move] } as Project['spec'];
+  return { changed: [], note: ` (mock) Added the move ${move.name}.` };
 }
 
 // ---- Ships of any type (CONTRACT §5 `type: "custom"`) ---------------------------------------

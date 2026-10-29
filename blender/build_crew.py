@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from crew import animations as crew_anims  # noqa: E402
 from crew import custom as crew_custom  # noqa: E402
 from crew import equipment as crew_equipment  # noqa: E402
+from crew import moves as crew_moves  # noqa: E402
 from crew import spec as crew_spec  # noqa: E402
 from crew import two_hands as crew_two_hands  # noqa: E402
 
@@ -141,9 +142,10 @@ def gltf_export(path):
     bpy.ops.export_scene.gltf(**kwargs)
 
 
-def check_feet(armature, action_names, errors, warnings):
-    """Feet planted: on idle, brace and squat the ankles must not sink below rest height or slide.
-    Returns per-animation stats for the report."""
+def check_feet(armature, action_names, errors, warnings, planted=crew_anims.PLANTED):
+    """Feet planted: on the planted clips (idle, brace, squat, hands_up, raise_to_aim and every move
+    made from words that does not free the feet) the ankles must not sink below rest height or
+    slide. Returns per-animation stats for the report."""
     scene = bpy.context.scene
     stats = {}
     ad = armature.animation_data
@@ -168,7 +170,7 @@ def check_feet(armature, action_names, errors, warnings):
             st["foot_%s_x_range" % s] = round(max(xs[s]) - min(xs[s]), 4)
             if min(zs[s]) < rest_z[s] - 0.005:
                 errors.append("animation %s: foot_%s sinks %.3f m below its rest height" % (name, s, rest_z[s] - min(zs[s])))
-            if name in crew_anims.PLANTED and (st["foot_%s_z_range" % s] > 0.01 or st["foot_%s_x_range" % s] > 0.01):
+            if name in planted and (st["foot_%s_z_range" % s] > 0.01 or st["foot_%s_x_range" % s] > 0.01):
                 errors.append("animation %s: foot_%s is not planted (moves %.3f m)" % (name, s, max(st["foot_%s_z_range" % s], st["foot_%s_x_range" % s])))
         stats[name] = st
     ad.action = None
@@ -299,6 +301,38 @@ def build_modules(spec, armature, objects, equipment, warnings, log, holds=None)
     return errors
 
 
+def build_moves(spec, armature, objects, equipment, holds, warnings, log):
+    """Moves made from words (contract section 6, "Custom moves"): the spec's custom_moves as clips for
+    the bake. Returns ({name: animation data}, names whose feet must stay planted, {} for the torso
+    check to fill)."""
+    moves = spec.get("custom_moves") or []
+    if not moves:
+        return {}, crew_anims.PLANTED, {}
+    axes = crew_moves.neutral_axes(armature)
+    curls = crew_moves.finger_curls(armature)
+    extra = {m["name"]: crew_moves.to_anim(m, axes, curls, crew_anims.FPS) for m in moves}
+    if holds:
+        item = holds[0].obj.name
+        for m in moves:
+            arms = crew_moves.arm_keys(m)
+            if arms:
+                warnings.append("move %s: the hands are holding %s in both hands, so its arm and finger keys (%s) are "
+                                "not used; the arms stay on the item" % (m["name"], item, ", ".join(arms)))
+    planted = tuple(crew_anims.PLANTED) + tuple(m["name"] for m in moves if m["feet"] == "planted")
+    log("moves from words: %s" % ", ".join("%s (%d keys, %.1f s)" % (m["name"], len(m["keys"]), m["duration_s"])
+                                           for m in moves))
+    return extra, planted, {}
+
+
+def move_surface(objects, equipment):
+    """The body as built (clothes and vest included), for the arms-through-the-torso check."""
+    from crew import modules as crew_modules
+    surface = crew_modules.snapshot(objects)
+    if "Equipment__life_vest" in equipment:
+        surface.add(equipment["Equipment__life_vest"], "life_vest")
+    return surface
+
+
 def main():
     t0 = time.time()
     args = parse_args()
@@ -330,8 +364,13 @@ def main():
         equipment, holds = {}, []
         errors.extend(build_modules(spec, armature, objects, equipment, warnings, log, holds))
 
-        actions = crew_anims.bake_all(armature, spec["animations"], log, holds[0] if holds else None)
-        report["feet"] = check_feet(armature, [a.name for a in actions], errors, warnings)
+        extra, planted, hits = build_moves(spec, armature, objects, equipment, holds, warnings, log)
+        torso = crew_moves.TorsoCheck(armature, move_surface(objects, equipment)) if extra else None
+        actions = crew_anims.bake_all(armature, spec["animations"] + list(extra), log, holds[0] if holds else None,
+                                      extra=extra, check=torso, hits=hits)
+        for name, found in hits.items():
+            errors.extend(crew_moves.describe_hits(name, found, crew_anims.FPS))
+        report["feet"] = check_feet(armature, [a.name for a in actions], errors, warnings, planted)
 
         # Parts, triangles, bounds - at rest pose.
         parts = [part_entry(o) for o in objects.values()]
@@ -347,7 +386,9 @@ def main():
         report["bone_names"] = sorted(b.name for b in armature.data.bones)
         report["skeleton"] = "mpfb_game_engine"
         report["animations"] = [a.name for a in actions]
-        report["animation_seconds"] = {a.name: crew_anims.ANIMATIONS[a.name]["duration"] for a in actions}
+        report["animation_seconds"] = {a.name: (extra.get(a.name) or crew_anims.ANIMATIONS[a.name])["duration"]
+                                       for a in actions}
+        report["custom_moves"] = [m["name"] for m in spec["custom_moves"]]
         report["parts"] = len(parts)
 
         target_h = spec["body"]["height_cm"] / 100.0

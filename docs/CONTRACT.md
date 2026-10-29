@@ -166,8 +166,9 @@ by catalog equipment. A failing item is reported as a build error naming its id 
 
 ### Modules (Lester, 29 Oct: "separate out the various parts … in modules that could be configurable by user prompts"; "if the user chooses to describe a particular module … it works and render the particular module, without reseting the entire human")
 
-A crew member is nine **modules**. Each owns a fixed set of spec keys; changing one module never
-touches another's keys. Every module has presets, colours where they matter, and can be described
+A crew member is nine **modules** of what they look like, plus **`moves`**, what they do (the Moves
+screen's scope; it has no row in the crew workshop). Each owns a fixed set of spec keys; changing one
+module never touches another's keys. Every module has presets, colours where they matter, and can be described
 in words (the AI then writes a custom item **tagged with that module**).
 
 | Module id | Owns | Presets (no AI) |
@@ -181,6 +182,7 @@ in words (the AI then writes a custom item **tagged with that module**).
 | `shoes` | `clothes.shoes`, `clothes.shoes_color`; custom items `module: "shoes"` | catalog shoes, or null = barefoot |
 | `equipment` | `equipment[]` items (name, color, `place`); custom items `module: "equipment"`, including their `place` | life_vest, helmet, binoculars, radio; places right_hand, left_hand, chest, back, hip, head, both_hands |
 | `accessories` | `accessories[]` (`{"name","color"}`), `clothes.hat`, `clothes.hat_color`; custom items `module: "accessories"` | cap, sunglasses, ear_defenders, gloves, fedora01, fedora_cocked |
+| `moves` | `animations` (the built-in clips), `custom_moves` (moves made from words) | the catalog's `options.animations` |
 
 Rules:
 - **Outfit vs shirt/pants:** a non-null `clothes.suit` draws instead of `shirt` and `pants`.
@@ -258,6 +260,26 @@ Rules:
     plain clips, no IK. Because the item is in the right hand, the hands never let go in any clip.
     `parts.json` adds `"stance"` and `"aim_support_m"` (where the left hand holds in the aim, item
     mesh frame).
+- **Custom moves** (Lester's plan, "Animation editor": prompted moves as key poses on the shared
+  skeleton, refined in words, "faster on the way up"): `custom_moves` is a list of
+  `{"name", "description", "duration_s", "loop", "feet": "planted"|"free", "keys": [{"t", "pose"}]}`,
+  owned by the `moves` module (AI tools `add_move`, `refine_move` with `time_scale`, `remove_move`;
+  the Moves screen lists them beside the built-ins, its chat is scoped to `moves`, and "Refine" sends
+  `Refine the move "<name>": <words>`). The format, joint table and limits are defined once, in
+  `blender/crew/moves.py`; the server validates with that same file. A pose names a few bones, each
+  by **named motions in degrees from the neutral stance** (standing, arms hanging, elbows soft):
+  spine/neck/head `forward`, `left`, `turn_left`; clavicles `up`, `forward`; upper arms `forward`
+  (90 = pointing ahead), `out` (90 = horizontal to the side), `twist` (+ outward); forearms `bend`
+  (0 = the neutral soft bend), `twist` (+ palm up); hands `bend`, `side`; plus `fingers_l/_r`
+  (`open`, `fist`, `point`), `pelvis_offset` (metres; the knees bend to keep the feet) and, only with
+  `"feet": "free"`, `foot_l/_r` targets. Legs are never posed by angle. A move is baked as a glTF
+  clip named `name` (lower-case, not a built-in's name), each named motion eased between keys and
+  turned into rotations per frame (a loop is a closed curve), starting and ending at neutral unless its keys say otherwise. **Checks** (build errors in
+  words, naming move, key, time and limb): every motion within its joint's limits (spec check);
+  every third frame, sampled points along both upper arms, forearms and hands must lie outside the
+  posed torso's cross-sections (shrunk 15%, as the tests do); feet planted moves are held to it like
+  idle. With an item in both hands the arms stay on it (re-solved every frame) and the move's arm
+  keys are not used (a build warning says so).
 - Custom items gain `"module"` (required for new items; an item without one is treated as
   `equipment` if it makes `Equipment__` objects, else `shirt`), for equipment `"place"`, and for
   a `both_hands` item `"stance"`.

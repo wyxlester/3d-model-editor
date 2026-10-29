@@ -4,6 +4,8 @@ fields to MPFB2 inputs. Pure Python, no bpy, so it is unit-tested outside Blende
 import copy
 import re
 
+from . import moves as crew_moves
+
 SCHEMA = "me3d.crew_spec/1"
 
 ANIMATIONS = ["idle", "walk", "brace", "hands_up", "squat", "raise_to_aim"]
@@ -61,6 +63,7 @@ DEFAULT_SPEC = {
     "accessories": [],
     "animations": list(DEFAULT_ANIMATIONS),
     "custom_items": [],
+    "custom_moves": [],
 }
 
 # Same code rules as ship custom ops (server/app/agent.py FORBIDDEN_CODE): geometry only. The
@@ -392,6 +395,7 @@ def normalize(spec):
         errors.append("animations must be from %s, got unknown %s" % (ANIMATIONS, bad))
     spec["animations"] = [a for a in anims if a in ANIMATIONS]
     spec["custom_items"] = custom_items(spec.get("custom_items"), errors, warnings)
+    spec["custom_moves"] = crew_moves.validate(spec.get("custom_moves"), errors, warnings)
     if "raise_to_aim" in spec["animations"] and not any(
             i.get("place") == "both_hands" for i in spec["custom_items"]):
         warnings.append("raise_to_aim raises an item carried in both hands, and nothing is; it is left out "

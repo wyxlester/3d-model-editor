@@ -271,15 +271,27 @@ def frame_count(anim):
 # ---------------------------------------------------------------------------------------------
 # Baking inside Blender.
 
-def bake_all(armature, names, log=print, hold=None):
+def bake_all(armature, names, log=print, hold=None, extra=None, check=None, hits=None):
     """Bake every named clip. ``hold`` (a two_hands.Hold, or None) solves both arms onto an item
-    carried in both hands on every frame; without one the arms are exactly the clip's."""
+    carried in both hands on every frame; without one the arms are exactly the clip's. ``extra``:
+    more clips by name (moves made from words, crew/moves.py), looked up before the built-ins.
+    ``check`` (a moves.TorsoCheck) is run on every third frame of those extra clips, and what it
+    finds is put in ``hits`` as {clip: {limb: [frame, ...]}}."""
     import bpy  # noqa: F401  (only inside Blender)
     rest = _rest_info(armature)
     actions = []
     for name in names:
-        actions.append(bake(armature, name, ANIMATIONS[name], rest, hold))
-        log("baked animation %s (%d frames)" % (name, frame_count(ANIMATIONS[name]) + 1))
+        anim = (extra or {}).get(name) or ANIMATIONS[name]
+        on_frame = None
+        if check is not None and hits is not None and anim.get("custom"):
+            found = hits.setdefault(name, {})
+
+            def on_frame(f, found=found):
+                if f % 3 == 0:
+                    for limb in check.hits(armature):
+                        found.setdefault(limb, []).append(f)
+        actions.append(bake(armature, name, anim, rest, hold, on_frame))
+        log("baked animation %s (%d frames)" % (name, frame_count(anim) + 1))
     return actions
 
 
@@ -296,7 +308,7 @@ def _rest_info(armature):
     return info
 
 
-def bake(armature, name, anim, rest, hold=None):
+def bake(armature, name, anim, rest, hold=None, on_frame=None):
     import bpy
     from mathutils import Euler, Matrix, Quaternion, Vector
 
@@ -333,6 +345,8 @@ def bake(armature, name, anim, rest, hold=None):
             _solve_leg(armature, rest, side, pose["foot_" + side], view_layer)
         if hold is not None:
             hold.apply(armature, name, t, view_layer)
+        if on_frame is not None:
+            on_frame(f)
         frame = f + 1
         for pb in pbones:
             q = pb.rotation_quaternion.copy()

@@ -66,14 +66,15 @@ def test_each_contract_key_belongs_to_exactly_its_module(section, key, value, mo
 
 
 def test_every_module_has_at_least_one_owned_change():
-    seen = {m for *_, m in CONTRACT_KEYS} | {"equipment"}
+    seen = {m for *_, m in CONTRACT_KEYS} | {"equipment", "moves"}   # list-owned (tested below)
     assert seen == set(MODULES)
 
 
 def test_nine_modules_and_placement_is_an_alias_of_equipment():
-    """Lester, 29 Oct: "combine equipment and equipment placement, it is a duplicate"."""
+    """Lester, 29 Oct: "combine equipment and equipment placement, it is a duplicate". The nine are
+    what the person looks like; moves (what the person does, the Moves screen's scope) comes after."""
     assert MODULES == ("gender", "skin", "hair", "shirt", "pants", "outfit", "shoes", "equipment",
-                       "accessories")
+                       "accessories", "moves")
     assert module_id("placement") == "equipment"
     assert module_id("equipment") == "equipment" and module_id("hair") == "hair"
     assert module_id("pockets") is None and module_id(None) is None
@@ -178,10 +179,19 @@ def test_custom_equipment_place_and_code_are_both_equipment():
 
 
 def test_keys_no_module_owns_are_outside_every_module():
-    new = spec(animations=["idle"], name="Renamed")
+    new = spec(name="Renamed")
     assert changed_modules(BASE, new) == set()
     for m in MODULES:
-        assert outside(BASE, new, m) == ["animations", "name"]
+        assert outside(BASE, new, m) == ["name"]
+
+
+def test_animations_and_moves_from_words_are_the_moves_module():
+    new = spec(animations=["idle"], custom_moves=[{"name": "salute", "duration_s": 2, "keys": []}])
+    assert changed_modules(BASE, new) == {"moves"}
+    assert outside(BASE, new, "moves") == []
+    for m in MODULES:
+        if m != "moves":
+            assert outside(BASE, new, m) == ["animations", "custom_moves"]
 
 
 def test_accessories_list_is_accessories():

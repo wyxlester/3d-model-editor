@@ -15,7 +15,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-MODULES = ("gender", "skin", "hair", "shirt", "pants", "outfit", "shoes", "equipment", "accessories")
+MODULES = ("gender", "skin", "hair", "shirt", "pants", "outfit", "shoes", "equipment", "accessories", "moves")
+# The Moves screen's module: what the person does (the built-in animations and the moves made from
+# words), not what they look like. Lester's plan, "Animation editor": prompted moves refined in words.
 # Old module ids still accepted on POST /chat (older clients, saved messages). Lester, 29 Oct:
 # "combine equipment and equipment placement, it is a duplicate. when user describe a equipment,
 # user will also need to describe how the human is holding the equipment" — so where an item sits
@@ -35,7 +37,7 @@ KEY_OWNER: dict[tuple[str, str], str] = {
     ("clothes", "hat"): "accessories", ("clothes", "hat_color"): "accessories",
 }
 # Whole top-level lists owned by one module. `equipment` and `custom_items` are split per entry.
-LIST_OWNER = {"accessories": "accessories"}
+LIST_OWNER = {"accessories": "accessories", "animations": "moves", "custom_moves": "moves"}
 
 PLACES = ("right_hand", "left_hand", "chest", "back", "hip", "head", "both_hands")
 # both_hands is a two-handed ready carry (long items: a rifle, a boat hook); it needs both hands,
@@ -85,6 +87,8 @@ MODULE_DOCS = {
                  "described: add_custom_item module 'equipment' with its place",
     "accessories": "accessories list (set_accessories), clothes.hat, clothes.hat_color (set_clothes); "
                    "described: add_custom_item module 'accessories'",
+    "moves": "what the person does: the built-in animations list (set_animations) and moves made from "
+             "words, custom_moves (add_move, refine_move, remove_move)",
 }
 
 _MISSING = object()

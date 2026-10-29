@@ -2,7 +2,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { api } from '../api';
 import { mergePatch } from '../lib/spec';
-import type { Attachment, ModuleId } from '../types';
+import type { Attachment, ChatModule } from '../types';
 
 type Run = <R>(label: string, start: () => Promise<{ job_id: string }>, onDone?: (r: R) => void | Promise<void>) => Promise<R | undefined>;
 
@@ -45,7 +45,7 @@ export function useSpecEditor(projectId: string | undefined, run: Run, reload: (
  * to the job's result (undefined if it failed), which may name `changed_modules`.
  */
 export function useCrewChat(projectId: string | undefined, run: Run, reload: () => Promise<unknown>) {
-  return useCallback(async (text: string, atts: Attachment[] = [], module?: ModuleId): Promise<unknown> => {
+  return useCallback(async (text: string, atts: Attachment[] = [], module?: ChatModule): Promise<unknown> => {
     if (!projectId) return undefined;
     return run<unknown>('AI is working on it', async () => {
       const r = await api.chat(projectId, text, 'build', atts.map((a) => a.id), module);

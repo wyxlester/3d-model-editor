@@ -1,5 +1,6 @@
 // Crew animation editor (canvas: Moves.dc.html). Plays and scrubs the crew GLB's real glTF
-// animations with three's AnimationMixer; new moves are asked for in the chat.
+// animations with three's AnimationMixer. New moves are described in words in the chat (scoped to
+// the moves module, CONTRACT §6 "Custom moves"), listed beside the built-ins, and refined in words.
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { modelUrl } from '../api';
@@ -8,6 +9,7 @@ import { OtherWork, useProjectWork } from '../components/JobCenter';
 import { remember, useCatalog, useJobs, useProject, useProjects } from '../hooks';
 import { paths } from '../lib/routing';
 import { moveNeeds } from '../lib/modules';
+import { keyLine, moveRows, refineMessage, removeMovePatch } from '../lib/moves';
 import { assetLabel, mergePatch } from '../lib/spec';
 import type { CrewSpec } from '../types';
 import { CrewViewer } from '../viewer/Viewer';
@@ -33,14 +35,21 @@ export function Moves() {
   const [seek, setSeek] = useState<{ t: number } | null>(null);
   const [bodies, setBodies] = useState(false);
   const [roll, setRoll] = useState(false);
+  const [refine, setRefine] = useState('');
+  const [askingRemove, setAskingRemove] = useState<string | null>(null);
 
   useEffect(() => { if (id) remember('crew', id); }, [id]);
 
   const p = project.data;
   const spec = useMemo(() => mergePatch((p?.spec ?? {}) as Record<string, unknown>, optimistic) as unknown as Partial<CrewSpec>, [p, optimistic]);
   const specAnims = spec.animations ?? [];
-  const onPerson = [...new Set([...clips, ...specAnims])];
+  const rows = moveRows(spec, clips);
+  const onPerson = rows.map((r) => r.name);
+  const builtIns = rows.filter((r) => r.kind === 'built_in');
+  const fromWords = rows.filter((r) => r.kind === 'words');
+  const selected = rows.find((r) => r.name === anim) ?? null;
   const notYet = (catalog.data?.animations ?? []).filter((a) => !onPerson.includes(a));
+  const sendMoves = (text: string, atts: Parameters<typeof sendChat>[1] = []) => sendChat(text, atts, 'moves');
 
   useEffect(() => {
     if (anim && onPerson.includes(anim)) return;
@@ -78,12 +87,34 @@ export function Moves() {
             <ErrorNote error={catalog.error} retry={catalog.reload} />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <span style={{ padding: '0 6px', fontSize: 12, color: 'var(--text-3)' }}>On this person</span>
-              {onPerson.length === 0 && <span className="faint" style={{ padding: '0 6px' }}>None yet.</span>}
-              {onPerson.map((a) => (
-                <button key={a} style={itemStyle(anim === a)} onClick={() => pick(a)}>
-                  <span>{assetLabel(a)}</span>
-                  <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{clips.includes(a) ? 'In the model' : 'Waiting for rebuild'}</span>
+              {builtIns.length === 0 && <span className="faint" style={{ padding: '0 6px' }}>None yet.</span>}
+              {builtIns.map((r) => (
+                <button key={r.name} style={itemStyle(anim === r.name)} onClick={() => pick(r.name)}>
+                  <span>{assetLabel(r.name)}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{r.inModel ? 'In the model' : 'Waiting for rebuild'}</span>
                 </button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ padding: '0 6px', fontSize: 12, color: 'var(--text-3)' }}>Made from words</span>
+              {fromWords.length === 0 && <span className="faint" style={{ padding: '0 6px' }}>None yet. Describe one in the chat, e.g. "salute".</span>}
+              {fromWords.map((r) => (
+                <div key={r.name} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <button style={itemStyle(anim === r.name)} onClick={() => pick(r.name)} title={r.description}>
+                    <span>{assetLabel(r.name)}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{r.inModel ? 'In the model' : 'Waiting for rebuild'}</span>
+                  </button>
+                  {anim === r.name && (askingRemove === r.name ? (
+                    <span style={{ display: 'flex', gap: 6, padding: '0 6px' }}>
+                      <button className="btn sm" onClick={() => setAskingRemove(null)}>Keep</button>
+                      <button className="btn sm" style={{ color: 'var(--red-text)' }} onClick={() => { setAskingRemove(null); edit(removeMovePatch(spec, r.name)); }}>Remove</button>
+                    </span>
+                  ) : (
+                    <span style={{ display: 'flex', gap: 6, padding: '0 6px' }}>
+                      <button className="btn sm" aria-label={`Remove ${assetLabel(r.name)}`} onClick={() => setAskingRemove(r.name)}>Remove</button>
+                    </span>
+                  ))}
+                </div>
               ))}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -135,7 +166,16 @@ export function Moves() {
                 onChange={(e) => scrub(Number(e.target.value))} style={{ flex: 1 }} />
               <span className="faint">Drag to scrub</span>
             </div>
-            <span className="faint">Key poses aren't shown: the server doesn't send key-pose data for an animation yet.</span>
+            {selected?.kind === 'words' ? (
+              <form style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                onSubmit={(e) => { e.preventDefault(); if (!refine.trim() || !anim) return; void sendMoves(refineMessage(anim, refine)); setRefine(''); }}>
+                <span className="faint" style={{ minWidth: 0, flexShrink: 1 }}>{keyLine(selected)}</span>
+                <label htmlFor="refine" className="sr-only">Refine {assetLabel(selected.name)}</label>
+                <input id="refine" className="field" style={{ flex: 1, minWidth: 0, height: 32 }} value={refine} disabled={busy}
+                  placeholder={`Refine ${assetLabel(selected.name).toLowerCase()}: e.g. faster on the way up`} onChange={(e) => setRefine(e.target.value)} />
+                <button className="btn sm" type="submit" disabled={busy || !refine.trim()}>Refine</button>
+              </form>
+            ) : <span className="faint">Built-in move. Key poses are shown for moves made from words.</span>}
           </div>
         </section>
 
@@ -145,10 +185,10 @@ export function Moves() {
             messages={p?.messages ?? []}
             carried={carried}
             busy={busy}
-            label="Describe a new move or a change"
-            placeholder="Hand signal to the coxswain: slow ahead"
-            empty="Describe a move, e.g. 'brace as we come alongside, one hand on the rail', or a change: 'faster on the way up'."
-            onSend={sendChat}
+            label="Describe a new move"
+            placeholder="Salute, then lower the hand"
+            empty="Describe a move, e.g. 'salute', 'point forward at the bow', 'wave the boat in'. Pick a move made from words on the left to refine it: 'faster on the way up'."
+            onSend={sendMoves}
             projectId={id}
             working={work.chatWorking}
             footer={

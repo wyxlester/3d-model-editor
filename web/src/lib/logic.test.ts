@@ -4,6 +4,7 @@ import { hiddenParts, isPartName, jointsOf, levelsFor, ownNodes, partLabel, reso
 import { MAX_POLL_FAILURES, describe as describePoll, nextDelayMs, pollReducer, type PollState } from './jobs';
 import { blenderToGltf, cameraFor, gltfToBlender, jointAxisGltf } from './frames';
 import { assetLabel, clothesSlot, mergePatch, toggleIn } from './spec';
+import { keyLine, moveRows, refineMessage, removeMovePatch } from './moves';
 import { startsNewResearch, targetFor } from './routing';
 import { fileType, refuse, sizeText } from './attachments';
 import {
@@ -990,5 +991,28 @@ describe('reviewing research before a ship is built', () => {
     expect(claimUsed({ sources: ['S2'] }, ['S2'])).toBe(false);
     expect(claimUsed({ sources: 'S2' }, ['S2'])).toBe(true);
     expect(claimUsed({ sources: [] }, ['S2'])).toBe(true);
+  });
+});
+
+describe('moves made from words (CONTRACT §6 "Custom moves")', () => {
+  const salute = { name: 'salute', description: 'Right-hand salute', duration_s: 2.4, keys: [{ t: 0.6, pose: {} }, { t: 1.6, pose: {} }] };
+  const point = { name: 'point_forward', duration_s: 2, keys: [{ t: 0.7, pose: {} }] };
+
+  it('lists built-ins, then moves made from words, each marked in the model or waiting', () => {
+    const spec = { animations: ['idle', 'walk'], custom_moves: [salute, point] };
+    const rows = moveRows(spec, ['idle', 'walk', 'salute']);
+    expect(rows.map((r) => [r.name, r.kind, r.inModel])).toEqual([
+      ['idle', 'built_in', true], ['walk', 'built_in', true], ['salute', 'words', true], ['point_forward', 'words', false]]);
+    // A move made from words is never listed twice, though the model's clips include it.
+    expect(rows.filter((r) => r.name === 'salute')).toHaveLength(1);
+    expect(moveRows({}, [])).toEqual([]);
+  });
+
+  it('says where the keys are, sends refinements by name and removes one move', () => {
+    const [, , row] = moveRows({ animations: ['idle', 'walk'], custom_moves: [salute] }, []);
+    expect(keyLine(row)).toBe('Keys at 0.6 s, 1.6 s · 2.4 s long');
+    expect(keyLine({ name: 'idle', kind: 'built_in', inModel: true })).toBe('');
+    expect(refineMessage('salute', '  faster on the way up ')).toBe('Refine the move "salute": faster on the way up');
+    expect(removeMovePatch({ custom_moves: [salute, point] }, 'salute')).toEqual({ custom_moves: [point] });
   });
 });
