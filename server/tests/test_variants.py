@@ -306,3 +306,10 @@ def test_router_knows_variants():
     for dest in ("ship_variant", "crew_variant"):
         assert parse_route(json.dumps({"destination": dest, "reason": "r", "project_id": "p_1"}), {"p_1"}) == {
             "destination": dest, "reason": "r", "project_id": "p_1"}
+
+
+def test_photo_tools_have_plain_progress_lines():
+    from app.agent import describe_tool
+    assert describe_tool("add_photo", {"title": "Sampan off Pontian, port side"}) == "Adding a photograph: sampan off Pontian, port side"
+    assert describe_tool("add_closeup", {"title": "Tiller outboard"}) == "Cropping a close-up: tiller outboard"
+    assert describe_tool("remove_photo", {"id": "P02"}) == "Removing photograph P02"

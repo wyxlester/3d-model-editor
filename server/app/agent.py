@@ -12,11 +12,14 @@ Design:
 from __future__ import annotations
 
 import ast
+import base64
 import difflib
 import asyncio
 import copy
 import json
 import re
+from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
@@ -25,8 +28,9 @@ from .builds import Builds, summarise_change
 from .catalog import Catalog, CatalogError
 from . import crew_modules as cm
 from . import design_plan as dp
+from . import research_media as rm
 from .specmerge import deep_merge, label_for
-from .store import ProjectStore
+from .store import NotFound, ProjectStore
 
 Log = Callable[[str], None]
 
@@ -48,6 +52,13 @@ FORBIDDEN_CODE = [r"\bimport\s+(os|sys|subprocess|socket|shutil|urllib|requests|
 
 class ToolError(Exception):
     pass
+
+
+@dataclass
+class ToolOutput:
+    """A tool result with pictures for the model to look at (a photo it added, a crop it made)."""
+    text: str
+    images: list[tuple[str, bytes]] = field(default_factory=list)  # (mime, bytes)
 
 
 def _obj(props: dict, required: list[str]) -> dict:
@@ -176,13 +187,37 @@ class AgentSession:
 
     def tool_specs(self, mode: str) -> list[tuple[str, str, dict]]:
         if mode == "research":
-            tools = [("save_research", RESEARCH_DOC, _obj({"research": {"type": "object"}}, ["research"]))]
+            text = {"type": "string"}
+            tools = [
+                ("save_research", RESEARCH_DOC, _obj({"research": {"type": "object"}}, ["research"])),
+                ("add_photo", ADD_PHOTO_DOC, _obj({
+                    "image_url": text, "upload_id": text, "title": text, "vessel": text,
+                    "views": {"type": "array", "items": {"type": "string", "enum": list(rm.VIEWS)}},
+                    "credit": text, "date": text, "observation": text, "source": text,
+                    "status": {"type": "string", "enum": list(rm.PHOTO_STATUSES)},
+                    "rights": text, "modelling_use": text},
+                    ["title", "vessel", "views", "observation", "status", "rights", "modelling_use"])),
+                ("remove_photo", "Remove a stored photograph by id (P02), with its close-ups and files. Use it for "
+                 "a photo of the wrong vessel or a republished copy of one already added.",
+                 _obj({"id": text}, ["id"])),
+                ("add_closeup", ADD_CLOSEUP_DOC, _obj({
+                    "photo": text, "box": {"type": "array", "items": {"type": "integer"}, "minItems": 4, "maxItems": 4},
+                    "title": text, "what_it_shows": text, "claims": {"type": "array", "items": text}},
+                    ["photo", "box", "title", "what_it_shows"])),
+                ("remove_closeup", "Remove a close-up by id (C02) and its file.", _obj({"id": text}, ["id"])),
+                ("set_coverage", "Say in one or two plain sentences what the photographs cover and what is missing "
+                 "(e.g. 'No true overhead photograph found; the roof is read from elevated three-quarter views.'). "
+                 "Which views have photos is worked out from each photo's views; this sets the note only.",
+                 _obj({"note": text}, ["note"])),
+            ]
             if self.is_custom:
                 tools.append(("save_design_plan", self._design_plan_doc(),
                               _obj({"summary": {"type": "array", "items": {"type": "string"}},
                                     "spec": {"type": "object"}}, ["summary", "spec"])))
             if self.kind == "ship":
-                cats = self.catalog.categories()["ship"]
+                # A catalog without categories (older installs, test stand-ins) just offers none.
+                get = getattr(self.catalog, "categories", None)
+                cats = (get() if callable(get) else {}).get("ship", [])
                 tools.append(("set_category", "File this ship in the ship list under one of the catalog's ship "
                               "categories, exactly as written: " + ("; ".join(cats) or "(none defined)") +
                               ". Pick the closest; any other label is refused. Say in your reply where you "
@@ -311,6 +346,19 @@ class AgentSession:
 
     def call(self, name: str, args: dict) -> tuple[str, bool]:
         """Run one tool. Returns (text for the model, is_error)."""
+        blocks, is_error = self.call_content(name, args)
+        return "\n".join(b["text"] for b in blocks if b["type"] == "text"), is_error
+
+    def call_content(self, name: str, args: dict) -> tuple[list[dict], bool]:
+        """Run one tool. Returns (MCP content blocks: text, plus any pictures, is_error)."""
+        out = self._call(name, args)
+        text, is_error = out[0], out[1]
+        blocks = [{"type": "text", "text": text}]
+        for mime, raw in out[2] if len(out) > 2 else []:
+            blocks.append({"type": "image", "data": base64.b64encode(raw).decode(), "mimeType": mime})
+        return blocks, is_error
+
+    def _call(self, name: str, args: dict) -> tuple:
         self.tool_calls.append(name)
         allowed = {n for n, _, _ in self.tool_specs(self.mode)}
         fn = getattr(self, f"t_{name}", None)
@@ -324,10 +372,15 @@ class AgentSession:
             self.spec = before  # a refused call changes nothing
             self.log(f"AI tool {name} refused: {e}")
             return str(e), True
+        except rm.MediaError as e:
+            self.log(f"AI tool {name} refused: {e}")
+            return str(e), True
         except TypeError as e:
             self.spec = before
             return f"Bad arguments for {name}: {e}", True
         self.log(f"AI tool {name}: ok")
+        if isinstance(out, ToolOutput):
+            return out.text, False, out.images
         text = out if isinstance(out, str) else json.dumps(out, indent=1)
         return (text + (" " + " ".join(notes) if notes else "")), False
 
@@ -722,19 +775,201 @@ class AgentSession:
 
     # ---- research ---------------------------------------------------------------------
     def t_save_research(self, research: dict) -> str:
-        errors = validate_research(research)
+        stored = self.store.load(self.pid).get("research") or {}
+        media_ids = [m.get("id") for k in ("photos", "closeups") for m in stored.get(k) or []]
+        errors = validate_research(research, media_ids)
         if errors:
             raise ToolError("Research not saved. Fix: " + "; ".join(errors))
         research = dict(research, schema="me3d.research/1")
+        kept = (" Photographs, close-ups and coverage are kept as stored; change them with add_photo, add_closeup "
+                "and set_coverage." if any(k in research for k in rm.MEDIA_KEYS) else "")
         rev = self.store.set_research(self.pid, research)
         self.research_saved = True
         if not self.is_custom:
-            return "Research saved."
+            return "Research saved." + kept
         plan = self.store.load(self.pid).get("design_plan") or {}
         note = {"stale": " The approved design plan no longer matches it: redraft it with save_design_plan.",
                 "draft": " The draft design plan was drafted against older research: redraft it if it changed."
                 }.get(plan.get("status"), "")
-        return f"Research saved (revision {rev}).{note}"
+        return f"Research saved (revision {rev}).{note}{kept}"
+
+    # ---- research photographs and close-ups (contract §12) -----------------------------
+    def _media_dir(self, sub: str) -> Path:
+        d = self.store.research_dir(self.pid) / sub
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _file_url(self, sub: str, fname: str) -> str:
+        return f"/api/files/projects/{self.pid}/research/{sub}/{fname}"
+
+    def _change_media(self, fn: Callable[[dict, dict], tuple[Any, bool]]) -> tuple[Any, bool]:
+        """Read-modify-write the research record under the project lock. fn(research, project) changes
+        it in place and returns (result, changed). A change recounts photos and coverage and bumps the
+        research revision, as save_research does; a ToolError inside fn saves nothing."""
+        with self.store.edit(self.pid) as project:
+            research = project.get("research") or {"schema": "me3d.research/1"}
+            result, changed = fn(research, project)
+            if changed:
+                rm.refresh(research)
+                project["research"] = research
+                dp.on_research_saved(project)
+            return result, changed
+
+    @staticmethod
+    def _text_field(name: str, value, required: bool = True) -> str | None:
+        if value is None and not required:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ToolError(f"{name} is required: a plain sentence or phrase.")
+        return value.strip()
+
+    def _plan_note(self) -> str:
+        if not self.is_custom:
+            return ""
+        plan = self.store.load(self.pid).get("design_plan") or {}
+        return (" The design plan is now older than the research: redraft it with save_design_plan."
+                if plan.get("status") in ("draft", "stale") else "")
+
+    def t_add_photo(self, title: str, vessel: str, views: list, observation: str, status: str, rights: str,
+                    modelling_use: str, image_url: str | None = None, upload_id: str | None = None,
+                    credit: str | None = None, date: str | None = None, source: str | None = None) -> ToolOutput:
+        if bool(image_url) == bool(upload_id):
+            raise ToolError("Give exactly one of image_url (the direct URL of the image file) or upload_id "
+                            "(an image Lester attached).")
+        fields = {k: self._text_field(k, v) for k, v in (("title", title), ("vessel", vessel),
+                  ("observation", observation), ("rights", rights), ("modelling_use", modelling_use))}
+        if not isinstance(views, list) or not views or any(v not in rm.VIEWS for v in views):
+            raise ToolError(f"views is a non-empty list drawn from {list(rm.VIEWS)}: the sides the photo shows.")
+        if status not in rm.PHOTO_STATUSES:
+            raise ToolError(f"status is one of {list(rm.PHOTO_STATUSES)}: baseline (the exact vessel), comparison "
+                            "(a sister or similar craft), excluded (kept for the record, not used).")
+        accessed = _today()
+        if upload_id:
+            try:
+                meta, raw = self.store.get_upload(self.pid, upload_id)
+            except (NotFound, OSError):
+                raise ToolError(f"No attachment {upload_id!r} on this project. Use the id of an image Lester "
+                                "attached (u_ followed by 8 characters).")
+            if not str(meta.get("type", "")).startswith("image/"):
+                raise ToolError(f"{meta.get('name')} is not a picture, so it cannot be added as a photograph.")
+            image = rm.identify(raw, meta.get("type", ""))
+            credit = self._text_field("credit", credit, required=False) or "Supplied by Lester"
+            date = self._text_field("date", date, required=False) or f"Attached {accessed}; capture date not given"
+            source = (self._text_field("source", source, required=False) or
+                      f"Attached by Lester in chat ({meta.get('name')})")
+            origin = {"image_url": None, "upload": upload_id}
+        else:
+            credit = self._text_field("credit", credit)
+            date = self._text_field("date", date)
+            source = self._text_field("source", source)
+            image = rm.download(image_url)
+            origin = {"image_url": image_url.strip()}
+
+        def add(research: dict, project: dict):
+            photos = research.setdefault("photos", [])
+            for p in photos:
+                if p.get("sha256") == image.sha256:
+                    return p, False
+            if len(photos) >= rm.MAX_PHOTOS:
+                raise ToolError(f"There are already {rm.MAX_PHOTOS} photographs. Remove weaker ones first.")
+            seq = project.setdefault("research_seq", {})
+            pid_, seq["P"] = rm.next_id("P", [p.get("id") for p in photos], seq.get("P", 0))
+            fname = pid_ + image.ext
+            (self._media_dir("photos") / fname).write_bytes(image.data)
+            rec = {"id": pid_, "title": fields["title"], "vessel": fields["vessel"], "views": list(dict.fromkeys(views)),
+                   "credit": credit, "date": date, "observation": fields["observation"], "source": source,
+                   **origin, "status": status, "rights": fields["rights"], "modelling_use": fields["modelling_use"],
+                   "width": image.width, "height": image.height, "sha256": image.sha256, "accessed": accessed,
+                   "file": self._file_url("photos", fname)}
+            photos.append(rec)
+            return rec, True
+
+        rec, added = self._change_media(add)
+        if not added:
+            return ToolOutput(f"That image is already stored as {rec['id']} (same SHA-256), so nothing was added. "
+                              f"Use {rec['id']}.")
+        look, mime, scale = rm.preview(image.data)
+        how = ("Boxes for add_closeup are in the photo's own pixels" +
+               (f"; the copy below is shown at 1/{scale:.2f} size, so multiply what you measure on it by "
+                f"{scale:.2f}." if scale > 1 else ", the same as the copy below."))
+        return ToolOutput(f"Added {rec['id']}: {rec['width']}x{rec['height']} px, SHA-256 {rec['sha256'][:12]}…. "
+                          f"Look at it before describing it. {how}{self._plan_note()}", [(mime, look)])
+
+    def t_remove_photo(self, id: str) -> str:
+        def remove(research: dict, _project: dict):
+            photos = research.get("photos") or []
+            hit = next((p for p in photos if p.get("id") == id), None)
+            if hit is None:
+                raise ToolError(f"No photograph {id!r}. Stored: {[p.get('id') for p in photos] or 'none'}.")
+            research["photos"] = [p for p in photos if p is not hit]
+            gone = [c for c in research.get("closeups") or [] if c.get("photo") == id]
+            research["closeups"] = [c for c in research.get("closeups") or [] if c.get("photo") != id]
+            for rec, sub in [(hit, "photos")] + [(c, "closeups") for c in gone]:
+                (self.store.research_dir(self.pid) / sub / Path(rec["file"]).name).unlink(missing_ok=True)
+            return [c["id"] for c in gone], True
+
+        gone, _ = self._change_media(remove)
+        return (f"Removed {id}" + (f" and its close-ups {', '.join(gone)}" if gone else "") +
+                f". Update any claim that cites {id} with save_research.")
+
+    def t_add_closeup(self, photo: str, box: list, title: str, what_it_shows: str,
+                      claims: list | None = None) -> ToolOutput:
+        title = self._text_field("title", title)
+        what = self._text_field("what_it_shows", what_it_shows)
+        if claims is not None and (not isinstance(claims, list) or
+                                   not all(isinstance(c, str) and c.strip() for c in claims)):
+            raise ToolError("claims is a list of short sentences this close-up supports.")
+        stored = (self.store.load(self.pid).get("research") or {}).get("photos") or []
+        src = next((p for p in stored if p.get("id") == photo), None)
+        if src is None:
+            raise ToolError(f"No photograph {photo!r}. Add it with add_photo first; stored: "
+                            f"{[p.get('id') for p in stored] or 'none'}.")
+        x, y, w, h = rm.check_box(box, src["width"], src["height"])
+        raw = (self.store.research_dir(self.pid) / "photos" / Path(src["file"]).name).read_bytes()
+        png = rm.crop(raw, [x, y, w, h])
+
+        def add(research: dict, project: dict):
+            if not any(p.get("id") == photo for p in research.get("photos") or []):
+                raise ToolError(f"Photograph {photo} was removed meanwhile; nothing cropped.")
+            closeups = research.setdefault("closeups", [])
+            seq = project.setdefault("research_seq", {})
+            cid, seq["C"] = rm.next_id("C", [c.get("id") for c in closeups], seq.get("C", 0))
+            (self._media_dir("closeups") / f"{cid}.png").write_bytes(png)
+            rec = {"id": cid, "photo": photo, "box": [x, y, w, h], "title": title, "what_it_shows": what,
+                   "claims": [c.strip() for c in claims or []], "file": self._file_url("closeups", f"{cid}.png")}
+            closeups.append(rec)
+            return rec, True
+
+        rec, _ = self._change_media(add)
+        look, mime, _scale = rm.preview(png)
+        return ToolOutput(f"Close-up {rec['id']} cut from {photo} at {rec['box']} ({w}x{h} px). Check it shows "
+                          f"what you meant; if not, remove_closeup {rec['id']} and crop again.{self._plan_note()}",
+                          [(mime, look)])
+
+    def t_remove_closeup(self, id: str) -> str:
+        def remove(research: dict, _project: dict):
+            closeups = research.get("closeups") or []
+            hit = next((c for c in closeups if c.get("id") == id), None)
+            if hit is None:
+                raise ToolError(f"No close-up {id!r}. Stored: {[c.get('id') for c in closeups] or 'none'}.")
+            research["closeups"] = [c for c in closeups if c is not hit]
+            (self.store.research_dir(self.pid) / "closeups" / Path(hit["file"]).name).unlink(missing_ok=True)
+            return id, True
+
+        self._change_media(remove)
+        return f"Removed close-up {id}."
+
+    def t_set_coverage(self, note: str) -> str:
+        note = self._text_field("note", note)
+
+        def setnote(research: dict, _project: dict):
+            research["coverage"] = dict(research.get("coverage") or {}, note=note)
+            return None, True
+
+        self._change_media(setnote)
+        cov = (self.store.load(self.pid).get("research") or {}).get("coverage") or {}
+        missing = [v for v in rm.COVERAGE_VIEWS if not cov.get(v)]
+        return "Coverage note saved." + (f" Views with no photograph: {', '.join(missing)}." if missing else "")
 
     def t_set_category(self, category: str) -> str:
         """Lester, 29 Oct: research files a ship under one of the catalog's ship categories, never an
@@ -778,11 +1013,55 @@ RESEARCH_DOC = (
     "claims: [{claim, value?, unit?, sources: [source ids], status, consequence_for_model}].\n"
     "open_questions: [{question, why_it_matters}].\n"
     "articulation: [{part (Group__Part name), motion, axis?, range_deg?: [min,max], priority: P0|P1|P2, "
-    "evidence: [source ids]}] including parts that must NOT move (motion 'fixed')."
+    "evidence: [source ids]}] including parts that must NOT move (motion 'fixed').\n"
+    "A claim may cite stored photographs and close-ups (P01, C02) as well as sources. Photographs, close-ups "
+    "and coverage are not part of this record: add_photo, add_closeup and set_coverage manage them, and they "
+    "are kept whenever you save."
+)
+
+ADD_PHOTO_DOC = (
+    "Store one real photograph as research evidence. The server downloads it (or copies Lester's attachment), "
+    "checks it is a PNG, JPEG, WebP or GIF of at most 15 MB on a public website, measures and hashes it, and "
+    "files it as P01, P02... A copy of a photo already stored (same SHA-256) is not added again; you get its id.\n"
+    "image_url: the direct URL of the image file itself (often ending .jpg/.png/.webp; on Wikimedia Commons the "
+    "upload.wikimedia.org address), not the page it appears on. Or upload_id: an image Lester attached (then "
+    "credit defaults to 'Supplied by Lester').\n"
+    "title: what the photo shows, e.g. 'PC 303: bow, cabin and roof fittings'. vessel: the exact vessel or type "
+    "pictured. views: which of " + ", ".join(rm.VIEWS) + " it shows. credit: photographer and/or publisher as "
+    "credited. date: published and/or captured, as stated ('Published 19 July 2025; capture date not "
+    "specified'). observation: what it shows that matters for the model, and what to ignore in it. source: the "
+    "page the image appears on. status: baseline (the exact vessel), comparison (a sister or similar craft), "
+    "excluded (kept for the record, not used). rights: e.g. 'Copyright retained by credited owner; research "
+    "reference, not a texture', or the licence (CC BY-SA 4.0). modelling_use: what it is used for (hull shape, "
+    "roof fittings).\n"
+    "The result shows you the photo: describe only what you see in it."
+)
+
+ADD_CLOSEUP_DOC = (
+    "Cut a close-up out of a stored photograph: a fitting or detail that changes the model (an outboard, a "
+    "searchlight, a hatch, a rail base). box is [x, y, w, h] in the photo's own pixels (left, top, width, "
+    "height), at least 16 px each way and inside the photo; add_photo said how its preview scales. The server "
+    "crops exactly that region: no enlargement, sharpening or generated detail. Stored as C01, C02...\n"
+    "title: e.g. 'Roof searchlight'. what_it_shows: what the crop proves and what it changes in the model. "
+    "claims: optional short sentences it supports. The result shows you the crop: check it."
 )
 
 
-def validate_research(r: Any) -> list[str]:
+def _claim_status_ok(status: Any) -> bool:
+    """Contract §12: a claim's status is one evidence status, or two combined with " + "
+    ("Official + Photographed")."""
+    if not isinstance(status, str):
+        return False
+    parts = [x.strip() for x in status.split(" + ")]
+    return 1 <= len(parts) <= 2 and all(x in EVIDENCE_STATUSES for x in parts)
+
+
+def _today() -> str:
+    return date.today().isoformat()
+
+
+def validate_research(r: Any, media_ids: Any = ()) -> list[str]:
+    """media_ids: stored photo and close-up ids (P01, C01), which claims may cite like sources."""
     errs: list[str] = []
     if not isinstance(r, dict):
         return ["research must be an object"]
@@ -813,11 +1092,11 @@ def validate_research(r: Any) -> list[str]:
         if not isinstance(c, dict) or not c.get("claim"):
             errs.append(f"claims[{i}] needs claim text")
             continue
-        if c.get("status") not in EVIDENCE_STATUSES:
-            errs.append(f"claims[{i}].status must be one of {EVIDENCE_STATUSES}")
+        if not _claim_status_ok(c.get("status")):
+            errs.append(f"claims[{i}].status must be one of {EVIDENCE_STATUSES}, or two joined by ' + '")
         if not c.get("consequence_for_model"):
             errs.append(f"claims[{i}].consequence_for_model is required")
-        missing = [x for x in c.get("sources", []) if x not in ids]
+        missing = [x for x in c.get("sources", []) if x not in ids and x not in set(media_ids)]
         if missing:
             errs.append(f"claims[{i}] cites unknown sources {missing}")
     if not isinstance(r.get("open_questions"), list):
@@ -860,12 +1139,21 @@ CREW_PROMPT = """You edit one human crew member for a maritime simulator. Blende
 - An outfit (suit) fills shirt and pants. Setting a shirt or pants clears the suit; choosing a suit clears shirt, pants and their described items. The tools do this for you.
 """ + COMMON_RULES
 
+PHOTO_RULES = """
+Photographs and close-ups (the standard is a photo atlas: every photo a real stored file with its provenance):
+- Look for real photographs of the exact vessel or type: news and official releases, government and navy sites, museums, Wikimedia Commons. Add each useful one with add_photo, giving the image file's own URL and full provenance: title, vessel, views, credit, date, observation, source page, status, rights, modelling use. Prefer the largest copy; never add a republished copy or a crop of a photo already added.
+- An image Lester attached is added with add_photo and its upload_id, credit "Supplied by Lester".
+- Never describe, cite or count a photo you have not added: the tool shows you each one, so describe what you see in it.
+- Record which views are covered and which are missing with set_coverage (a missing top view is a finding, not a failure). Aim for port, starboard, bow, stern, top and details.
+- Crop close-ups (add_closeup) of the fittings that change the model: engines, searchlights, hatches, rails, masts, the helm. Boxes are pixels of the photo; each crop is real pixels, never generated or enhanced.
+- Claims may cite photos and close-ups (P01, C02). Add photos and close-ups before save_research, so the record cites what is stored."""
+
 RESEARCH_PROMPT = """You research one real vessel so a 3D model of it can be built for a maritime simulator. The user is Lester: ex-navy, not an engineer.
 - Use public sources only (WebSearch, WebFetch). Pick ONE exact baseline hull; sister craft are 'Comparison only'; other classes are not evidence.
 - Every source gets an evidence status: Official, Photographed, Photo reading, Inference, Comparison only, Secondary lead, Unverified. Your rating is a judgement, never 'verified'.
 - Every claim says what it changes in the model (consequence_for_model). Unknowns go to open_questions, not guesses.
 - Propose articulation: what moves (P0 essential .. P2 nice), and what must not move.
-- Save with save_research (it validates; fix and resave on errors). Then reply in two or three plain sentences: the verdict and the biggest open question."""
+- Save with save_research (it validates; fix and resave on errors). Then reply in two or three plain sentences: the verdict and the biggest open question.""" + PHOTO_RULES
 
 
 CUSTOM_RESEARCH_PROMPT = """You research a vessel of any type that the user asked for in their own words (the brief) and usually with photos, so a 3D model of it can be built for a maritime simulator. The user is Lester: ex-navy, the product owner, not an engineer. You never build anything: you research, then draft a design plan the user approves; approving it is what builds the ship.
@@ -876,7 +1164,7 @@ CUSTOM_RESEARCH_PROMPT = """You research a vessel of any type that the user aske
 - When the research is good enough to build from, or the user asks for a plan, draft the design plan with save_design_plan (after save_research). Redraft it whenever the research changes. Keep its summary in plain English: size, hull form, each superstructure tier, colours, details to add, and assumptions with values.
 - Articulation: what moves (radar spin, davit, tender crane) and what must not.
 - The ship starts filed under "Other" in the ship list. While it is still under "Other", call set_category in the same turn you identify what kind of vessel it is (usually the first turn), before you reply: file it in the closest of the catalog's ship categories (a motor yacht goes under "Passenger and leisure") and say in your reply where you filed it. Do not leave it under "Other" for a later turn. Lester can change it in the ship list.
-- Reply in two to four plain sentences: what you found or changed, the most important open question, whether a plan is ready to approve, and the category you filed it under if you filed it this turn."""
+- Reply in two to four plain sentences: what you found or changed, the most important open question, whether a plan is ready to approve, and the category you filed it under if you filed it this turn.""" + PHOTO_RULES
 
 
 def custom_research_context(project: dict, spec: dict, cat_entry: dict) -> str:
@@ -908,6 +1196,27 @@ def custom_research_context(project: dict, spec: dict, cat_entry: dict) -> str:
     docs = cat_entry.get("param_docs")
     if docs:
         lines.append("Custom builder params (docs and ranges): " + json.dumps(docs))
+    return "\n".join(lines) + "\n\n"
+
+
+def research_media_context(project: dict) -> str:
+    """The photographs and close-ups already stored, so a research turn adds to them (and cites
+    them) instead of fetching them again. The AI has no memory between turns."""
+    research = project.get("research") or {}
+    photos, closeups = research.get("photos") or [], research.get("closeups") or []
+    if not photos:
+        return "Photographs stored so far: none.\n\n"
+    lines = ["Photographs stored so far:"]
+    lines += [f"- {p['id']}: {p.get('title')} ({p.get('vessel')}; views {', '.join(p.get('views') or [])}; "
+              f"{p.get('status')}; {p.get('width')}x{p.get('height')} px; from {p.get('image_url') or p.get('source')})"
+              for p in photos]
+    if closeups:
+        lines.append("Close-ups: " + "; ".join(f"{c['id']} from {c.get('photo')} at {c.get('box')}: {c.get('title')}"
+                                                for c in closeups))
+    cov = research.get("coverage") or {}
+    missing = [v for v in rm.COVERAGE_VIEWS if not cov.get(v)]
+    if missing:
+        lines.append("Views with no photograph yet: " + ", ".join(missing))
     return "\n".join(lines) + "\n\n"
 
 
@@ -971,6 +1280,11 @@ def describe_tool(name: str, args: dict | None) -> str | None:
         "set_accessories": f"Setting accessories: {_words(_item_names(a.get('accessories') or ['none']))}",
         "save_design_plan": "Drafting the design plan",
         "set_category": f"Filing it under {a.get('category') or 'a category'}",
+        "add_photo": f"Adding a photograph: {_lower_first(str(a.get('title') or 'from the web'))}",
+        "remove_photo": f"Removing photograph {a.get('id', '')}".rstrip(),
+        "add_closeup": f"Cropping a close-up: {_lower_first(str(a.get('title') or 'a detail'))}",
+        "remove_closeup": f"Removing close-up {a.get('id', '')}".rstrip(),
+        "set_coverage": "Noting which views the photographs cover",
         "set_animations": f"Setting moves: {_words(a.get('animations') or ['none'])}",
         "WebSearch": f"Searching the web: {a.get('query', '')}",
         "WebFetch": f"Reading {urlparse(str(a.get('url', ''))).netloc or 'a web page'}",
@@ -1025,8 +1339,8 @@ class ClaudeAgentRunner:
         def make(name: str, desc: str, schema: dict):
             @tool(name, desc, schema)
             async def handler(args: dict) -> dict:
-                text, is_error = await asyncio.to_thread(session.call, name, args)
-                out: dict = {"content": [{"type": "text", "text": text}]}
+                blocks, is_error = await asyncio.to_thread(session.call_content, name, args)
+                out: dict = {"content": blocks}
                 if is_error:
                     out["is_error"] = True
                 return out

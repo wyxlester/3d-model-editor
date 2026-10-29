@@ -3,6 +3,7 @@
 data/projects/<id>/project.json                 metadata, pins, messages, research, undo stack
 data/projects/<id>/v<n>/{spec.json, model.glb, model.blend, parts.json, build_report.json}
 data/projects/<id>/uploads/<upload id>.<ext> and .json   chat attachments
+data/projects/<id>/research/photos/P01.<ext>, research/closeups/C01.png   research media (§12)
 
 A build always makes a new version folder. A version becomes *current* when its build is ok
 (or when the project has no current version yet, so a first failed build still leaves a spec to
@@ -23,6 +24,7 @@ from typing import Any, Iterator
 
 from .design_plan import approve_refusal, on_research_saved
 from .jobs import now_iso
+from .research_media import MEDIA_KEYS
 
 ID_RE = re.compile(r"^[a-z0-9_]+$")
 UPLOAD_ID_RE = re.compile(r"^u_[a-f0-9]{8}$")
@@ -308,11 +310,20 @@ class ProjectStore:
         raise NotFound(pin_id)
 
     def set_research(self, pid: str, research: dict) -> int:
-        """Save the research; returns the new research revision (an approved plan goes stale)."""
+        """Save the research; returns the new research revision (an approved plan goes stale).
+        Photographs, close-ups and coverage are kept from the stored record whatever the new one
+        says: their own tools manage them, and a resave of the text must not drop the files."""
         with self.edit(pid) as project:
+            old = project.get("research") or {}
+            research = {k: v for k, v in research.items() if k not in MEDIA_KEYS}
+            research.update({k: old[k] for k in MEDIA_KEYS if k in old})
             project["research"] = research
             on_research_saved(project)
             return project["research_rev"]
+
+    def research_dir(self, pid: str) -> Path:
+        """data/projects/<id>/research/{photos,closeups}/: files the research tools store."""
+        return self._dir(pid) / "research"
 
     def set_design_plan(self, pid: str, summary: list[str], spec: dict) -> dict:
         """A new draft, stamped with the research revision it was drafted against."""

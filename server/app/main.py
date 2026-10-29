@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from . import crew_modules
 from .agent import (AgentRunner, AgentSession, ClaudeAgentRunner, custom_research_context, module_prompt,
-                    plan_build_prompt, variant_prompt, variant_research_prompt)
+                    plan_build_prompt, research_media_context, variant_prompt, variant_research_prompt)
 from .builder import BlenderRunner, BuilderRunner
 from .builds import Builds, built_line, summarise_change
 from .catalog import Catalog, CatalogError
@@ -566,6 +566,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             if module:
                 text = module_prompt(module) + text
             sent = list(files)
+            if mode == "research" and not custom:  # a custom ship's context below carries the whole record
+                text = research_media_context(store.load(pid)) + text
             if custom:
                 now = store.load(pid)
                 if mode == "research":
