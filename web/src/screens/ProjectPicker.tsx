@@ -3,7 +3,8 @@
 // A search box, category chips, filters (status, original or variant, base type), sorting and
 // grouping narrow the list; the filter lives in the page address, so Back and a shared link keep it.
 // Each project shows a picture of its model; the selected one is previewed live beside the list,
-// with Open and Make a variant, and can be renamed and filed under a category there.
+// with Open, Make a variant and Delete (confirmed in a dialog; drafts are badged, Lester 29 Oct), and
+// can be renamed and filed under a category there.
 // Order on the Ship page (Lester, 29 Oct): the Describe card, then the search and filters directly
 // above the list they filter, then the list with its preview, then the bases.
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -11,10 +12,12 @@ import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-do
 import { api, errorText, modelUrl } from '../api';
 import { ErrorNote, JobLines, TopBar, useAttachPicker } from '../components/common';
 import { useVariantDialog } from '../components/VariantDialog';
+import { DeleteDialog } from '../components/DeleteDialog';
 import { useJobCenter } from '../components/JobCenter';
 import { activeFor, isActiveJob } from '../lib/jobcenter';
 import { recall, remember, useCatalog, useJobs, useProjects } from '../hooks';
 import { briefFromCarried } from '../lib/designPlan';
+import { draftBadge } from '../lib/draft';
 import type { ViewName } from '../lib/frames';
 import {
   DEFAULT_FILTER, UNCATEGORIZED, applyFilter, applyOtherFilters, categoryCounts, categoryOf, filterFromParams,
@@ -62,6 +65,11 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
   const variant = useVariantDialog();
   const mine = useMemo(() => (projects.data ?? []).filter((p) => p.kind === kind), [projects.data, kind]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // After a delete nothing is selected until the user picks one (the preview of a different
+  // project, with its own Delete button, must not slide in under the pointer).
+  const keepEmpty = useRef(false);
+  const select = (id: string) => { keepEmpty.current = false; setSelectedId(id); };
+  const [deleting, setDeleting] = useState<ProjectSummary | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   // Models being changed in the background: marked in the list, and re-read when a change finishes
   // so the picture and preview show the new version.
@@ -90,6 +98,7 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
     const list = shownIds ? shownIds.split(',') : [];
     setSelectedId((cur) => {
       if (cur && list.includes(cur)) return cur;
+      if (keepEmpty.current) return null;
       const last = recall(kind);
       return last && list.includes(last) ? last : list[0] ?? null;
     });
@@ -121,7 +130,7 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
   const noun = kind === 'ship' ? 'ships' : 'crew';
   const row = (p: ProjectSummary) => (
     <ProjectRow key={p.id} p={p} kind={kind} on={p.id === selectedId} working={activeFor(center.jobs, p.id).length > 0}
-      onSelect={() => setSelectedId(p.id)} onOpen={() => go(p)} />
+      onSelect={() => select(p.id)} onOpen={() => go(p)} />
   );
 
   return (
@@ -145,7 +154,9 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
               <select className="field" aria-label="Status" value={filter.status} onChange={(e) => setFilter({ status: e.target.value as ProjectFilter['status'] })}>
                 <option value="all">Any status</option>
                 <option value="working">Working on a change</option>
-                <option value="approval">Awaiting approval</option>
+                <option value="draft">Drafts (not approved yet)</option>
+                <option value="final">Final</option>
+                <option value="approval">Variants awaiting approval</option>
                 <option value="built">Built</option>
                 <option value="unbuilt">Not built yet</option>
               </select>
@@ -222,11 +233,16 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
                         {selected.version ? `v${selected.version}` : 'Not built yet'} · {baseLabel(selected.base ?? '')}
                         {selected.derived_from ? ` · variant of ${selected.derived_from.name} v${selected.derived_from.version}` : ''}
                       </span>
+                      {draftBadge(selected) && <span className="chip amber" style={{ alignSelf: 'flex-start' }}>{draftBadge(selected)}</span>}
                     </span>
                     <button className="btn" disabled={!selected.version || !!selected.draft || busy || placeholder(selected)} onClick={() => variant.show(selected.id)}
                       title={selected.draft ? 'Approve this variant before making variants of it' : placeholder(selected) ? 'Approve its design plan first'
                         : `A new ${kind === 'ship' ? 'ship' : 'crew member'} copied from ${selected.name}, changed as you describe`}>
                       Make a variant
+                    </button>
+                    <button className="btn danger-quiet" onClick={() => setDeleting(selected)} aria-label={`Delete ${selected.name}`}
+                      title={`Delete ${selected.name}. You confirm first; its files are kept in the data/trash folder.`}>
+                      Delete
                     </button>
                     <Link to={openPath(selected)} state={carried} onClick={() => remember(kind, selected.id)} className="btn primary">
                       {selected.draft ? 'Review the variant' : 'Open'}
@@ -254,6 +270,18 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
         </div>
       </main>
       {variant.dialog}
+      {deleting && (
+        <DeleteDialog project={deleting} category={categoryOf(deleting)} onCancel={() => setDeleting(null)}
+          onDeleted={() => {
+            keepEmpty.current = true;
+            setSelectedId(null);
+            setDeleting(null);
+            // The panel that held the Delete button is gone: once the list is re-read, put the focus
+            // on its first row (or the search box when none is left).
+            void reloadProjects().then(() => setTimeout(() =>
+              (document.querySelector<HTMLElement>('[role="listbox"] [role="option"]') ?? searchRef.current)?.focus(), 0));
+          }} />
+      )}
     </>
   );
 }
@@ -349,7 +377,7 @@ function ProjectRow({ p, kind, on, working, onSelect, onOpen }: {
         <span className="faint" style={{ fontSize: 12 }}>
           {categoryOf(p)}{p.derived_from ? ` · variant of ${p.derived_from.name} v${p.derived_from.version}` : ''}
         </span>
-        {p.draft ? <span className="chip amber" style={{ alignSelf: 'flex-start' }}>Awaiting your approval</span>
+        {draftBadge(p) ? <span className="chip amber" style={{ alignSelf: 'flex-start' }}>{draftBadge(p)}</span>
           : <span className="muted" style={{ fontSize: 12 }}>{p.version ? `v${p.version}` : 'not built yet'}</span>}
         {working && <span className="chip blue" style={{ alignSelf: 'flex-start', display: 'inline-flex', gap: 6, alignItems: 'center' }}><span className="spinner" aria-hidden="true" />Working on a change</span>}
       </span>

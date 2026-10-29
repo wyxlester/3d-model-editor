@@ -323,6 +323,53 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             p["discarded"] = True
         return {"project": store.api_project(pid)}
 
+    def scenes_using(pid: str) -> list[tuple[dict, str]]:
+        """(scene, "ship" | "crew") for every scene that has project pid as its ship or a crew member."""
+        out = []
+        for f in sorted(settings.scenes_dir.glob("scene_*.json")):
+            s = read_json(f)
+            if not isinstance(s, dict):
+                continue
+            if (s.get("ship") or {}).get("project") == pid:
+                out.append((s, "ship"))
+            elif any(isinstance(c, dict) and c.get("project") == pid for c in s.get("crew") or []):
+                out.append((s, "crew"))
+        return out
+
+    def in_scenes_refusal(name: str, used: list[tuple[dict, str]]) -> str:
+        """The sentence for a project a scene still uses: which scenes, and what to do about it."""
+        names = [f"“{s.get('name') or s.get('id')}” ({'as the ship' if role == 'ship' else 'as crew'})"
+                 for s, role in used]
+        listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        said = f"{name} can't be deleted: it is used in the scene{'s' if len(names) > 1 else ''} {listed}."
+        if any(role == "ship" for _, role in used):
+            # There is no scene delete, and a scene's ship can't be swapped: say so rather than send
+            # the user looking for a control that does not exist.
+            return said + " A scene's ship can't be changed and scenes can't be deleted yet, so it stays while that scene exists."
+        return said + " Take it off in Assembly first, then delete it."
+
+    @app.delete("/api/projects/{pid}")
+    def delete_project(pid: str):
+        """Lester, 29 Oct: "should also allow user to delete ship". The folder moves to
+        data/trash/<id>-<timestamp>/ (recoverable by hand); afterwards the project is gone from every
+        list, route and API. Refused (409, with a sentence) while a scene uses it or a job for it is
+        queued or running. Its variants are left alone: their derived_from still names it."""
+        project = need_project(pid)
+        name = project["name"]
+        with store.lock(pid):
+            busy = [j for j in jobs.listing() if j["project"] == pid and j["status"] in ("queued", "running")]
+            if busy:
+                raise HTTPException(409, f"{name} can't be deleted while it is being worked on "
+                                         f"({busy[0]['label']}). Delete it when that has finished.")
+            used = scenes_using(pid)
+            if used:
+                raise HTTPException(409, in_scenes_refusal(name, used))
+            try:
+                dest = store.trash(pid, settings.trash_dir)
+            except OSError as e:  # e.g. Windows: a file of it is open
+                raise HTTPException(409, f"{name} couldn't be moved to the trash ({e}). Try again in a moment.")
+        return {"deleted": pid, "trash": dest.relative_to(settings.data_dir).as_posix()}
+
     def create_custom_ship(name: Any, brief: str | None) -> dict:
         """Contract §5 `type: "custom"`: a ship of any type from a prompt. v1 is the catalog's plain
         placeholder hull; the real shape comes only from an approved design plan."""

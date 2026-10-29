@@ -325,6 +325,29 @@ function refuseUnplanned(p: Store['projects'][string]) {
   throw new HttpErr(409, 'This ship is built from its design plan. Go to Research and approve the plan first; that builds the ship.');
 }
 
+/**
+ * DELETE /api/projects/{id} as the server does it (CONTRACT §10): refused with a sentence while a
+ * scene uses the project or one of its jobs runs; otherwise it leaves every list. The mock keeps
+ * nothing in a trash folder; the real server moves the files to data/trash.
+ */
+function deleteProject(p: Store['projects'][string]) {
+  const busy = Object.entries(jobs).find(([id, j]) => j.project === p.id && ['queued', 'running'].includes(tickJob(id).status));
+  if (busy) throw new HttpErr(409, `${p.name} can't be deleted while it is being worked on (${busy[1].label ?? 'a change'}). Delete it when that has finished.`);
+  const used = Object.values(store.scenes).flatMap((s): [Scene, 'ship' | 'crew'][] => (s.ship.project === p.id ? [[s, 'ship']]
+    : s.crew.some((c) => c.project === p.id) ? [[s, 'crew']] : []));
+  if (used.length) {
+    const names = used.map(([s, role]) => `“${s.name}” (${role === 'ship' ? 'as the ship' : 'as crew'})`);
+    const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+    const said = `${p.name} can't be deleted: it is used in the scene${names.length > 1 ? 's' : ''} ${listed}.`;
+    throw new HttpErr(409, used.some(([, role]) => role === 'ship')
+      ? `${said} A scene's ship can't be changed and scenes can't be deleted yet, so it stays while that scene exists.`
+      : `${said} Take it off in Assembly first, then delete it.`);
+  }
+  delete store.projects[p.id];
+  save();
+  return { deleted: p.id, trash: `trash/${p.id}-mock` };
+}
+
 const buildSteps = ['Merging the spec', 'Running the builder in Blender', 'Applying overrides', 'Exporting glTF', 'Checking the build report'];
 
 function route(message: string): RouteResult {
@@ -539,6 +562,7 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
     save();
     return { project: strip(p) };
   }
+  if ((r = m(/^\/api\/projects\/([^/]+)$/)) && method === 'DELETE') return deleteProject(proj(r[1]));
   if ((r = m(/^\/api\/projects\/([^/]+)\/undo$/)) && method === 'POST') {
     const p = proj(r[1]);
     if (p.versions.length > 1) {

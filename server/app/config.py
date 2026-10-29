@@ -55,6 +55,11 @@ class Settings:
         return self.data_dir / "packages"
 
     @property
+    def trash_dir(self) -> Path:
+        """Deleted projects: data/trash/<id>-<UTC timestamp>/, kept so they can be recovered by hand."""
+        return self.data_dir / "trash"
+
+    @property
     def unreal_script(self) -> Path:
         return self.repo_root / "unreal" / "run_import_test.sh"
 
