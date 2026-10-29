@@ -189,7 +189,38 @@ def build_human(spec, warnings, log):
                 recolour_hair(objects[path], b["hair_color"], log)
     for path, o in objects.items():
         set_alpha_mode(o, "MASK" if path in ALPHA_CLIPPED else "OPAQUE")
+    if "Body__Skin" in objects:
+        flatten_groin(objects["Body__Skin"], armature)
     return armature, objects, barefoot_h, height_macro
+
+
+def flatten_groin(body, armature):
+    """No anatomy, under clothes or round them: in front of the groin nothing on the skin may
+    stand further forward than the fronts of the thighs beside it. Garments are cut from this
+    skin and it shows wherever one leaves it bare, so this is the second line behind the
+    trousers' own flat front. Pulls vertices back only (never out through anything fitted)."""
+    mw = armature.matrix_world
+    hip = mw @ armature.data.bones["thigh_l"].head_local
+    pelvis_x = (mw @ armature.data.bones["pelvis"].head_local).x
+    hip_y = abs(hip.y)
+    verts = body.data.vertices
+    groin = [v for v in verts if v.co.x > pelvis_x + 0.03 and hip.z - 0.15 <= v.co.z <= hip.z + 0.05
+             and abs(v.co.y) < 0.9 * hip_y]
+    fronts = {}
+    for key in {round(v.co.z, 2) for v in groin}:
+        xs = [v.co.x for v in verts if abs(v.co.z - key) < 0.012 and 0.55 * hip_y <= abs(v.co.y) <= 1.05 * hip_y]
+        fronts[key] = max(xs) if xs else None
+
+    def smooth(e0, e1, x):
+        t = min(max((x - e0) / (e1 - e0), 0.0), 1.0)
+        return t * t * (3 - 2 * t)
+    for v in groin:
+        cap = fronts[round(v.co.z, 2)]
+        if cap is None or v.co.x <= cap:
+            continue
+        w = (1.0 - smooth(hip.z - 0.01, hip.z + 0.045, v.co.z)) * (1.0 - smooth(0.5 * hip_y, 0.9 * hip_y, abs(v.co.y)))
+        v.co.x -= w * (v.co.x - cap)
+    body.data.update()
 
 
 # Card-like meshes whose texture alpha cuts out strands; everything else is solid.
