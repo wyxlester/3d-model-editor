@@ -305,7 +305,8 @@ def test_add_photo_stores_measures_and_serves_the_file(make_client, fake_web):
     assert ph["id"] == "P01" and (ph["width"], ph["height"]) == (64, 48)
     assert ph["sha256"] == hashlib.sha256(img).hexdigest() and ph["image_url"] == "https://upload.example/sampan.png"
     assert ph["file"] == f"/api/files/projects/{p['id']}/research/photos/P01.png"
-    assert proj["research"]["photo_count"] == 1 and proj["research_rev"] == 1
+    # Photos never move the research revision (Lester, 29 Oct: they kept his plan from approving).
+    assert proj["research"]["photo_count"] == 1 and proj["research_rev"] == 0
     assert proj["research"]["coverage"]["port"] == "P01" and proj["research"]["coverage"]["top"] is None
     served = c.get(ph["file"])
     assert served.status_code == 200 and served.content == img and served.headers["content-type"] == "image/png"
@@ -331,7 +332,7 @@ def test_add_photo_dedupes_by_hash_and_ids_increment(make_client, fake_web):
     proj = c.get(f"/api/projects/{p['id']}").json()
     assert [x["id"] for x in proj["research"]["photos"]] == ["P01", "P03"]
     assert proj["research"]["photo_count"] == 2
-    assert proj["research_rev"] == 4  # three adds and a removal; the duplicate changed nothing
+    assert proj["research_rev"] == 0  # adds and removals of photos leave the plan current
 
 
 def test_save_research_keeps_photos_and_accepts_photo_citations(make_client, fake_web):

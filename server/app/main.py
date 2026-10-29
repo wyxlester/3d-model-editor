@@ -637,6 +637,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
                 raise JobError(f"AI run failed: {e}")
             if mode == "research":
                 reply = photo_follow_up(pid, reply, log)
+                if custom:
+                    reply = plan_follow_up(pid, reply, log)
             store.add_message(pid, "AI", reply)
             version = store.load(pid)["version"]
             result = {"reply": reply, "version": version,
@@ -685,6 +687,32 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         except Exception as e:  # the research itself is saved; say what didn't happen
             log(f"Finding photographs failed: {e}")
             return reply + f"\n\n(I couldn't add photographs this time: {e}. Ask again and I'll retry.)"
+        return f"{reply}\n\n{more}".strip()
+
+    def plan_follow_up(pid: str, reply: str, log) -> str:
+        """Lester, 29 Oct ("why can't i approve yet?"): when the research has moved on from the design
+        plan (it was drafted against an older research revision), redraft it now instead of leaving
+        Approve off until he asks. Only for a draft or stale plan; an approved one waits for him."""
+        project = store.load(pid)
+        plan = project.get("design_plan")
+        if (not settings.plan_follow_up or not isinstance(plan, dict)
+                or plan.get("research_rev") == project.get("research_rev", 0)):
+            return reply
+        log("• Redrafting the design plan to match the research")
+        try:
+            spec_now = store.spec(pid, project["version"] or 1)
+            try:
+                entry = catalog.entry("ship", "custom")
+            except CatalogError:
+                entry = {}
+            prompt = (custom_research_context(project, spec_now, entry) +
+                      "The research has changed since the design plan was drafted. Redraft the design plan with "
+                      "save_design_plan so it matches the research as it stands. Change nothing in the research. "
+                      "Reply in one sentence saying what changed in the plan, or that nothing did.")
+            _session, more = run_agent(pid, prompt, "research", log)
+        except Exception as e:
+            log(f"Redrafting the plan failed: {e}")
+            return reply + "\n\n(I couldn't redraft the design plan this time; press Redraft the design plan.)"
         return f"{reply}\n\n{more}".strip()
 
     def pin_prompt(pid: str, pin: dict) -> str:

@@ -825,15 +825,18 @@ class AgentSession:
 
     def _change_media(self, fn: Callable[[dict, dict], tuple[Any, bool]]) -> tuple[Any, bool]:
         """Read-modify-write the research record under the project lock. fn(research, project) changes
-        it in place and returns (result, changed). A change recounts photos and coverage and bumps the
-        research revision, as save_research does; a ToolError inside fn saves nothing."""
+        it in place and returns (result, changed). A change recounts photos and coverage; a ToolError
+        inside fn saves nothing.
+
+        It does NOT bump the research revision. Lester, 29 Oct ("why can't i approve yet?"): adding
+        photographs made his design plan look older than the research, so Approve stayed off although
+        nothing the plan rests on had changed. Only save_research (the facts) moves the revision."""
         with self.store.edit(self.pid) as project:
             research = project.get("research") or {"schema": "me3d.research/1"}
             result, changed = fn(research, project)
             if changed:
                 rm.refresh(research)
                 project["research"] = research
-                dp.on_research_saved(project)
             return result, changed
 
     @staticmethod

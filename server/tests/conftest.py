@@ -96,7 +96,8 @@ def catalog_dir(tmp_path):
 def settings(tmp_path, catalog_dir):
     # The photo follow-up turn is off by default here: scripted agents replay their steps on every
     # turn. The tests of that turn switch it on (test_research_media).
-    return Settings(data_dir=tmp_path / "data", catalog_dir=catalog_dir, photo_follow_up=False)
+    return Settings(data_dir=tmp_path / "data", catalog_dir=catalog_dir, photo_follow_up=False,
+                    plan_follow_up=False)
 
 
 @pytest.fixture
