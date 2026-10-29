@@ -37,6 +37,9 @@ export function ShipBuild() {
   const [draftErr, setDraftErr] = useState<string | null>(null);
   const [inspect, setInspect] = useState(false);
   const [selPart, setSelPart] = useState<string | null>(search.get('part'));
+  // The part lit on the model: only one the user asked to see (an issue marker or comment clicked,
+  // "Show in Build"), never one just because the AI changed it. Cleared with its thread.
+  const [shownPart, setShownPart] = useState<string | null>(search.get('part'));
   const [hover, setHover] = useState<string | null>(null);
   const [view, setView] = useState<ViewName>('port');
   const [viewNonce, setViewNonce] = useState(0);
@@ -53,14 +56,14 @@ export function ShipBuild() {
   const aiWorking = (p: Pin) => p.status === 'working' || p.id in aiPins;
 
   useEffect(() => { if (id) remember('ship', id); }, [id]);
-  useEffect(() => { if (search.get('part')) { setSelPart(search.get('part')); setInspect(true); } }, [search]);
+  useEffect(() => { if (search.get('part')) { setSelPart(search.get('part')); setShownPart(search.get('part')); setInspect(true); } }, [search]);
   const showVariant = variant.show;
   useEffect(() => {
     // Home routed here to make a variant: open the dialog with the request as the brief.
     if (id && search.get('variant')) showVariant(id, [...(carried ?? [])].reverse().find((m) => m.who === 'You')?.text ?? '');
   }, [id, search, carried, showVariant]);
   useEffect(() => {
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { setPinMode(false); setDraft(null); setSelPin(null); } };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { setPinMode(false); setDraft(null); setSelPin(null); setShownPart(null); } };
     window.addEventListener('keydown', esc);
     return () => window.removeEventListener('keydown', esc);
   }, []);
@@ -84,9 +87,13 @@ export function ShipBuild() {
 
   const afterJob = async () => { const p = await reload(); if (p) setProject(p); };
 
+  const closeThread = () => { setSelPin(null); setShownPart(null); };
+  /** Open an issue's thread because the user clicked it: its part lights up. */
+  const openPin = (p: Pin, x: number, y: number) => { setSelPin({ id: p.id, x, y }); setSelPart(p.part); setShownPart(p.part); setDraft(null); };
+
   const onPick = (r: PickResult) => {
     setPinMode(false);
-    setSelPin(null);
+    closeThread();
     const l = local(r.clientX, r.clientY);
     setDraft({ part: r.part, chosen: r.part, point: r.point, x: l.x, y: l.y });
     setDraftText(''); setDraftErr(null);
@@ -95,7 +102,7 @@ export function ShipBuild() {
 
   const startHiddenDraft = (p: Part) => {
     const c: Vec3 = [(p.bounds_min[0] + p.bounds_max[0]) / 2, (p.bounds_min[1] + p.bounds_max[1]) / 2, (p.bounds_min[2] + p.bounds_max[2]) / 2];
-    setSelPin(null); setViewing(null);
+    closeThread(); setViewing(null);
     setDraft({ part: p.path, chosen: p.path, point: blenderToGltf(c), x: 40, y: 40 });
     setSelPart(p.path); setDraftText(''); setDraftErr(null);
   };
@@ -174,7 +181,7 @@ export function ShipBuild() {
               empty="For a change to one part, pin a comment on it: the AI will know exactly which part you mean. Use this chat for the whole ship." />
           ) : (
             <CommentsTab pins={pins} parts={parts} selected={selPin?.id ?? null} viewingOld={!!viewing} working={aiWorking}
-              onPick={(p) => { setSelPin({ id: p.id, x: 40, y: 40 }); setSelPart(p.part); setDraft(null); }}
+              onPick={(p) => openPin(p, 40, 40)}
               onHidden={startHiddenDraft} />
           )}
         </aside>
@@ -182,7 +189,7 @@ export function ShipBuild() {
         <section className="stage">
           <div className="toolbar">
             <button className={`btn ${pinMode ? 'primary' : 'selected'}`} style={{ padding: '0 14px' }} disabled={!url}
-              onClick={() => { if (viewing) { setViewing(null); setPinMode(true); } else setPinMode(!pinMode); setSelPin(null); setDraft(null); }}>
+              onClick={() => { if (viewing) { setViewing(null); setPinMode(true); } else setPinMode(!pinMode); closeThread(); setDraft(null); }}>
               {pinMode ? 'Placing a comment…' : 'Comment on a part'}
             </button>
             <span className="faint toolbar-hint" title={hint}>{hint}</span>
@@ -201,21 +208,21 @@ export function ShipBuild() {
             pickMode={pinMode}
             onPick={onPick}
             onHover={setHover}
-            selectedPart={draft?.chosen ?? selPart}
+            selectedPart={draft?.chosen ?? shownPart}
             joints={joints}
             pins={pins}
             selectedPinId={selPin?.id ?? null}
-            onPinClick={(p, x, y) => { const l = local(x, y); setSelPin({ id: p.id, x: l.x, y: l.y }); setSelPart(p.part); setDraft(null); }}
+            onPinClick={(p, x, y) => { const l = local(x, y); openPin(p, l.x, l.y); }}
             overlay={<>
               {pin && project && selPin && (
                 <Thread project={project} pin={pin} n={pins.indexOf(pin) + 1} at={selPin} stage={stageRef.current} shown={shownVersion}
                   busy={busy} error={actionErr} working={aiWorking(pin)} since={aiPins[pin.id]}
-                  onClose={() => setSelPin(null)}
+                  onClose={closeThread}
                   onKeep={() => void pinAction(() => api.setPinStatus(project.id, pin.id, 'resolved'))}
                   onUndo={() => void pinAction(async () => { const r = await api.undo(project.id); setProject(r.project); await api.setPinStatus(project.id, pin.id, 'open'); })}
                   onReopen={() => void pinAction(() => api.setPinStatus(project.id, pin.id, 'open'))}
                   onReply={(text) => replyPin(pin.id, pin.part, text)}
-                  onInspect={() => { setSelPart(pin.part); setInspect(true); }}
+                  onInspect={() => { setSelPart(pin.part); setShownPart(pin.part); setInspect(true); }}
                   onShowVersion={(n) => setViewing(n === current ? null : n)}
                 />
               )}
