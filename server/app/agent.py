@@ -1354,7 +1354,10 @@ class ClaudeAgentRunner:
             mcp_servers={"editor": server}, tools=builtins + names, allowed_tools=builtins + names,
             setting_sources=[], max_turns=self.max_turns, model=self.model,
             system_prompt=system_prompt(session.kind, mode, session.base),
-            cwd=str(session.store.version_dir(session.pid, 0).parent))
+            cwd=str(session.store.version_dir(session.pid, 0).parent),
+            # Photos and attachments travel inside messages; the SDK's 1 MB default killed a research
+            # turn on a large photo (live sampan run, 29 Oct). Previews are capped too (research_media).
+            max_buffer_size=20 * 1024 * 1024)
         texts: list[str] = []
         final: str | None = None
         async def turn():

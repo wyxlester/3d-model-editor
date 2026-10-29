@@ -183,7 +183,9 @@ def custom_items(items, errors, warnings=None):
         if module is None:
             # Contract: an item without a module is equipment if it makes Equipment__ objects,
             # else shirt. object_from_bmesh names its object Equipment__<Name> by default.
-            module = "equipment" if _MAKES_EQUIPMENT.search(code) else "shirt"
+            # A garment cut from the legs and not the torso is trousers (older items carry no tag).
+            module = ("equipment" if _MAKES_EQUIPMENT.search(code)
+                      else "pants" if _LEG_GARMENT.search(code) and not _TORSO.search(code) else "shirt")
         elif module not in ITEM_MODULES:
             errors.append("custom_items %s: module must be one of %s, got %r" % (iid, ITEM_MODULES, module))
             continue
@@ -200,6 +202,8 @@ def custom_items(items, errors, warnings=None):
 
 
 _MAKES_EQUIPMENT = re.compile(r"Equipment__|object_from_bmesh\s*\(")
+_LEG_GARMENT = re.compile(r"['\"](thighs|shins)['\"]")
+_TORSO = re.compile(r"['\"]torso['\"]")
 
 
 def garment_preset(key, value, styles, errors):
@@ -243,6 +247,10 @@ def accessories(items, errors, warnings):
         color = _strict_color("accessories.%s.color" % name, item.get("color"), errors)
         out.append({"name": name, "color": color or list(ACCESSORY_DEFAULT_COLOR[name])})
     return out
+
+
+CLOTHED_DEFAULT = {"shirt": {"style": "tshirt", "color": [0.85, 0.85, 0.82]},
+                   "pants": {"style": "trousers", "color": [0.05, 0.07, 0.15]}}
 
 
 def normalize(spec):
@@ -348,6 +356,16 @@ def normalize(spec):
         errors.append("animations must be from %s, got unknown %s" % (ANIMATIONS, bad))
     spec["animations"] = [a for a in anims if a in ANIMATIONS]
     spec["custom_items"] = custom_items(spec.get("custom_items"), errors, warnings)
+    # Lester, 29 Oct: a person is always clothed. With no suit, a top or trousers that has neither a
+    # preset nor a described item gets the plain default (the server does the same; this catches
+    # any spec saved before that rule).
+    if clothes.get("suit") is None:
+        for slot in ("shirt", "pants"):
+            if clothes.get(slot) is None and not any(i.get("module") == slot for i in spec["custom_items"]):
+                clothes[slot] = dict(CLOTHED_DEFAULT[slot])
+                warnings.append("no %s was set and there is no outfit, so a plain %s was added"
+                                % ("top" if slot == "shirt" else "pair of trousers",
+                                   "white T-shirt" if slot == "shirt" else "navy trousers"))
     return spec, errors, warnings
 
 

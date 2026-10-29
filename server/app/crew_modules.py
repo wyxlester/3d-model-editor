@@ -87,14 +87,20 @@ class Change:
 # ---- helpers ------------------------------------------------------------------------------
 
 def item_module(item: Any) -> str:
-    """The module a custom item belongs to: its tag, else inferred per contract (equipment if it
-    makes Equipment__ objects, else shirt)."""
+    """The module a custom item belongs to: its tag, else inferred (equipment if it makes
+    Equipment__ objects; pants if it is cut from the legs and not the torso; else shirt)."""
     if not isinstance(item, dict):
         return "shirt"
     tag = item.get("module")
     if isinstance(tag, str) and tag:
         return tag
-    return "equipment" if re.search(r"Equipment__", str(item.get("code") or "")) else "shirt"
+    code = str(item.get("code") or "")
+    if re.search(r"Equipment__", code):
+        return "equipment"
+    # A garment cut from the legs and not the torso is trousers (same rule as blender/crew/spec.py).
+    if re.search(r"['\"](thighs|shins)['\"]", code) and not re.search(r"['\"]torso['\"]", code):
+        return "pants"
+    return "shirt"
 
 
 def _entry(e: Any) -> dict:
@@ -240,13 +246,13 @@ def outside_changes(old: dict, new: dict, allowed_module: str) -> list[Change]:
     new_suit = ((new or {}).get("clothes") or {}).get("suit")
 
     def side_effect(c: Change) -> bool:
+        # Always clothed: with no outfit, a bare top or bare legs get the plain default, whichever
+        # module's change exposed them.
+        if (c.path in ("clothes.shirt", "clothes.pants") and c.kind in ("added", "set")
+                and new_suit is None and c.new == FILL_IN[c.path.split(".")[1]]):
+            return True
         if allowed_module in ("shirt", "pants") and own:
-            if c.path == "clothes.suit" and c.kind == "set" and c.new is None:
-                return True
-            # ...and fill the other half with the plain default, so he isn't left half-dressed.
-            other = "pants" if allowed_module == "shirt" else "shirt"
-            return (c.path == f"clothes.{other}" and c.kind in ("added", "set")
-                    and c.new == FILL_IN[other] and new_suit is None)
+            return c.path == "clothes.suit" and c.kind == "set" and c.new is None
         if allowed_module == "outfit" and new_suit is not None:
             if c.path in ("clothes.shirt", "clothes.pants") and c.kind == "set" and c.new is None:
                 return True
@@ -324,17 +330,6 @@ def apply_module_rules(old: dict, new: dict) -> tuple[dict, list[str]]:
                 out["clothes"] = {}
             out["clothes"]["suit"] = None
             notes.append("The outfit was removed, because a shirt or trousers now show instead.")
-            # The outfit covered both halves. Taking it off for a shirt must not leave him without
-            # trousers (seen in the first live run), nor trousers without a top: fill the other half
-            # with a plain default unless it already has a preset or a described item.
-            for m in ("shirt", "pants"):
-                if top_set[m] or out["clothes"].get(m) is not None:
-                    continue
-                items = out.get("custom_items") if isinstance(out.get("custom_items"), list) else []
-                if any(item_module(it) == m for it in items):
-                    continue
-                out["clothes"][m] = copy.deepcopy(FILL_IN[m])
-                notes.append(FILL_IN_NOTE[m])
 
     for m, (section, key, empty) in SINGLE_SLOT.items():
         sec = out.get(section) if isinstance(out.get(section), dict) else None
@@ -348,4 +343,22 @@ def apply_module_rules(old: dict, new: dict) -> tuple[dict, list[str]]:
             gone = remove_items((m,))
             if gone:
                 notes.append(f"Described {m} item(s) {', '.join(gone)} removed: the chosen preset replaces them.")
+    notes += ensure_clothed(out)
     return out, notes
+
+
+def ensure_clothed(spec: dict) -> list[str]:
+    """Lester, 29 Oct: "human models should always be clothed and have a default shirt and pants".
+    With no full outfit (suit null), a top or trousers that has neither a preset nor a described
+    item gets the plain default. A missing suit key means the catalog's default suit, so clothed.
+    Changes `spec` in place; returns the notes saying what was added."""
+    clothes = spec.get("clothes")
+    if not isinstance(clothes, dict) or "suit" not in clothes or clothes.get("suit") is not None:
+        return []
+    items = spec.get("custom_items") if isinstance(spec.get("custom_items"), list) else []
+    notes = []
+    for m in ("shirt", "pants"):
+        if clothes.get(m) is None and not any(item_module(it) == m for it in items):
+            clothes[m] = copy.deepcopy(FILL_IN[m])
+            notes.append(FILL_IN_NOTE[m])
+    return notes

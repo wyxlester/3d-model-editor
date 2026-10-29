@@ -808,3 +808,11 @@ describe('close-up outline and inspector zoom', () => {
     expect(clampPan({ x: 40, y: 40 }, 1, base, view)).toEqual({ x: 0, y: 0 });
   });
 });
+
+describe('always clothed: untagged leg garments are trousers', () => {
+  it('reads an old described garment by the body regions it covers', () => {
+    expect(moduleOfItem({ code: "crew.garment('Clothes__Shorts', ['pelvis', 'thighs'], (0, 0, 1))" })).toBe('pants');
+    expect(moduleOfItem({ code: "crew.garment('Clothes__Overall', ['torso', 'thighs'], (0, 0, 1))" })).toBe('shirt');
+    expect(moduleOfItem({ code: "crew.garment('Clothes__Vest', ['torso'], (1, 1, 1))" })).toBe('shirt');
+  });
+});

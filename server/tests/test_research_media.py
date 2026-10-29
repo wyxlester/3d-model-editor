@@ -465,3 +465,18 @@ def test_a_403_is_retried_once_with_an_honest_agent_on_the_same_checked_url():
     always = lambda url, user_agent=rm.USER_AGENT: FakeResp(403, {}, [b"no"])
     with pytest.raises(rm.MediaError, match="HTTP 403"):
         rm.download("https://upload.example/a.jpg", fetch=always, resolve=public_resolve)
+
+
+def test_preview_of_a_big_photo_stays_small_enough_for_the_ai_connection():
+    # Live sampan run, 29 Oct: a 4032 x 3024 photo's preview overflowed the SDK's 1 MB buffer.
+    import io, random
+    from PIL import Image
+    from app import research_media as rm
+    rnd = random.Random(1)
+    im = Image.new("RGB", (4032, 3024))
+    im.putdata([(rnd.randrange(256), rnd.randrange(256), rnd.randrange(256)) for _ in range(4032 * 3024 // 64)] * 64)
+    buf = io.BytesIO(); im.save(buf, format="PNG")
+    look, mime, scale = rm.preview(buf.getvalue())
+    assert mime == "image/jpeg" and len(look) <= rm.PREVIEW_MAX_BYTES
+    w, h = Image.open(io.BytesIO(look)).size
+    assert max(w, h) <= 1024 and abs(scale - 4032 / w) < 0.01  # boxes still convert back to the photo

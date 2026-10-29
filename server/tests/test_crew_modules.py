@@ -7,6 +7,7 @@ import pytest
 
 from app.crew_modules import (MODULES, ModuleRuleError, apply_module_rules, changed_modules, item_module,
                               outside)
+from app.crew_modules import FILL_IN
 
 BASE = {
     "schema": "me3d.crew_spec/1", "id": "crew_x", "name": "Crew",
@@ -233,13 +234,14 @@ def test_replacing_the_outfit_with_a_shirt_never_leaves_him_without_trousers():
     new["custom_items"].append({"id": "item_9", "module": "pants", "description": "loose trousers", "code": "x"})
     out, _ = apply_module_rules(BASE, new)
     assert out["clothes"].get("pants") is None
-    # no outfit to take off: nothing is filled in
+    # no outfit to take off: still trousers (this used to stay bare; Lester, 29 Oct: "obscene ...
+    # human models should always be clothed")
     old = copy.deepcopy(BASE)
     old["clothes"]["suit"] = None
     new = copy.deepcopy(old)
     new["clothes"]["shirt"] = {"style": "polo", "color": [1, 1, 1]}
     out, _ = apply_module_rules(old, new)
-    assert out["clothes"].get("pants") is None
+    assert out["clothes"]["pants"] == FILL_IN["pants"]
 
 
 def test_a_missing_suit_is_written_as_null_when_pants_are_set():
@@ -308,3 +310,36 @@ def test_unrelated_changes_pass_through_untouched():
     new["body"]["height_cm"] = 185
     new["equipment"] = ["life_vest"]
     assert apply_module_rules(BASE, new) == (new, [])
+
+
+def test_always_clothed_even_when_the_outfit_was_already_off():
+    # Lester, 29 Oct: "when i select shirt, the default for pants is not wearing any pants. this is
+    # obscene. human models should always be clothed and have a default shirt and pants".
+    old = copy.deepcopy(BASE)
+    old["clothes"].update(suit=None, shirt=None, pants=None)
+    new = copy.deepcopy(old)
+    new["clothes"]["shirt"] = {"style": "singlet", "color": [1, 1, 1]}
+    out, notes = apply_module_rules(old, new)
+    assert out["clothes"]["pants"] == FILL_IN["pants"] and any("trousers" in n for n in notes)
+    # choosing "Shirt and pants" instead of an outfit dresses both halves
+    new = copy.deepcopy(BASE)
+    new["clothes"]["suit"] = None
+    out, _ = apply_module_rules(BASE, new)
+    assert out["clothes"]["shirt"] == FILL_IN["shirt"] and out["clothes"]["pants"] == FILL_IN["pants"]
+    # a described pair of trousers counts as clothed: no fill-in on top of it
+    new = copy.deepcopy(old)
+    new["custom_items"].append({"id": "item_7", "module": "pants", "description": "loose trousers", "code": "x"})
+    out, _ = apply_module_rules(old, new)
+    assert out["clothes"]["pants"] is None and out["clothes"]["shirt"] == FILL_IN["shirt"]
+    # with the outfit on, nothing is added
+    out, _ = apply_module_rules(BASE, copy.deepcopy(BASE))
+    assert out["clothes"].get("shirt") is None and out["clothes"].get("pants") is None
+
+
+def test_the_fill_in_is_not_refused_by_a_module_scope():
+    old = copy.deepcopy(BASE)
+    old["clothes"].update(suit=None, shirt={"style": "polo", "color": [1, 1, 1]}, pants=None)
+    new = copy.deepcopy(old)
+    new["clothes"]["shirt"] = {"style": "tshirt", "color": [1, 1, 1]}
+    out, _ = apply_module_rules(old, new)
+    assert outside(old, out, "shirt") == []

@@ -221,7 +221,6 @@ export function CrewWorkshop() {
         controls = (
           <>
             <div className="picks">
-              {chip('None', !cur, () => pick(m, 'None', garmentStylePatch(spec, m, null)))}
               {styles.map((s) => chip(s.label, cur?.style === s.id, () => pick(m, s.label, garmentStylePatch(spec, m, s.id)), s.id))}
             </div>
             {cur
@@ -229,6 +228,7 @@ export function CrewWorkshop() {
                   onPick={(c) => { const patch = c && garmentColorPatch(spec, m, c); if (patch) edit(patch); }} />
               : <span className="module-label">Pick a style to choose its colour.</span>}
             {clothes.suit && <span className="module-label">The full outfit is on now. Choosing a {m === 'shirt' ? 'shirt' : 'pair of pants'} takes it off.</span>}
+            {!clothes.suit && <span className="module-label">Always worn: swap the style or describe another, but it can't be taken off.</span>}
           </>
         );
         break;
@@ -238,7 +238,7 @@ export function CrewWorkshop() {
         controls = (
           <>
             <div className="picks">
-              {chip('None', !clothes.suit, () => pickOutfit(null))}
+              {chip('Shirt and pants', !clothes.suit, () => pickOutfit(null))}
               {suits.map((s) => chip(suitLabel(s), clothes.suit === s, () => pickOutfit(s), s))}
             </div>
           </>
@@ -345,12 +345,15 @@ export function CrewWorkshop() {
   return (
     <>
       <TopBar title={name} back="crew">
-        <div className="topbar-right" style={{ gap: 6, flexWrap: 'wrap', fontSize: 13 }}>
+        {/* One row that scrolls sideways (Lester's screenshot, 29 Oct: with many people the pills
+            wrapped to a second line and pushed the screen down). Long names are cut, full on hover. */}
+        <div className="topbar-right people-row">
           {people.map((x) => (
-            <Link key={x.id} to={paths.crew(x.id)} onClick={() => remember('crew', x.id)}
-              style={{ height: 32, padding: '0 12px', borderRadius: 16, display: 'flex', alignItems: 'center', fontSize: 13, ...(x.id === id ? SEL : OFF) }}>{x.name}</Link>
+            <Link key={x.id} to={paths.crew(x.id)} onClick={() => remember('crew', x.id)} title={x.name}
+              ref={x.id === id ? (el) => el?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) : undefined}
+              className="person-pill" style={x.id === id ? SEL : OFF}>{x.name}</Link>
           ))}
-          <button className="btn dashed pill" onClick={addPerson} disabled={busy}>+ Person</button>
+          <button className="btn dashed pill" style={{ flexShrink: 0 }} onClick={addPerson} disabled={busy}>+ Person</button>
         </div>
       </TopBar>
       <div className="workspace">

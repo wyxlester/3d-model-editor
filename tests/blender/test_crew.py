@@ -1125,3 +1125,20 @@ def test_equipment_items_are_placed_by_the_builder(modules_d):
     assert parent["Equipment__Flare"] == "pelvis"
     w = _world_positions(g)
     assert w["Equipment__Flare"][2][3] - w["pelvis"][2][3] > 0.1
+
+
+def test_a_bare_spec_is_dressed_by_the_builder():
+    # Lester, 29 Oct: "human models should always be clothed and have a default shirt and pants".
+    from crew.spec import CLOTHED_DEFAULT, normalize
+    spec, errors, warnings = normalize({"schema": "me3d.crew_spec/1", "id": "bare",
+                                        "clothes": {"suit": None, "shirt": None, "pants": None}})
+    assert not errors
+    assert spec["clothes"]["shirt"] == CLOTHED_DEFAULT["shirt"] and spec["clothes"]["pants"] == CLOTHED_DEFAULT["pants"]
+    assert any("trousers" in w for w in warnings)
+    # a described top counts; the suit counts for both
+    spec, _, _ = normalize({"schema": "me3d.crew_spec/1", "id": "x", "clothes": {"suit": None},
+                            "custom_items": [{"id": "item_1", "module": "shirt", "description": "vest",
+                                              "code": "crew.garment('Clothes__Vest', ['torso'], (1, 1, 1))"}]})
+    assert spec["clothes"]["shirt"] is None and spec["clothes"]["pants"] == CLOTHED_DEFAULT["pants"]
+    spec, _, _ = normalize({"schema": "me3d.crew_spec/1", "id": "y"})
+    assert spec["clothes"]["shirt"] is None and spec["clothes"]["suit"]

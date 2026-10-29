@@ -301,3 +301,8 @@ dialog.insp::backdrop { background: rgba(6, 8, 10, 0.8); }
 .prov dt { color: var(--text-3); font-size: 12px; padding-top: 1px; }
 .prov dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
 .prov dd.faint { color: var(--text-3); }
+
+/* Crew workshop: the people in the top bar stay on one row and scroll sideways */
+.people-row { gap: 6px; flex-wrap: nowrap; min-width: 0; overflow-x: auto; scrollbar-width: thin; font-size: 13px; }
+.person-pill { flex-shrink: 0; max-width: 220px; height: 32px; padding: 0 12px; border-radius: 16px; display: inline-flex; align-items: center;
+  font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

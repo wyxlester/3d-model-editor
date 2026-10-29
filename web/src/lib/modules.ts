@@ -117,7 +117,10 @@ export function shoeLabel(name: string): string {
  */
 export function moduleOfItem(item: Pick<CustomItem, 'module' | 'code'>): ModuleId {
   if (isModuleId(item.module)) return item.module;
-  return (item.code ?? '').includes('Equipment__') ? 'equipment' : 'shirt';
+  const code = item.code ?? '';
+  if (code.includes('Equipment__')) return 'equipment';
+  // A garment cut from the legs and not the torso is trousers (same rule as the server and builder).
+  return /['"](thighs|shins)['"]/.test(code) && !/['"]torso['"]/.test(code) ? 'pants' : 'shirt';
 }
 
 export function itemsInModule(items: CustomItem[] | undefined, m: ModuleId): CustomItem[] {

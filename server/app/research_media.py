@@ -325,17 +325,30 @@ def refresh(research: dict) -> None:
     research["coverage"] = coverage
 
 
-def preview(image_bytes: bytes, max_side: int = 1568) -> tuple[bytes, str, float]:
-    """A copy for the AI to look at (not stored, not shown to Lester): the photo itself when small
-    enough, else a JPEG scaled down so the longest side is max_side. Returns (bytes, mime, scale),
-    where scale = displayed pixels per preview pixel, so the AI can turn what it sees into a box."""
+PREVIEW_MAX_BYTES = 350_000
+
+
+def preview(image_bytes: bytes, max_side: int = 1024) -> tuple[bytes, str, float]:
+    """A copy for the AI to look at (not stored, not shown to Lester): a JPEG scaled down so the
+    longest side is at most max_side and the file at most PREVIEW_MAX_BYTES (lower quality first,
+    then smaller). Returns (bytes, mime, scale), where scale = displayed pixels per preview pixel,
+    so the AI can turn what it sees into a box.
+
+    The cap matters: the first live sampan run sent a 4032 x 3024 photo's preview inside a tool
+    result, overflowed the SDK's 1 MB message buffer and killed the research turn."""
     im = _shown(image_bytes)
-    w, h = im.size
-    scale = max(w, h) / max_side if max(w, h) > max_side else 1.0
-    if scale > 1.0:
-        im = im.resize((round(w / scale), round(h / scale)))
-    out = io.BytesIO()
     if im.mode not in ("RGB", "L"):
         im = im.convert("RGB")
-    im.save(out, format="JPEG", quality=85)
-    return out.getvalue(), "image/jpeg", scale
+    w, h = im.size
+    side = min(max_side, max(w, h))
+    while True:
+        scale = max(w, h) / side if max(w, h) > side else 1.0
+        small = im.resize((round(w / scale), round(h / scale))) if scale > 1.0 else im
+        for quality in (85, 70, 55):
+            out = io.BytesIO()
+            small.save(out, format="JPEG", quality=quality)
+            if out.tell() <= PREVIEW_MAX_BYTES:
+                return out.getvalue(), "image/jpeg", scale
+        if side <= 256:
+            return out.getvalue(), "image/jpeg", scale
+        side = int(side * 0.75)
