@@ -388,6 +388,39 @@ standard is the PCG 3-Series dossier described in `docs/PLAN.md`.
 }
 ```
 
+### Photographs and close-ups (Lester, 29 Oct: research "doesn't render photos and close up for me. the standard … should be like" the PCG 3-Series dossier)
+
+Optional keys on the research record, modelled on the dossier's `references.json`:
+
+```json
+"photo_count": 21,
+"count_method": "Distinct exposures; SHA-256 plus visual comparison. Crops and republished copies do not count.",
+"coverage": {"port": "P01, P03", "starboard": null, "bow": "P01", "stern": "P05", "top": null, "details": "P02",
+             "note": "No true overhead photograph found."},
+"photos": [{"id": "P01", "title": "PC 303: bow, cabin and roof fittings", "vessel": "PC 303",
+            "views": ["port", "bow", "details"], "credit": "PIONEER / MINDEF", "date": "Published 19 July 2025",
+            "observation": "Primary exterior baseline…", "source": "https://…article", "image_url": "https://…png",
+            "status": "baseline | comparison | excluded", "rights": "Copyright retained by credited owner; research reference, not a texture",
+            "modelling_use": "hull shape, roof fittings",
+            "width": 1920, "height": 1280, "sha256": "…", "accessed": "2026-10-29",
+            "file": "/api/files/projects/<id>/research/photos/P01.png"}],
+"closeups": [{"id": "C01", "photo": "P01", "box": [x, y, w, h], "title": "Roof searchlight",
+              "what_it_shows": "…", "claims": ["…"], "file": "/api/files/projects/<id>/research/closeups/C01.png"}]
+```
+
+- **Photos are real files, fetched by the server**, never generated and never only a link: the AI
+  finds an image (web search, or an image the user attached) and calls a research tool with its
+  `image_url` (or upload id) and provenance; the server downloads it (http/https only, public
+  hosts only, an image type, at most 15 MB), measures it, hashes it, refuses a duplicate hash, and
+  stores it under `data/projects/<id>/research/photos/`. The AI never writes `width`, `height`,
+  `sha256`, `accessed` or `file`; the server does.
+- **Close-ups are crops of a stored photo** made by the server from `box` (pixels of the original),
+  with no generated or enhanced detail. Each links back to its photo.
+- `photo_count` counts distinct exposures only; `coverage` says which views have photos and which
+  are missing (a missing top view is a finding, not a failure).
+- The Research screen's Photographs tab is an inspectable gallery (click, zoom, drag) with each
+  photo's provenance; Close-ups shows the crops beside their source photo and what they prove.
+
 `status` is one of: Official, Photographed, Photo reading, Inference, Comparison only,
 Secondary lead, Unverified (a claim may combine two with " + "). The server validates this
 shape and returns errors to the AI rather than saving a malformed record.
