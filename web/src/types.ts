@@ -180,14 +180,58 @@ export interface Project {
   research_rev?: number;
   /** Custom ships only (§5): null until the AI drafts one. */
   design_plan?: DesignPlan | null;
-  /** The words the ship was created from (custom ships). */
+  /** The request the project was made from: a custom ship's description, or what a variant was asked to change. */
   brief?: string | null;
   /** Custom ships: an approved plan has been built at least once, so Build works normally (server extra). */
   plan_built?: boolean;
   /** Set on creation when something the user should know happened (e.g. no placeholder model). */
   note?: string;
+  /** Set on a variant: the project and version it was copied from. */
+  derived_from?: DerivedFrom | null;
+  /** Set on a variant until it is approved. */
+  draft?: Draft | null;
+  discarded?: boolean;
   /** Server extra: whether POST /undo has something to undo. */
   can_undo?: boolean;
+}
+
+export type DraftStage = 'copying' | 'researching' | 'changing' | 'ready' | 'failed';
+
+/** A variant's review state until it is approved (CONTRACT §10). */
+export interface Draft {
+  stage: DraftStage | string;
+  job_id: string | null;
+  research: boolean;
+  scene: string | null;
+  error: string | null;
+}
+
+export interface DerivedFrom {
+  project: string;
+  version: number;
+  name: string;
+}
+
+/** POST /api/projects/{id}/variants body. */
+export interface VariantRequest {
+  name?: string;
+  version?: number;
+  brief?: string;
+  research?: boolean;
+  scene?: string;
+}
+
+/** The variant job's result. */
+export interface VariantResult {
+  version: number;
+  build_report: BuildReport;
+  reply?: string;
+}
+
+/** POST /api/projects/{id}/approve. */
+export interface ApproveResult {
+  project: Project;
+  scene: { id: string; missing_stations: string[] } | null;
 }
 
 /** As the server sends it (not in §10's table). */
@@ -196,11 +240,16 @@ export interface ProjectSummary {
   kind: ProjectKind;
   name: string;
   base?: string;
+  /** Custom ships: an approved plan has been built (variants need it). */
+  plan_built?: boolean;
   version?: number;
   updated?: string;
   model_url?: string | null;
   open_pins?: number;
   ok?: boolean;
+  derived_from?: DerivedFrom | null;
+  draft?: Draft | null;
+  discarded?: boolean;
 }
 
 export interface Catalog {
@@ -214,7 +263,9 @@ export interface Catalog {
 export type Destination =
   | 'ship_research'
   | 'ship_build'
+  | 'ship_variant'
   | 'crew'
+  | 'crew_variant'
   | 'animation'
   | 'assembly'
   | 'review'
@@ -241,6 +292,24 @@ export interface Job<R = unknown> {
   log: string[];
   result: R;
   error: string | null;
+  project?: string | null;
+  label?: string;
+}
+
+/** A row of GET /api/jobs: what is going on, on every model (CONTRACT §10). */
+export interface JobSummary {
+  id: string;
+  kind: string;
+  label: string;
+  project: string | null;
+  project_name: string | null;
+  project_kind: ProjectKind | null;
+  status: JobStatus | string;
+  /** The latest line written for people. */
+  last: string;
+  error: string | null;
+  created: string;
+  finished: string | null;
 }
 
 export interface SceneCrew {

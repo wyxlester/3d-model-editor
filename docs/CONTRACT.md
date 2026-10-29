@@ -108,7 +108,8 @@ the exit code**: Blender returns 0 even when a script raises an error, unless th
      plan matching the current research) marks it `approved` and starts the build job from its
      `spec` plus a build-mode AI turn for the custom-op details; returns `{"job_id"}`. Nothing
      else builds a `custom` ship whose plan is not approved: build-mode chat on such a project
-     is refused with a sentence pointing to the plan. It follows every other rule here (parts naming §2, frame
+     is refused with a sentence pointing to the plan. A variant of a custom ship starts already
+     built and needs no new approval (§10, Variants). It follows every other rule here (parts naming §2, frame
   §1, sockets, contract checks).
 - `meta` (optional) holds the `strait.ship_model/1` fields that `params` don't: `type` (from
   StraitsSim's list; a sampan uses `fishing`, the closest), speeds, propulsion, `rcs_class`,
@@ -120,6 +121,11 @@ the exit code**: Blender returns 0 even when a script raises an error, unless th
 - `custom_ops` run last, inside Blender, with the helper module `me3d` (from `blender/common.py`)
   in scope. This is how the AI adds geometry no builder knob covers. Every object a custom op
   creates must follow section 2.
+- `id` names the exported files (section 8) and StraitsSim's ship id, so it never changes on an
+  edit. A **variant** (section 10) is the one exception: it gets its own `id`, made from its
+  name in lower case with runs of other characters turned into `_`, at most 40 characters, and
+  `_2`, `_3`… added if any project already uses it. Its `name` is the variant's name. Both
+  rules apply to crew specs too.
 
 ## 6. Crew spec — `me3d.crew_spec/1`
 
@@ -285,13 +291,26 @@ returns 0 on failure (library: `unreal-automation-runner-exits-zero-on-failed-te
 ## 10. Server HTTP API (FastAPI, port 8787; the web app proxies `/api`)
 
 Every body is JSON. Long work returns `{"job_id"}`; poll `GET /api/jobs/{id}`, which returns
-`{"id","status":"queued|running|done|error","log":[str],"result":any,"error":str|null}`.
+`{"id","status":"queued|running|done|error","log":[str],"result":any,"error":str|null,
+"project":str|null,"label":str}`. `label` says what the job is for people ("Chat: make the hull
+red", "Comment on Roof › Searchlight").
+Log lines that start with `• ` are milestones written for people ("• Building version 2 in
+Blender: …", "• AI: …", "• Changing hull color"); the web app shows them as the progress feed.
+Every other line is raw detail.
+
+**Several models at once.** Jobs on different projects run side by side (Blender itself still
+builds one model at a time). Jobs on the same project run one after another, in the order sent,
+so a second change starts from the first one's result; until its turn a job is `queued`.
+`GET /api/jobs` returns `{"jobs": [{"id","kind","label","project","project_name","project_kind",
+"status","last","error","created","finished"}]}`: every job queued or running, and every job that
+finished in the last 5 minutes, oldest first. `last` is the latest `• ` line. The web app polls
+it on every page, so work carries on, and is reported, while the user is on another model.
 
 | Method and path | Body | Returns |
 |---|---|---|
 | GET `/api/health` | | `{"blender":bool,"mpfb":bool,"ai":bool,"unreal":bool}` |
 | GET `/api/catalog` | | `{"ships":[{"type","name","description"}],"crew":[{"id","name"}],"clothes":[str],"equipment":[str],"animations":[str]}` |
-| POST `/api/route` | `{"message","attachments"?:[file name]}` (names only; the files go with the carried message) | `{"destination":"ship_research|ship_build|crew|animation|assembly|review|clarify","reason","project_id":str|null}` |
+| POST `/api/route` | `{"message","attachments"?:[file name]}` (names only; the files go with the carried message) | `{"destination":"ship_research|ship_build|ship_variant|crew|crew_variant|animation|assembly|review|clarify","reason","project_id":str|null}` |
 | GET `/api/projects` | | `[ProjectSummary]` |
 | POST `/api/projects` | `{"kind":"ship|crew","base":"container|sampan|tanker|custom|male_default","name"?,"brief"?}` | `{"project", "job_id"}` (first build; `custom` takes a `brief`, see §5) |
 | POST `/api/projects/{id}/design-plan/approve` | | `{"job_id"}`: builds a `custom` ship from its draft plan; 409 with a sentence when there is no current draft |
@@ -306,6 +325,10 @@ Every body is JSON. Long work returns `{"job_id"}`; poll `GET /api/jobs/{id}`, w
 | POST `/api/projects/{id}/pins/{pin_id}/reply` | `{"text"}` | `{"job_id"}` |
 | PATCH `/api/projects/{id}/pins/{pin_id}` | `{"status":"open|resolved"}` | `{"pin"}` |
 | POST `/api/projects/{id}/undo` | | `{"project"}` |
+| POST `/api/projects/{id}/variants` | `{"name"?,"version"?,"brief"?,"research"?:bool,"scene"?}` | `{"project","job_id"}` (below) |
+| POST `/api/projects/{id}/approve` | | `{"project","scene":{"id","missing_stations"}|null}` |
+| POST `/api/projects/{id}/discard` | | `{"project"}` |
+| GET `/api/jobs` | | `{"jobs":[JobSummary]}` (above) |
 | GET `/api/jobs/{id}` | | Job |
 | GET `/api/scenes` / POST `/api/scenes` | `SceneSpec` without `id` | `[Scene]` / `{"scene"}` |
 | GET `/api/scenes/{id}` | | `Scene` with `stations` from the ship's parts |
@@ -328,15 +351,62 @@ Every body is JSON. Long work returns `{"job_id"}`; poll `GET /api/jobs/{id}`, w
             "before_version": 2, "after_version": 3}],
   "messages": [{"who": "You|AI", "text": "...", "at": "...", "attachments"?: [Attachment]}],
   "research": null,
-  "research_rev": 0, "design_plan": null, "brief": null, "plan_built": false, "note": null
+  "research_rev": 0, "design_plan": null, "plan_built": false, "note": null,
+  "derived_from": {"project": "p_9f00", "version": 4, "name": "PC 303"},
+  "brief": "Fit a 25 mm gun on the foredeck in place of the 12.7 mm"
 }
 ```
 
-`research_rev`, `design_plan` (plus `approved_at`, `build_error` on the plan), `brief`, `plan_built`
+`brief` is the request the project was made from: a `custom` ship's description, or what a variant
+was asked to change. It is null when neither applies.
+
+`research_rev`, `design_plan` (plus `approved_at`, `build_error` on the plan), `plan_built`
 and `note` matter for `custom` ships (§5). A research chat job's result carries `plan_saved`; the
 approve job's result is `{version, build_report, reply, built_versions}`. A `custom` ship's build
 chat, `POST /spec` and pins are refused (409) only until an approved plan has been built (`plan_built`);
 after that a stale plan never blocks edits, it only offers a rebuild through approve.
+
+`derived_from` is null except on a variant. A variant also carries, until it is
+approved, `"draft": {"stage": "copying|researching|changing|ready|failed", "job_id", "research":
+bool, "scene": str|null, "error": str|null}`; otherwise `draft` is null. `discarded` is true for
+a discarded draft. `ProjectSummary` carries `derived_from`, `draft` and `discarded` too.
+
+**Variants.** `POST /api/projects/{id}/variants` makes a new project of the same kind and base
+from one version of project `{id}`:
+
+- `version` (default: the current one) must be a version that built.
+- `name` defaults to "<source name> (variant)". The spec gets a new `id` and `name` (section 5);
+  everything else is copied unchanged.
+- v1 is that exact copy. The research is copied with it; pins, chat and undo history are not.
+- `brief` (optional) is what should differ. It becomes the variant's first chat message, and the
+  AI then changes the copy to match it, which makes v2 if anything changed. Undo returns to v1.
+- `research: true` (ships only, needs a brief) runs a research pass on the brief first,
+  starting from the copied research.
+- `scene` (ships only) is the id of a scene whose ship is project `{id}`. It is copied on
+  approval (below).
+- A variant of a `custom` ship starts already built: `plan_built` is true, so the plan gate never
+  blocks it, and the original's `design_plan` (with its `research_rev`) is copied as history, under
+  the variant's own spec `id` and `name`. The variant review below is the check; there is no new plan
+  approval.
+- A variant of a `custom` ship can be made only once its approved plan has been built
+  (`plan_built`); before that `POST /variants` is refused (409), since the variant would skip the
+  unapproved plan.
+
+The job's result is `{"version", "build_report", "reply"?}`. `draft.stage` follows the job:
+`copying` (building v1), then `researching` and `changing` if asked, then `ready`. If the copy
+fails to build, the stage is `failed`. If the AI step fails, the stage is `ready` with `error`
+set: what was built can still be reviewed. Either way the chat says why, and the job is an
+error.
+
+**Review.** A variant is a draft until the user approves it. While it is a draft it can be
+chatted with like any project (each change is a new version), but it cannot be put in a scene
+or copied into another variant, and approve or discard are refused while its job runs.
+
+- `approve` needs a built current version. It clears `draft`, and if a `scene` was asked for,
+  copies that scene onto the variant's current version with the same crew. Crew whose station
+  the variant no longer has keep it and are listed in `missing_stations`, for the user to move.
+- `discard` sets `discarded`. The project disappears from `GET /api/projects` and routing; its
+  files stay on disk. The original is never changed by either.
 
 **Attachments** (pictures and documents sent with a chat message). An upload is stored at once and
 returns `{"id","name","type","size","url"}`; the chat message then names it by `id`, and the AI

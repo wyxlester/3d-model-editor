@@ -390,3 +390,66 @@ def test_other_ships_still_build_from_chat(make_client, with_custom):
     wait_job(c, body["job_id"])
     assert c.post(f"/api/projects/{body['project']['id']}/chat",
                   json={"message": "hi", "mode": "build"}).status_code == 200
+
+
+# ---- variants of a custom ship (Lester, 29 Oct: they start already built) -------------------
+
+def make_variant(c, pid, **body):
+    r = c.post(f"/api/projects/{pid}/variants", json=body)
+    assert r.status_code == 200, r.text
+    job = wait_job(c, r.json()["job_id"])
+    assert job["status"] == "done", job
+    return c.get(f"/api/projects/{r.json()['project']['id']}").json()
+
+
+def test_variant_of_a_built_custom_ship_starts_built_with_the_plan_as_history(make_client, with_custom):
+    c, pid, agent = drafted(make_client)
+    agent.steps = []
+    wait_job(c, c.post(f"/api/projects/{pid}/design-plan/approve").json()["job_id"])
+    src = c.get(f"/api/projects/{pid}").json()
+    assert src["plan_built"] and src["design_plan"]["status"] == "approved"
+
+    v = make_variant(c, pid, name="Lady Ann II", brief="a darker hull")
+    assert v["plan_built"] is True
+    assert v["design_plan"]["summary"] == src["design_plan"]["summary"]
+    assert v["design_plan"]["status"] == "approved" and v["research_rev"] == src["research_rev"]
+    # History under the variant's own id, never the source's.
+    assert v["design_plan"]["spec"]["id"] == v["spec"]["id"] != src["spec"]["id"]
+    assert v["design_plan"]["spec"]["name"] == "Lady Ann II"
+    assert v["brief"] == "a darker hull" and v["draft"]["stage"] == "ready"
+    # The plan gate does not block it: build chat, Inspect edits and pins all go through.
+    assert c.post(f"/api/projects/{v['id']}/chat", json={"message": "white hull", "mode": "build"}).status_code == 200
+    assert c.post(f"/api/projects/{v['id']}/spec", json={"patch": {"params": {"loa_m": 25}}}).status_code == 200
+    assert c.post(f"/api/projects/{v['id']}/pins", json={"part": "Hull__Main", "point": [0, 0, 0],
+                                                         "text": "raise this"}).status_code == 200
+    # No new approval is asked for: the plan is already approved.
+    assert c.post(f"/api/projects/{v['id']}/design-plan/approve").status_code == 409
+    # The source is unchanged.
+    assert c.get(f"/api/projects/{pid}").json()["design_plan"] == src["design_plan"]
+
+
+def test_no_variant_of_a_custom_ship_until_its_plan_is_built(make_client, with_custom):
+    # Lester, 29 Oct ("Not until built"): a variant starts already built, so a variant of the
+    # placeholder would skip the plan he never approved. (Replaces the merge's earlier test, which
+    # allowed it before he decided.)
+    c = make_client(agent=ScriptedAgent())
+    out, _ = create_custom(c, brief="a yacht")
+    pid = out["project"]["id"]
+    assert c.get(f"/api/projects/{pid}").json()["version"] == 1  # built, but only the placeholder
+    r = c.post(f"/api/projects/{pid}/variants", json={})
+    assert r.status_code == 409 and "Approve its design plan" in r.json()["detail"]
+    assert not any((p.get("derived_from") or {}).get("project") == pid for p in c.get("/api/projects").json())
+    assert c.get(f"/api/projects").json()[0].get("plan_built") is False  # the list says why
+
+
+def test_custom_ship_jobs_carry_their_project_and_a_plain_label(make_client, with_custom):
+    """The job centre lists jobs by project: the create and approve jobs must say which ship."""
+    c, pid, agent = drafted(make_client)
+    agent.steps = []
+    jobs = c.get("/api/jobs").json()["jobs"]
+    first = next(j for j in jobs if j["kind"] == "build")
+    assert first["project"] == pid and first["label"] == "First build of Yacht"
+    job = wait_job(c, c.post(f"/api/projects/{pid}/design-plan/approve").json()["job_id"])
+    assert job["project"] == pid and job["label"] == "Building Yacht from the approved plan"
+    assert "• Building the approved design plan" in job["log"]
+

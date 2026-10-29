@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { modelUrl } from '../api';
 import { ChatPanel, ErrorNote, JobLines, Loading, TopBar, useCarried } from '../components/common';
+import { OtherWork, useProjectWork } from '../components/JobCenter';
 import { remember, useCatalog, useJobs, useProject, useProjects } from '../hooks';
 import { paths } from '../lib/routing';
 import { assetLabel, mergePatch } from '../lib/spec';
@@ -22,6 +23,7 @@ export function Moves() {
   const { jobs, run, dismiss, busy } = useJobs();
   const { edit, optimistic } = useSpecEditor(id, run, project.reload);
   const sendChat = useCrewChat(id, run, project.reload);
+  const work = useProjectWork(id, () => void project.reload(), jobs);
   const [anim, setAnim] = useState<string | null>(null);
   const [clips, setClips] = useState<string[]>([]);
   const [duration, setDuration] = useState(0);
@@ -65,7 +67,7 @@ export function Moves() {
 
   return (
     <>
-      <TopBar title={p?.name ?? 'Crew'}>
+      <TopBar title={p?.name ?? 'Crew'} back="crew">
         <span style={{ fontSize: 13, color: 'var(--text-2)' }}><Link to={paths.crew(id)}>Crew workshop</Link> › Animation</span>
       </TopBar>
       <div className="workspace">
@@ -118,6 +120,7 @@ export function Moves() {
           )}
           <div style={{ borderTop: '1px solid var(--border)', background: 'var(--panel)', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12 }}>
             {jobs.length > 0 && <JobLines jobs={jobs} dismiss={dismiss} />}
+            <OtherWork jobs={work.others} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <button onClick={() => setPlaying(!playing)} aria-label={playing ? 'Pause' : 'Play'} disabled={!inGlb}
                 style={{ width: 36, height: 36, borderRadius: '50%', border: '1px solid var(--border-2)', background: 'transparent', color: 'var(--text)', fontSize: 14, flexShrink: 0 }}>
@@ -143,6 +146,7 @@ export function Moves() {
             empty="Describe a move, e.g. 'brace as we come alongside, one hand on the rail', or a change: 'faster on the way up'."
             onSend={sendChat}
             projectId={id}
+            working={work.chatWorking}
             footer={
               <div className="kv" style={{ gridTemplateColumns: '110px minmax(0, 1fr)', fontSize: 12 }}>
                 <span>Plays</span><span>{inGlb ? 'Loops in this preview' : '—'}</span>

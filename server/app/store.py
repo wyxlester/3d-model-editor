@@ -10,6 +10,7 @@ fix). Undo moves the current pointer back; version folders are never deleted.
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -101,17 +102,42 @@ class ProjectStore:
             self.save(project)
 
     # ---- projects ---------------------------------------------------------------------
-    def create(self, kind: str, base: str, name: str, brief: str | None = None) -> dict:
+    def create(self, kind: str, base: str, name: str, *, derived_from: dict | None = None,
+               brief: str | None = None, research: dict | None = None, draft: dict | None = None) -> dict:
+        """`brief` is the request the project was made from: a custom ship's description, or what a
+        variant was asked to change (one field, Lester 29 Oct)."""
         pid = "p_" + uuid.uuid4().hex[:8]
         project = {"id": pid, "kind": kind, "name": name, "base": base, "version": 0,
                    "versions": [], "undo_stack": [], "pins": [], "messages": [],
-                   "research": None, "research_rev": 0, "design_plan": None,
-                   "created": now_iso(), "updated": now_iso()}
-        if brief:
-            project["brief"] = brief
+                   "research": copy.deepcopy(research), "research_rev": 0, "design_plan": None,
+                   "derived_from": derived_from, "brief": brief,
+                   "draft": draft, "discarded": False, "created": now_iso(), "updated": now_iso()}
         self._dir(pid).mkdir(parents=True, exist_ok=False)
         self.save(project)
         return project
+
+    def create_variant(self, source: dict, version: int, name: str, brief: str | None, draft: dict) -> dict:
+        """A new project of the source's kind and base, recording where it came from, held as a
+        draft until approved. The caller writes its v1 spec. Research comes along; pins, chat and
+        undo history do not."""
+        return self.create(source["kind"], source["base"], name, brief=brief, research=source.get("research"),
+                           derived_from={"project": source["id"], "version": version, "name": source["name"]},
+                           draft=draft)
+
+    def set_draft(self, pid: str, **fields: Any) -> dict:
+        """Update a variant's review state (stage, error, job_id…)."""
+        with self.edit(pid) as project:
+            project["draft"] = {**(project.get("draft") or {}), **fields}
+        return project["draft"]
+
+    def spec_ids(self) -> set[str]:
+        """Every spec id any version of any project has used (contract §5: variant ids avoid them)."""
+        ids = set()
+        for f in self.root.glob("*/v*/spec.json"):
+            spec = read_json(f)
+            if isinstance(spec, dict) and isinstance(spec.get("id"), str):
+                ids.add(spec["id"])
+        return ids
 
     def ids(self) -> list[str]:
         return sorted(p.parent.name for p in self.root.glob("*/project.json"))
@@ -184,7 +210,9 @@ class ProjectStore:
             "build_report": self.report(pid, n) or {},
             "pins": p["pins"], "messages": p["messages"], "research": p["research"],
             "research_rev": p.get("research_rev", 0), "design_plan": p.get("design_plan"),
-            "brief": p.get("brief"), "plan_built": bool(p.get("plan_built")),
+            "plan_built": bool(p.get("plan_built")),
+            "derived_from": p.get("derived_from"), "brief": p.get("brief"),
+            "draft": p.get("draft"), "discarded": bool(p.get("discarded")),
             "can_undo": bool(p["undo_stack"]),
         }
 
@@ -194,7 +222,9 @@ class ProjectStore:
         return {"id": p["id"], "kind": p["kind"], "name": p["name"], "base": p["base"],
                 "version": n, "updated": p.get("updated"),
                 "model_url": f"/api/projects/{pid}/versions/{n}/model.glb" if n else None,
-                "open_pins": sum(1 for pin in p["pins"] if pin["status"] != "resolved")}
+                "open_pins": sum(1 for pin in p["pins"] if pin["status"] != "resolved"),
+                "derived_from": p.get("derived_from"), "draft": p.get("draft"),
+                "discarded": bool(p.get("discarded")), "plan_built": bool(p.get("plan_built"))}
 
     # ---- messages, pins, research -----------------------------------------------------
     def add_message(self, pid: str, who: str, text: str, attachments: list[dict] | None = None) -> dict:

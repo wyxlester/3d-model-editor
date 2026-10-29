@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api, errorText } from '../api';
 import { AttachmentList, Dot, ErrorNote, TopBar, filesOnlyText, useAttachPicker } from '../components/common';
 import { recall, remember, useCatalog, useHealth, useJobs, useProjects } from '../hooks';
-import { clarifyOptions, paths, targetFor } from '../lib/routing';
+import { clarifyOptions, paths, projectPath, targetFor } from '../lib/routing';
 import type { Attachment, Message, ProjectBase, ProjectKind } from '../types';
 import { JobLines } from '../components/common';
 
@@ -21,6 +21,7 @@ interface Turn {
 const EXAMPLES = [
   'Research and build PCG 3-Series PC 303 as photographed in 2025',
   'The cabin door on PC 303 looks wrong',
+  'A variant of PC 303 with a 25 mm gun on the foredeck',
   'A female coxswain in patrol working dress',
   'Animation: hand signal to the coxswain, slow ahead',
   'Put four crew on PC 303 coming alongside a suspect boat',
@@ -178,10 +179,11 @@ export function Home() {
               {projects.error && <ErrorNote error={projects.error} retry={projects.reload} />}
               {!projects.error && recent.length === 0 && !projects.loading && <span className="faint">Nothing yet. Start one below or ask above.</span>}
               {recent.map((p) => (
-                <Link key={p.id} to={p.kind === 'ship' ? paths.shipBuild(p.id) : paths.crew(p.id)} onClick={() => remember(p.kind, p.id)}
+                <Link key={p.id} to={projectPath(p)} onClick={() => remember(p.kind, p.id)}
                   style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--panel-2)', color: 'var(--text)' }}>
                   <span><span style={{ fontWeight: 500 }}>{p.name}</span> <span className="muted">{p.kind === 'ship' ? 'Ship' : 'Crew'}{p.version ? ` · v${p.version}` : ''}</span></span>
-                  {p.ok === false ? <span className="warn">Last build failed</span> : p.ok ? <span className="ok">Checks pass</span> : null}
+                  {p.draft ? <span className="warn">Variant awaiting your approval</span>
+                    : p.ok === false ? <span className="warn">Last build failed</span> : p.ok ? <span className="ok">Checks pass</span> : null}
                 </Link>
               ))}
               <span className="muted" style={{ marginTop: 6 }}>Start new</span>

@@ -30,13 +30,32 @@ export function partLabel(path: string): string {
  * Without a parts list, fall back to the naming rule.
  */
 export function resolvePart(chain: string[], knownParts?: Iterable<string>): string | null {
-  const known = knownParts ? new Set(knownParts) : null;
-  if (known && known.size > 0) {
-    for (const name of chain) if (known.has(name) && !isStationName(name)) return name;
-    return null;
-  }
-  for (const name of chain) if (isPartName(name)) return name;
+  const isPart = partTest(knownParts);
+  for (const name of chain) if (isPart(name)) return name;
   return null;
+}
+
+/** Whether a node name is a part: listed (and not a station) when the list is known, else by the naming rule. */
+function partTest(knownParts?: Iterable<string>): (name: string) => boolean {
+  const known = knownParts ? new Set(knownParts) : null;
+  if (known && known.size > 0) return (name) => known.has(name) && !isStationName(name);
+  return isPartName;
+}
+
+/**
+ * The nodes that belong to `node` itself: `node` and its descendants, minus any child part and
+ * everything under it. Exactly the nodes a click resolves to `node` (resolvePart), so a highlight
+ * of Hull__Main lights the hull, not the house, cranes and hatches attached to it.
+ */
+export function ownNodes<T extends { name: string; children: T[] }>(node: T, knownParts?: Iterable<string>): T[] {
+  const isPart = partTest(knownParts);
+  const out: T[] = [];
+  const walk = (n: T) => {
+    out.push(n);
+    for (const c of n.children) if (!isPart(c.name)) walk(c);
+  };
+  walk(node);
+  return out;
 }
 
 export interface Level {

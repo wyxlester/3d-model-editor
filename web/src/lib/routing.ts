@@ -16,7 +16,14 @@ export const paths = {
   moves: (id?: string | null) => (id ? `/crew/${id}/moves` : '/crew'),
   assembly: (sceneId?: string | null) => (sceneId ? `/assembly/${sceneId}` : '/assembly'),
   review: (sceneId?: string | null) => (sceneId ? `/review/${sceneId}` : '/review'),
+  variant: (id: string) => `/variant/${id}`,
 };
+
+/** Where a project opens: its workshop, or its review screen while it is a variant awaiting approval. */
+export function projectPath(p: { kind: 'ship' | 'crew'; id: string; draft?: unknown }): string {
+  if (p.draft) return paths.variant(p.id);
+  return p.kind === 'ship' ? paths.shipBuild(p.id) : paths.crew(p.id);
+}
 
 export function targetFor(dest: Destination, projectId: string | null): RouteTarget | null {
   switch (dest) {
@@ -24,8 +31,12 @@ export function targetFor(dest: Destination, projectId: string | null): RouteTar
       return { path: paths.shipResearch(projectId), label: 'Ship workshop: Research' };
     case 'ship_build':
       return { path: paths.shipBuild(projectId), label: 'Ship workshop: Build' };
+    case 'ship_variant':
+      return { path: projectId ? `${paths.shipBuild(projectId)}?variant=1` : paths.shipBuild(), label: 'Ship workshop: Make a variant' };
     case 'crew':
       return { path: paths.crew(projectId), label: 'Crew workshop' };
+    case 'crew_variant':
+      return { path: projectId ? `${paths.crew(projectId)}?variant=1` : paths.crew(), label: 'Crew workshop: Make a variant' };
     case 'animation':
       return { path: paths.moves(projectId), label: 'Crew animation' };
     case 'assembly':

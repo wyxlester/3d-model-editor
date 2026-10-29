@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Job, Part } from '../types';
-import { hiddenParts, isPartName, jointsOf, levelsFor, partLabel, resolvePart } from './parts';
+import { hiddenParts, isPartName, jointsOf, levelsFor, ownNodes, partLabel, resolvePart } from './parts';
 import { MAX_POLL_FAILURES, describe as describePoll, nextDelayMs, pollReducer, type PollState } from './jobs';
 import { blenderToGltf, cameraFor, gltfToBlender, jointAxisGltf } from './frames';
 import { assetLabel, clothesSlot, mergePatch, toggleIn } from './spec';
@@ -45,6 +45,39 @@ describe('nearest part from a node chain', () => {
   it('falls back to the naming rule without a parts list', () => {
     expect(resolvePart(['Cube', 'Roof__Horn', 'Scene'])).toBe('Roof__Horn');
     expect(resolvePart(['station__helm', 'Scene'])).toBeNull();
+  });
+});
+
+describe('a part\'s own nodes (what its highlight lights)', () => {
+  type N = { name: string; children: N[] };
+  const n = (name: string, ...children: N[]): N => ({ name, children });
+  // Hull__Main is the root every other part hangs from, as the ship builders emit it.
+  const tree = n('Hull__Main',
+    n('Hull__Main_1'), n('Hull__Main_2'),
+    n('Accommodation__House', n('Accommodation__House_1'), n('Bridge__Wheelhouse')),
+    n('station__helm', n('helm_marker')),
+    n('Cargo__Hatch_01', n('Cargo__Bay_01')));
+  const known = ['Hull__Main', 'Accommodation__House', 'Bridge__Wheelhouse', 'station__helm', 'Cargo__Hatch_01', 'Cargo__Bay_01'];
+  const names = (node: N, k?: string[]) => ownNodes(node, k).map((x) => x.name);
+
+  it('the hull is the hull and its material pieces, not the parts attached to it', () => {
+    expect(names(tree, known)).toEqual(['Hull__Main', 'Hull__Main_1', 'Hull__Main_2', 'station__helm', 'helm_marker']);
+  });
+  it('a mid-level part keeps its own pieces and drops the part on top of it', () => {
+    expect(names(tree.children[2], known)).toEqual(['Accommodation__House', 'Accommodation__House_1']);
+  });
+  it('matches picking: every own node resolves to the part, every other node does not', () => {
+    const chains: Array<[N, string[]]> = [];
+    const walk = (node: N, up: string[]) => { const c = [node.name, ...up]; chains.push([node, c]); node.children.forEach((x) => walk(x, c)); };
+    walk(tree, ['Scene']);
+    for (const p of known.filter((k) => !k.startsWith('station__'))) {
+      const node = chains.find(([x]) => x.name === p)![0];
+      const own = new Set(ownNodes(node, known));
+      for (const [x, chain] of chains) {
+        if (own.has(x)) expect(resolvePart(chain, known)).toBe(p);
+        else if (chain.includes(p)) expect(resolvePart(chain, known)).not.toBe(p);
+      }
+    }
   });
 });
 
@@ -128,6 +161,12 @@ describe('routing', () => {
     expect(targetFor('animation', 'c1')?.path).toBe('/crew/c1/moves');
     expect(targetFor('clarify', null)).toBeNull();
   });
+  it('opens the variant dialog on the source project, or the picker without one', () => {
+    expect(targetFor('ship_variant', 'p1')?.path).toBe('/ship/p1/build?variant=1');
+    expect(targetFor('ship_variant', null)?.path).toBe('/ship');
+    expect(targetFor('crew_variant', 'c1')?.path).toBe('/crew/c1?variant=1');
+    expect(targetFor('crew_variant', null)?.path).toBe('/crew');
+  });
 });
 
 describe('job polling state machine', () => {
@@ -199,6 +238,37 @@ describe('comment summaries', () => {
     expect(shortTime('nonsense')).toBe('');
     expect(shortTime(null)).toBe('');
     expect(shortTime('2026-10-29T00:39:39Z')).toMatch(/^\d{1,2} Oct, \d{2}:\d{2}$/);
+  });
+});
+
+import { activityLines, variantSteps } from './variant';
+import { projectPath } from './routing';
+
+describe('variant review', () => {
+  const draft = (stage: string, error: string | null = null) => ({ stage, job_id: 'j', research: false, scene: null, error }) as const;
+  const states = (s: { key: string; state: string }[]) => s.map((x) => `${x.key}:${x.state}`).join(' ');
+
+  it('lists only the steps that will happen', () => {
+    expect(variantSteps(draft('copying'), { brief: false }).map((s) => s.key)).toEqual(['copy', 'review']);
+    expect(variantSteps({ ...draft('copying'), research: true }, { brief: true }).map((s) => s.key)).toEqual(['copy', 'research', 'change', 'review']);
+  });
+  it('follows the stage', () => {
+    expect(states(variantSteps(draft('copying'), { brief: true }))).toBe('copy:active change:todo review:todo');
+    expect(states(variantSteps(draft('changing'), { brief: true }))).toBe('copy:done change:active review:todo');
+    expect(states(variantSteps(draft('ready'), { brief: true }))).toBe('copy:done change:done review:active');
+    expect(states(variantSteps(null, { brief: true }))).toBe('copy:done change:done review:done');
+  });
+  it('shows where it failed', () => {
+    expect(states(variantSteps(draft('failed', 'no hull'), { brief: true }))).toBe('copy:failed change:todo review:todo');
+    expect(states(variantSteps(draft('ready', 'AI down'), { brief: true }))).toBe('copy:done change:failed review:active');
+  });
+  it('keeps only the lines written for people', () => {
+    expect(activityLines(['$ blender -b', '• Copying PC 303 v4', 'Read prefs', '• AI: Done.'])).toEqual(['Copying PC 303 v4', 'AI: Done.']);
+  });
+  it('opens a draft on its review screen', () => {
+    expect(projectPath({ kind: 'ship', id: 'p1', draft: { stage: 'ready' } })).toBe('/variant/p1');
+    expect(projectPath({ kind: 'ship', id: 'p1', draft: null })).toBe('/ship/p1/build');
+    expect(projectPath({ kind: 'crew', id: 'c1' })).toBe('/crew/c1');
   });
 });
 
@@ -472,5 +542,67 @@ describe('design plan (ships of any type)', () => {
     expect(httpErrorText('POST', '/api/projects/p1/chat', 409, ' Go to Research and approve the plan first. ')).toBe('Go to Research and approve the plan first.');
     expect(httpErrorText('POST', '/x', 500, 'boom')).toBe('POST /x failed (500): boom');
     expect(httpErrorText('POST', '/x', 409, { why: 1 })).toBe('POST /x failed (409): {"why":1}');
+  });
+});
+
+import { convexHull, waterlineCrossings } from './waterline';
+
+describe('hull footprint on the water (keeps water out of the boat)', () => {
+  // An open box "boat" 4 m long (x), 2 m wide (z), from 1 m below the waterline to 1 m above:
+  // its sides only, no deck, so the water plane would show inside it.
+  const corners = (y: number) => [[-2, y, -1], [2, y, -1], [2, y, 1], [-2, y, 1]];
+  const lo = corners(-1), hi = corners(1);
+  const pos = [...lo, ...hi].flat();
+  const index: number[] = [];
+  for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; index.push(i, j, 4 + j, i, 4 + j, 4 + i); }
+
+  it('finds where the sides cross the waterline, and nothing from parts clear of it', () => {
+    const pts = waterlineCrossings(pos, index);
+    expect(pts.length).toBeGreaterThan(0);
+    for (const [x, z] of pts) expect(Math.abs(x) === 2 || Math.abs(z) === 1).toBe(true);
+    expect(waterlineCrossings([0, 1, 0, 1, 2, 0, 0, 3, 1], null)).toEqual([]); // a mast above the water
+    expect(waterlineCrossings([0, -1, 0, 2, 1, 0, 0, 1, 2], null)).toEqual([[1, 0], [0, 1]]);
+  });
+  it('the footprint is the hull outline: the four corners, counter-clockwise', () => {
+    const hull = convexHull(waterlineCrossings(pos, index));
+    expect(hull).toHaveLength(4);
+    expect(new Set(hull.map((p) => p.join(',')))).toEqual(new Set(['-2,-1', '2,-1', '2,1', '-2,1']));
+    let area2 = 0;
+    for (let i = 0; i < hull.length; i++) { const [a, b] = [hull[i], hull[(i + 1) % hull.length]]; area2 += a[0] * b[1] - b[0] * a[1]; }
+    expect(area2).toBeCloseTo(16); // twice the 4 × 2 area, positive = counter-clockwise
+  });
+  it('drops interior and collinear points, and gives nothing for a line or a point', () => {
+    expect(convexHull([[0, 0], [1, 0], [2, 0], [2, 2], [0, 2], [1, 1]])).toHaveLength(4);
+    expect(convexHull([[0, 0], [1, 1], [2, 2]])).toEqual([]);
+    expect(convexHull([[0, 0]])).toEqual([]);
+  });
+});
+
+import { activeFor, newlyFinished } from './jobcenter';
+
+describe('work across models', () => {
+  const job = (id: string, status: string, project: string | null = 'p1') => ({
+    id, status, project, kind: 'chat', label: id, last: '', error: null, created: '', finished: null,
+    project_name: null, project_kind: null,
+  }) as const;
+  const seen = (...js: { id: string; status: string }[]) => new Map(js.map((j) => [j.id, j.status]));
+
+  it('reports nothing on the first look: old jobs are not news', () => {
+    expect(newlyFinished(null, [job('a', 'done')])).toEqual([]);
+  });
+  it('reports a job that was running and has finished, once', () => {
+    expect(newlyFinished(seen(job('a', 'running')), [job('a', 'done')]).map((j) => j.id)).toEqual(['a']);
+    expect(newlyFinished(seen(job('a', 'queued')), [job('a', 'error')]).map((j) => j.id)).toEqual(['a']);
+    expect(newlyFinished(seen(job('a', 'done')), [job('a', 'done')])).toEqual([]);
+    expect(newlyFinished(seen(job('a', 'running')), [job('a', 'running')])).toEqual([]);
+  });
+  it('reports a job that started and finished between two looks', () => {
+    expect(newlyFinished(seen(), [job('b', 'done')]).map((j) => j.id)).toEqual(['b']);
+    expect(newlyFinished(seen(), [job('b', 'running')])).toEqual([]);
+  });
+  it('lists what is still going on for one model', () => {
+    const jobs = [job('a', 'running'), job('b', 'queued'), job('c', 'done'), job('d', 'running', 'p2')];
+    expect(activeFor(jobs, 'p1').map((j) => j.id)).toEqual(['a', 'b']);
+    expect(activeFor(jobs, undefined)).toEqual([]);
   });
 });

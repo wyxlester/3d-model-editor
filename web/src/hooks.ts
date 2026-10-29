@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorText } from './api';
+import { useJobCenter } from './components/JobCenter';
 import { pollJob } from './lib/poll';
 import type { PollState } from './lib/jobs';
 import type { Catalog, Health, Project, ProjectSummary } from './types';
@@ -69,6 +70,7 @@ export interface RunningJob {
  * the last log line) until it finishes; finished lines linger briefly, errors stay until dismissed.
  */
 export function useJobs() {
+  const { refresh } = useJobCenter(); // so the top bar lists a new job at once
   const [jobs, setJobs] = useState<RunningJob[]>([]);
   const keyRef = useRef(0);
   const alive = useRef(true);
@@ -91,6 +93,7 @@ export function useJobs() {
     put({ phase: 'polling', jobId: '…', status: 'queued', log: ['Sending'], failures: 0, startedAt: Date.now() });
     try {
       const { job_id } = await start();
+      refresh();
       const result = await pollJob<R>(job_id, { onUpdate: (s) => put(s as PollState) });
       await onDone?.(result);
       setTimeout(() => alive.current && setJobs((js) => js.filter((j) => j.key !== key)), 4000);
@@ -100,7 +103,7 @@ export function useJobs() {
       try { await onError?.(errorText(e)); } catch { /* the error line already shows */ }
       return undefined;
     }
-  }, []);
+  }, [refresh]);
 
   const dismiss = useCallback((key: number) => setJobs((js) => js.filter((j) => j.key !== key)), []);
   const busy = jobs.some((j) => j.state.phase === 'polling');

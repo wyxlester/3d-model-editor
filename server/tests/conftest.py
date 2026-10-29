@@ -37,7 +37,8 @@ SHIP_PARTS = [
 
 
 class FakeBuilder:
-    """Writes what a real builder writes (§4). params.fail -> ok:false report with errors."""
+    """Writes what a real builder writes (§4). params.fail -> ok:false report with errors;
+    params.drop_stations -> those stations are left out of parts.json."""
 
     def __init__(self):
         self.calls = []
@@ -52,7 +53,8 @@ class FakeBuilder:
             return read_report(out_dir, " (exit code 0)")
         if not fail:
             (out_dir / "model.glb").write_bytes(TINY_GLB)
-        parts = SHIP_PARTS if kind == "ship" else [
+        dropped = set(spec.get("params", {}).get("drop_stations") or [])
+        parts = [p for p in SHIP_PARTS if p["path"] not in dropped] if kind == "ship" else [
             {"path": "Body__Main", "label": "Body › Main", "parent": None, "joint": None, "station": None,
              "origin_m": [0, 0, 0], "rotation_deg": [0, 0, 0], "bounds_min": [0, 0, 0],
              "bounds_max": [0.5, 0.3, 1.8], "triangles": 10}]
@@ -73,7 +75,8 @@ def catalog_dir(tmp_path):
         "description": "A feeder container ship",
         "params": {"loa_m": 200, "beam_m": 32.2, "draught_m": 11.5, "depth_m": 20.5,
                    "hull_color": [0.55, 0.12, 0.1]},
-        "param_docs": {"loa_m": {"min": 50, "max": 400}, "fail": {"doc": "test hook"}},
+        "param_docs": {"loa_m": {"min": 50, "max": 400}, "fail": {"doc": "test hook"},
+                       "drop_stations": {"doc": "test hook"}},
         "meta": {"schema": "strait.ship_model/1", "type": "container", "length_m": 999,
                  "propulsion": "shaft_rudder", "source": "catalog"},
         "overrides": {}, "joint_limits": {}, "custom_ops": []}))

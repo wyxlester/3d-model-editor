@@ -6,7 +6,8 @@ import { httpErrorText } from '../lib/designPlan';
 import { mergePatch } from '../lib/spec';
 import { MODULES, isModuleId, moduleOfItem } from '../lib/modules';
 import type {
-  Attachment, Catalog, CustomItem, Job, Message, ModuleId, Part, Pin, Project, ProjectSummary, RouteResult, Scene, SceneSpec, UnrealReport, VersionInfo,
+  Attachment, Catalog, CustomItem, Job, JobSummary, Message, ModuleId, Part, Pin, Project, ProjectSummary, RouteResult, Scene, SceneSpec,
+  UnrealReport, VersionInfo,
 } from '../types';
 import shipPartsJson from '../../public/mock/ship_parts.json';
 import { mockResearch } from './research';
@@ -16,7 +17,7 @@ const shipParts = shipPartsJson as unknown as Part[];
 const now = () => new Date().toISOString();
 const JOB_MS = 3500;
 
-interface MockJob { job: Job; created: number; steps: string[]; finish: () => unknown; finished: boolean; fail?: string }
+interface MockJob { job: Job; created: number; steps: string[]; finish: () => unknown; finished: boolean; fail?: string; project?: string; label?: string; kind?: string }
 interface Store {
   projects: Record<string, Project & { glbs: Record<number, string> }>;
   scenes: Record<string, Scene>;
@@ -301,6 +302,7 @@ const buildSteps = ['Merging the spec', 'Running the builder in Blender', 'Apply
 function route(message: string): RouteResult {
   const t = message.toLowerCase();
   const R: [RegExp, RouteResult['destination'], string, string | null][] = [
+    [/variant|version of .*(with|but)|copy of|same .* but/, /crew|coxswain|person|helmet/.test(t) ? 'crew_variant' : 'ship_variant', 'That’s a new one made from an existing one, keeping the original, so Make a variant.', /crew|coxswain|person|helmet/.test(t) ? 'c_cox' : 'p_pc303'],
     [/customer|meeting|present|review|export|unreal|\bmak\b|compare|version/, 'review', 'That’s about showing or shipping a version, so Review and export is the place.', null],
     [/\bput\b|place|on board|aboard|alongside|scenario|assembl|crew on/, 'assembly', 'That puts people on a ship and has them do something, so Assembly.', null],
     [/animat|\bmove\b|brace|walk|\brun\b|squat|pose|gesture|signal/, 'animation', 'That’s a movement, so the animation editor.', 'c_cox'],
@@ -342,7 +344,7 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
   if (method === 'GET' && path === '/api/catalog') return catalog;
   if (method === 'POST' && path === '/api/route') return route(String(body?.message ?? ''));
   if (method === 'GET' && path === '/api/projects') {
-    return Object.values(store.projects).map((p): ProjectSummary => ({ id: p.id, kind: p.kind, name: p.name, base: p.base, version: p.version, ok: p.build_report.ok, updated: p.versions[p.versions.length - 1]?.at, model_url: p.model_url, open_pins: p.pins.filter((x) => x.status !== 'resolved').length }));
+    return Object.values(store.projects).filter((p) => !p.discarded).map((p): ProjectSummary => ({ id: p.id, kind: p.kind, name: p.name, base: p.base, version: p.version, ok: p.build_report.ok, updated: p.versions[p.versions.length - 1]?.at, model_url: p.model_url, open_pins: p.pins.filter((x) => x.status !== 'resolved').length, derived_from: p.derived_from ?? null, draft: p.draft ?? null }));
   }
   if (method === 'POST' && path === '/api/projects' && body.kind === 'ship' && body.base === 'custom') return createCustom(body);
   if (method === 'POST' && path === '/api/projects') {
@@ -424,6 +426,67 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
     save();
     return { pin: p.pins.find((x) => x.id === r![2]) };
   }
+  if ((r = m(/^\/api\/projects\/([^/]+)\/variants$/)) && method === 'POST') {
+    const src = proj(r[1]);
+    const version = body.version ?? src.version;
+    const name = String(body.name || `${src.name} (variant)`);
+    const brief = typeof body.brief === 'string' && body.brief.trim() ? body.brief.trim() : null;
+    const id = `${src.kind === 'ship' ? 'p' : 'c'}_${++store.seq}`;
+    const p: Store['projects'][string] = JSON.parse(JSON.stringify(src));
+    Object.assign(p, {
+      id, name, version: 0, versions: [], pins: [], model_url: null, glbs: {}, brief,
+      derived_from: { project: src.id, version, name: src.name },
+      draft: { stage: 'copying', job_id: null, research: !!body.research, scene: body.scene ?? null, error: null },
+      discarded: false,
+      messages: brief ? [{ who: 'You', text: brief, at: now() }] : [],
+    });
+    // A variant of a custom ship starts already built: its design plan comes along as history, and
+    // the variant review is the check, not a new plan approval (Lester, 29 Oct).
+    if (p.base === 'custom') p.plan_built = true;
+    p.spec = { ...p.spec, id: name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'variant', name };
+    store.projects[id] = p;
+    const steps = [
+      `• Copying ${src.name} v${version}`, `• Building version 1 in Blender: Copied from ${src.name} v${version}`, ...buildSteps, '• Version 1 built',
+      ...(body.research ? ['• Researching the changes from public sources', '• Searching the web: (mock) no real search'] : []),
+      ...(brief ? ['• The AI is making the changes', '• Looking at the current model', `• AI: (mock) I'll make this change: ${brief}`, '• Building version 2 in Blender: AI edit', ...buildSteps, '• Version 2 built'] : []),
+      '• Ready for your review',
+    ];
+    const job = startJob(steps, () => {
+      newVersion(p, `Copied from ${src.name} v${version}`);
+      let reply: string | undefined;
+      if (brief) {
+        reply = `(mock) Made the variant: “${brief}”. Rebuilt as v2.`;
+        p.messages = [...p.messages, { who: 'AI', text: reply, at: now() }];
+        newVersion(p, brief.slice(0, 60));
+      }
+      p.draft = { ...p.draft!, stage: 'ready' };
+      return { version: p.version, build_report: p.build_report, reply };
+    });
+    p.draft = { ...p.draft!, job_id: job.job_id };
+    save();
+    return { project: strip(p), ...job };
+  }
+  if ((r = m(/^\/api\/projects\/([^/]+)\/approve$/)) && method === 'POST') {
+    const p = proj(r[1]);
+    if (!p.draft || p.discarded) throw new HttpErr(409, `${p.name} is not awaiting review`);
+    const sceneId = p.draft.scene;
+    p.draft = null;
+    let scene = null;
+    if (sceneId && store.scenes[sceneId]) {
+      const sid = `scene_${++store.seq}`;
+      store.scenes[sid] = { ...store.scenes[sceneId], id: sid, name: `${p.name} with crew`, ship: { project: p.id, version: p.version } };
+      scene = { id: sid, missing_stations: [] };
+    }
+    save();
+    return { project: strip(p), scene };
+  }
+  if ((r = m(/^\/api\/projects\/([^/]+)\/discard$/)) && method === 'POST') {
+    const p = proj(r[1]);
+    if (!p.draft || p.discarded) throw new HttpErr(409, 'Only a variant awaiting review can be discarded');
+    p.discarded = true;
+    save();
+    return { project: strip(p) };
+  }
   if ((r = m(/^\/api\/projects\/([^/]+)\/undo$/)) && method === 'POST') {
     const p = proj(r[1]);
     if (p.versions.length > 1) {
@@ -435,6 +498,16 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
     }
     save();
     return { project: strip(p) };
+  }
+  if (method === 'GET' && path === '/api/jobs') {
+    return { jobs: Object.entries(jobs).map(([id, j]): JobSummary => {
+      const job = tickJob(id);
+      const p = j.project ? store.projects[j.project] : undefined;
+      const said = job.log.filter((l) => l.startsWith('• ')).map((l) => l.slice(2));
+      return { id, kind: j.kind ?? 'build', label: j.label ?? 'Working', project: j.project ?? null, project_name: p?.name ?? null,
+        project_kind: p?.kind ?? null, status: job.status, last: said[said.length - 1] ?? job.log[job.log.length - 1] ?? '',
+        error: job.error, created: new Date(j.created).toISOString(), finished: j.finished ? now() : null };
+    }) };
   }
   if ((r = m(/^\/api\/jobs\/([^/]+)$/))) return tickJob(r[1]);
   if (method === 'GET' && path === '/api/scenes') return Object.values(store.scenes).map(sceneWithStations);
@@ -469,10 +542,27 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
   throw new HttpErr(404, `Mock has no route for ${method} ${path}`);
 }
 
+/** Tag a job just started with its project and a label, as the server does (CONTRACT §10). */
+function labelJob(method: string, path: string, body: any, out: any) {
+  const j = out && typeof out === 'object' && out.job_id ? jobs[out.job_id] : undefined;
+  if (!j || method !== 'POST') return;
+  const r = path.match(/^\/api\/projects\/([^/]+)\/(chat|pins|spec|variants|design-plan\/approve|pins\/[^/]+\/reply)$/);
+  if (path === '/api/projects' && out.project?.base === 'custom') Object.assign(j, { project: out.project?.id, kind: 'build', label: `Creating ${out.project?.name}` });
+  else if (path === '/api/projects') Object.assign(j, { project: out.project?.id, kind: 'build', label: `First build of ${out.project?.name}` });
+  else if (r?.[2] === 'chat') Object.assign(j, { project: r[1], kind: 'chat', label: `${body?.mode === 'research' ? 'Research' : 'Chat'}: ${String(body?.message ?? '').slice(0, 60)}` });
+  else if (r?.[2] === 'design-plan/approve') Object.assign(j, { project: r[1], kind: 'build', label: 'Building the approved design plan' });
+  else if (r?.[2] === 'pins') Object.assign(j, { project: r[1], kind: 'pin', label: `Comment on ${body?.part}` });
+  else if (r?.[2]?.startsWith('pins/')) Object.assign(j, { project: r[1], kind: 'pin', label: 'Reply on a comment' });
+  else if (r?.[2] === 'spec') Object.assign(j, { project: r[1], kind: 'build', label: 'Rebuilding with your changes' });
+  else if (r?.[2] === 'variants') Object.assign(j, { project: out.project?.id, kind: 'variant', label: `Making the variant ${out.project?.name}` });
+}
+
 export async function mockTransport(method: string, path: string, body?: unknown): Promise<unknown> {
   await new Promise((r) => setTimeout(r, 120));
   try {
-    return JSON.parse(JSON.stringify(await handle(method, path, body ?? null)));
+    const out = await handle(method, path, body ?? null);
+    labelJob(method, path, body, out);
+    return JSON.parse(JSON.stringify(out));
   } catch (e) {
     if (e instanceof HttpErr) {
       throw new ApiError(e.status, httpErrorText(method, path, e.status, e.message), { detail: e.message });

@@ -1,13 +1,36 @@
 // /ship and /crew without a project: pick one or start a new one. The Ship page also describes a
 // new ship of any type (Lester, 29 Oct: "research first, wait for user confirmation to build").
-import { useState } from 'react';
+// Each project shows a picture of its model; the selected one is previewed live beside the list,
+// with Open and Make a variant. Order on the Ship page (Lester, 29 Oct): the Describe card, then
+// the list with its preview, then the bases.
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { api, errorText } from '../api';
+import { api, errorText, modelUrl } from '../api';
 import { ErrorNote, JobLines, TopBar, useAttachPicker } from '../components/common';
-import { remember, useCatalog, useJobs, useProjects } from '../hooks';
+import { useVariantDialog } from '../components/VariantDialog';
+import { useJobCenter } from '../components/JobCenter';
+import { activeFor } from '../lib/jobcenter';
+import { recall, remember, useCatalog, useJobs, useProjects } from '../hooks';
 import { briefFromCarried } from '../lib/designPlan';
-import { paths } from '../lib/routing';
+import type { ViewName } from '../lib/frames';
+import { paths, projectPath } from '../lib/routing';
 import type { Message, ProjectBase, ProjectKind, ProjectSummary } from '../types';
+import { CrewViewer, ShipViewer } from '../viewer/Viewer';
+import { useThumbnail } from '../viewer/thumbnail';
+
+/** Ships are pictured from the bow quarter, people from the front. */
+const PICTURE_VIEW: Record<ProjectKind, ViewName> = { ship: 'orbit', crew: 'bow' };
+
+const urlOf = (p: ProjectSummary) => (p.version ? modelUrl(p.id, p.version) : null);
+
+/**
+ * Where a project opens from the list. A custom ship opens in Research: its design plan lives there
+ * and nothing builds without it. Everything else goes where projectPath says, so a variant still
+ * awaiting approval opens its review (that check comes first, custom ship or not).
+ */
+/** A custom ship still waiting for its plan: no variants yet (Lester, 29 Oct). */
+const placeholder = (p: ProjectSummary) => p.kind === 'ship' && p.base === 'custom' && !p.plan_built;
+const openPath = (p: ProjectSummary) => (!p.draft && p.kind === 'ship' && p.base === 'custom' ? paths.shipResearch(p.id) : projectPath(p));
 
 export function ProjectPicker({ kind }: { kind: ProjectKind }) {
   const nav = useNavigate();
@@ -16,12 +39,31 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
   const projects = useProjects();
   const catalog = useCatalog();
   const { jobs, run, dismiss, busy } = useJobs();
+  const variant = useVariantDialog();
   const mine = (projects.data ?? []).filter((p) => p.kind === kind);
-  // A custom ship opens in Research: its design plan lives there and nothing builds without it.
-  const open = (p: ProjectSummary) => (kind === 'crew' ? paths.crew(p.id) : p.base === 'custom' ? paths.shipResearch(p.id) : paths.shipBuild(p.id));
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Models being changed in the background: marked in the list, and re-read when a change finishes
+  // so the picture and preview show the new version.
+  const center = useJobCenter();
+  const finishedHere = mine.reduce((n, p) => n + (center.finished[p.id] ?? 0), 0);
+  const reloadProjects = projects.reload;
+  useEffect(() => { if (finishedHere) void reloadProjects(); }, [finishedHere, reloadProjects]);
   const bases: { base: ProjectBase; name: string; description?: string }[] = kind === 'ship'
     ? (catalog.data?.ships.filter((s) => s.type !== 'custom').map((s) => ({ base: s.type as ProjectBase, name: s.name, description: s.description })) ?? [])
     : (catalog.data?.crew.map((c) => ({ base: c.id as ProjectBase, name: c.name })) ?? [{ base: 'male_default', name: 'Default male crew' }]);
+
+  // Start on the one opened last, else the first.
+  const ids = mine.map((p) => p.id).join();
+  useEffect(() => {
+    if (!ids) return;
+    setSelectedId((cur) => {
+      const list = ids.split(',');
+      if (cur && list.includes(cur)) return cur;
+      const last = recall(kind);
+      return last && list.includes(last) ? last : list[0];
+    });
+  }, [ids, kind]);
+  const selected = mine.find((p) => p.id === selectedId) ?? null;
 
   const create = (base: ProjectBase, name: string) => {
     let id = '';
@@ -31,27 +73,61 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
       return { job_id: r.job_id };
     }, () => { remember(kind, id); nav(kind === 'ship' ? paths.shipBuild(id) : paths.crew(id), { state: carried }); });
   };
+  const go = (p: ProjectSummary) => { remember(kind, p.id); nav(openPath(p), { state: carried }); };
 
   return (
     <>
       <TopBar />
-      <main className="scroll" style={{ flex: 1, padding: '40px 24px', display: 'flex', justifyContent: 'center' }}>
-        <div style={{ width: '100%', maxWidth: kind === 'ship' ? 900 : 760, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <main className="scroll" style={{ flex: 1, padding: '32px 24px', display: 'flex', justifyContent: 'center' }}>
+        <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <h1 className="title">{kind === 'ship' ? 'Ship workshop' : 'Crew workshop'}</h1>
-          <p className="muted" style={{ margin: 0 }}>{kind === 'ship' ? 'Open one you have, describe a new one, or start from a base.' : 'Open one you have, or start a new one from a base.'}</p>
+          <p className="muted" style={{ margin: 0 }}>{kind === 'ship'
+            ? 'Describe a new ship, pick one you have to preview and open it, or start from a base.'
+            : 'Pick one to preview it, then open it. Or start a new one from a base.'}</p>
           {kind === 'ship' && <DescribeShip carried={carried?.carried ?? null} disabled={busy} />}
           <span className="muted" style={{ marginTop: 6 }}>Yours</span>
           <ErrorNote error={projects.error} retry={projects.reload} />
-          {mine.map((p) => (
-            <Link key={p.id} to={open(p)} state={carried} onClick={() => remember(kind, p.id)} className="card" style={{ color: 'var(--text)', display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ fontWeight: 500 }}>{p.name}</span>
-              <span className="muted">{p.version ? `v${p.version}` : 'not built yet'}</span>
-            </Link>
-          ))}
-          {!projects.loading && !mine.length && !projects.error && <span className="faint">None yet.</span>}
-          <span className="muted" style={{ marginTop: 6 }}>{kind === 'ship' ? 'Or start from a base' : 'Start new'}</span>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'flex-start' }}>
+            <div role="listbox" aria-label={kind === 'ship' ? 'Ships' : 'Crew'} style={{ flex: '1 1 380px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {mine.map((p) => (
+                <ProjectRow key={p.id} p={p} kind={kind} on={p.id === selectedId} working={activeFor(center.jobs, p.id).length > 0}
+                  onSelect={() => setSelectedId(p.id)} onOpen={() => go(p)} />
+              ))}
+              {!projects.loading && !mine.length && !projects.error && <span className="faint">None yet.</span>}
+            </div>
+            {selected && (
+              <div className="card" style={{ flex: '1 1 460px', minWidth: 0, padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'sticky', top: 0 }}>
+                <div style={{ position: 'relative', height: 360, display: 'flex' }}>
+                  {!urlOf(selected) ? <div className="viewer"><div className="viewer-msg">Not built yet.</div></div>
+                    : kind === 'ship'
+                      ? <ShipViewer url={urlOf(selected)} view="orbit" partPaths={[]} />
+                      : <CrewViewer urls={[urlOf(selected)!]} animation="idle" playing />}
+                </div>
+                <div style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+                    <span style={{ fontWeight: 500 }}>{selected.name}</span>
+                    <span className="faint" style={{ fontSize: 12 }}>
+                      {selected.version ? `v${selected.version}` : 'Not built yet'}
+                      {selected.derived_from ? ` · variant of ${selected.derived_from.name} v${selected.derived_from.version}` : ''}
+                    </span>
+                  </span>
+                  <button className="btn" disabled={!selected.version || !!selected.draft || busy || placeholder(selected)} onClick={() => variant.show(selected.id)}
+                    title={selected.draft ? 'Approve this variant before making variants of it' : placeholder(selected) ? 'Approve its design plan first'
+                      : `A new ${kind === 'ship' ? 'ship' : 'crew member'} copied from ${selected.name}, changed as you describe`}>
+                    Make a variant
+                  </button>
+                  <Link to={openPath(selected)} state={carried} onClick={() => remember(kind, selected.id)} className="btn primary">
+                    {selected.draft ? 'Review the variant' : 'Open'}
+                  </Link>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <span className="muted" style={{ marginTop: 8 }}>{kind === 'ship' ? 'Or start from a base' : 'Start new'}</span>
           <ErrorNote error={catalog.error} retry={catalog.reload} />
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8 }}>
             {bases.map((b) => (
               <button key={b.base} className="card" style={{ textAlign: 'left', color: 'var(--text)', display: 'flex', flexDirection: 'column', gap: 4 }} disabled={busy} onClick={() => create(b.base, b.name)}>
                 <span style={{ fontWeight: 500 }}>{b.name}</span>
@@ -62,6 +138,7 @@ export function ProjectPicker({ kind }: { kind: ProjectKind }) {
           <JobLines jobs={jobs} dismiss={dismiss} />
         </div>
       </main>
+      {variant.dialog}
     </>
   );
 }
@@ -134,5 +211,31 @@ function DescribeShip({ carried, disabled }: { carried: Message[] | null; disabl
       {files.note}
       <ErrorNote error={err} />
     </div>
+  );
+}
+
+/** One project: its picture, name and state. Click to preview it; double-click (or Enter) to open it. */
+function ProjectRow({ p, kind, on, working, onSelect, onOpen }: {
+  p: ProjectSummary; kind: ProjectKind; on: boolean; working: boolean; onSelect: () => void; onOpen: () => void;
+}) {
+  const { src, failed } = useThumbnail(urlOf(p), PICTURE_VIEW[kind]);
+  return (
+    <button role="option" aria-selected={on} className={`row-btn ${on ? 'on' : ''}`}
+      onClick={onSelect} onDoubleClick={onOpen} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onOpen(); } }}
+      title="Click to preview, double-click to open"
+      style={{ alignItems: 'center', gap: 12, padding: 8, textAlign: 'left' }}>
+      <span style={{ width: 128, height: 80, flexShrink: 0, borderRadius: 6, overflow: 'hidden', background: 'var(--stage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {src ? <img src={src} alt="" width={128} height={80} style={{ display: 'block', objectFit: 'cover' }} />
+          : !p.version || failed ? <span className="faint" style={{ fontSize: 11 }}>{p.version ? 'No preview' : 'Not built'}</span>
+            : <span className="spinner" aria-label="Drawing a preview" />}
+      </span>
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, flex: 1 }}>
+        <span style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+        {p.derived_from && <span className="faint" style={{ fontSize: 12 }}>Variant of {p.derived_from.name} v{p.derived_from.version}</span>}
+        {p.draft ? <span className="chip amber" style={{ alignSelf: 'flex-start' }}>Awaiting your approval</span>
+          : <span className="muted" style={{ fontSize: 12 }}>{p.version ? `v${p.version}` : 'not built yet'}</span>}
+        {working && <span className="chip blue" style={{ alignSelf: 'flex-start', display: 'inline-flex', gap: 6, alignItems: 'center' }}><span className="spinner" aria-hidden="true" />Working on a change</span>}
+      </span>
+    </button>
   );
 }

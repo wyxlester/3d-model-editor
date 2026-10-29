@@ -19,6 +19,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Callable, Protocol
+from urllib.parse import urlparse
 
 from .builds import Builds, summarise_change
 from .catalog import Catalog, CatalogError
@@ -862,7 +863,15 @@ def custom_research_context(project: dict, spec: dict, cat_entry: dict) -> str:
     restarts."""
     research = project.get("research")
     plan = project.get("design_plan")
-    lines = [f"Brief (the user's original request): {project.get('brief') or '(none given)'}",
+    derived = project.get("derived_from") or {}
+    if derived:
+        # One brief field (Lester, 29 Oct): on a variant it is what the variant was asked to change;
+        # the original's request lives on in the copied research and design plan.
+        said = (f"Brief (this is a variant of {derived.get('name')!r}; what it was asked to change): "
+                f"{project.get('brief') or '(nothing: an exact copy)'}")
+    else:
+        said = f"Brief (the user's original request): {project.get('brief') or '(none given)'}"
+    lines = [said,
              f"Research revision: {project.get('research_rev', 0)}",
              "Saved research so far: " + (json.dumps(research) if research else "none yet."),
              ]
@@ -894,6 +903,74 @@ def module_prompt(module: str) -> str:
             "tool call that touches another module is refused and changes nothing. If the request needs "
             "another module, make the {module} part and say in the reply what the user should change in "
             "the other module.\n\n").replace("{module}", module)
+
+
+def _lower_first(s: str) -> str:
+    """"Small searchlight" -> "small searchlight", but "PC 303 mast" stays as it is."""
+    return s[:1].lower() + s[1:] if s[:2].istitle() else s
+
+
+def _words(keys) -> str:
+    return ", ".join(str(k).replace("_", " ") for k in keys)
+
+
+def _item_names(items) -> list:
+    """Equipment and accessories entries are a name or {"name", "color", "place"}: just the names."""
+    return [i.get("name", "an item") if isinstance(i, dict) else i for i in items]
+
+
+def describe_tool(name: str, args: dict | None) -> str | None:
+    """One plain line for the progress feed: what the AI is doing with this tool call. None when
+    something else already logs it (a rebuild logs its own build line)."""
+    a = args if isinstance(args, dict) else {}
+    patch = a.get("patch") if isinstance(a.get("patch"), dict) else {}
+    part = label_for(str(a.get("part", "")))
+    if name == "set_part_override":
+        override = a.get("override")
+        if override is None:
+            return f"Resetting {part}"
+        return f"Hiding {part}" if isinstance(override, dict) and override.get("hidden") else f"Adjusting {part}"
+    simple = {
+        "get_project": "Looking at the current model",
+        "rebuild": None,
+        "reply_to_pin": "Answering the comment",
+        "save_research": "Saving the research",
+        "set_params": f"Changing {_words(patch)}",
+        "set_joint_limits": f"Setting how far {part} can move",
+        "add_custom_op": f"Adding {_lower_first(str(a.get('description') or 'new geometry'))}",
+        "remove_custom_op": "Removing an added piece",
+        "add_custom_item": f"Making {_lower_first(str(a.get('description') or 'a new item'))}",
+        "remove_custom_item": "Removing a made item",
+        "set_body": f"Changing the body: {_words(patch)}",
+        "set_clothes": f"Changing clothes: {_words(patch)}",
+        "set_equipment": f"Setting equipment: {_words(_item_names(a.get('equipment') or ['none']))}",
+        "set_place": f"Moving {_words([a.get('item') or 'an item'])} to the {_words([a.get('place') or 'new place'])}",
+        "set_accessories": f"Setting accessories: {_words(_item_names(a.get('accessories') or ['none']))}",
+        "save_design_plan": "Drafting the design plan",
+        "set_animations": f"Setting moves: {_words(a.get('animations') or ['none'])}",
+        "WebSearch": f"Searching the web: {a.get('query', '')}",
+        "WebFetch": f"Reading {urlparse(str(a.get('url', ''))).netloc or 'a web page'}",
+    }
+    return simple[name] if name in simple else f"Using {name}"
+
+
+def variant_prompt(source: dict, version: int, brief: str) -> str:
+    """First build turn of a variant: the project is an exact copy of `source` v`version`."""
+    return (f"This project is a new variant of \"{source['name']}\", copied exactly from its v{version}. "
+            "Change the copy into the variant described below. Keep everything the description does not "
+            "mention. If part of it cannot be done with your tools, do the rest and say plainly what you "
+            f"could not do.\n\nWhat is different:\n{brief}")
+
+
+def variant_research_prompt(source: dict, brief: str, research: dict | None) -> str:
+    """Research turn of a variant: extend the original's research to cover what the brief changes."""
+    if research:
+        start = ("The research for the original, to build on: keep what still applies, change what the "
+                 "variant changes, and add sources for the new equipment.\n" + json.dumps(research, indent=1))
+    else:
+        start = "The original has no research yet, so research the vessel and the changes."
+    return (f"This vessel is a variant of \"{source['name']}\". What is different:\n{brief}\n\n{start}\n\n"
+            "Save the research for the variant with save_research.")
 
 
 def system_prompt(kind: str, mode: str, base: str | None = None) -> str:
@@ -952,8 +1029,14 @@ class ClaudeAgentRunner:
                 for b in m.content:
                     if isinstance(b, TextBlock) and b.text.strip():
                         texts.append(b.text.strip())
+                        said = " ".join(b.text.split())
+                        log(f"• AI: {said[:240]}{'…' if len(said) > 240 else ''}")
                     elif isinstance(b, ToolUseBlock):
-                        log(f"AI → {b.name.removeprefix('mcp__editor__')}")
+                        name = b.name.removeprefix('mcp__editor__')
+                        log(f"AI → {name}")
+                        doing = describe_tool(name, b.input)
+                        if doing:
+                            log(f"• {doing}")
             elif isinstance(m, ResultMessage):
                 if m.is_error:
                     raise RuntimeError(f"AI run failed ({m.subtype}): {m.result}")

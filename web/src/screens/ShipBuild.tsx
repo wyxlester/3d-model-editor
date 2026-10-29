@@ -5,6 +5,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, errorText, modelUrl } from '../api';
 import { AiWorking, ChatPanel, ErrorNote, JobLines, PRIORITY, TopBar, useCarried } from '../components/common';
+import { DerivedFromLink, useVariantDialog } from '../components/VariantDialog';
+import { OtherWork, useProjectWork } from '../components/JobCenter';
 import { remember, useJobs, useLoad, useProject } from '../hooks';
 import { awaitingApproval, buildTabLabel } from '../lib/designPlan';
 import { blenderToGltf, type ViewName } from '../lib/frames';
@@ -18,6 +20,9 @@ import { ModeSwitch } from './ShipResearch';
 const STATUS_TEXT: Record<string, string> = { open: 'Open', working: 'AI is working', waiting: 'Waiting for you', resolved: 'Resolved' };
 const STATUS_COLOR: Record<string, string> = { open: '#F0C978', working: '#9CC2FF', waiting: '#9CC2FF', resolved: '#7FDDB0' };
 
+/** The toolbar's note while a custom ship's design plan waits for approval (CONTRACT §5). */
+const APPROVAL_NOTE = 'Placeholder until you approve the design plan.';
+
 interface Draft { part: string | null; chosen: string | null; point: Vec3; x: number; y: number }
 
 export function ShipBuild() {
@@ -27,6 +32,7 @@ export function ShipBuild() {
   const { jobs, run, dismiss, busy } = useJobs();
   const carried = useCarried();
   const stageRef = useRef<HTMLDivElement>(null);
+  const variant = useVariantDialog();
 
   const [tab, setTab] = useState<'chat' | 'comments'>(carried?.length ? 'chat' : 'comments');
   const [pinMode, setPinMode] = useState(false);
@@ -36,6 +42,9 @@ export function ShipBuild() {
   const [draftErr, setDraftErr] = useState<string | null>(null);
   const [inspect, setInspect] = useState(false);
   const [selPart, setSelPart] = useState<string | null>(search.get('part'));
+  // The part lit on the model: only one the user asked to see (an issue marker or comment clicked,
+  // "Show in Build"), never one just because the AI changed it. Cleared with its thread.
+  const [shownPart, setShownPart] = useState<string | null>(search.get('part'));
   const [hover, setHover] = useState<string | null>(null);
   const [view, setView] = useState<ViewName>('port');
   const [viewNonce, setViewNonce] = useState(0);
@@ -52,9 +61,14 @@ export function ShipBuild() {
   const aiWorking = (p: Pin) => p.status === 'working' || p.id in aiPins;
 
   useEffect(() => { if (id) remember('ship', id); }, [id]);
-  useEffect(() => { if (search.get('part')) { setSelPart(search.get('part')); setInspect(true); } }, [search]);
+  useEffect(() => { if (search.get('part')) { setSelPart(search.get('part')); setShownPart(search.get('part')); setInspect(true); } }, [search]);
+  const showVariant = variant.show;
   useEffect(() => {
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { setPinMode(false); setDraft(null); setSelPin(null); } };
+    // Home routed here to make a variant: open the dialog with the request as the brief.
+    if (id && search.get('variant')) showVariant(id, [...(carried ?? [])].reverse().find((m) => m.who === 'You')?.text ?? '');
+  }, [id, search, carried, showVariant]);
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { setPinMode(false); setDraft(null); setSelPin(null); setShownPart(null); } };
     window.addEventListener('keydown', esc);
     return () => window.removeEventListener('keydown', esc);
   }, []);
@@ -77,10 +91,16 @@ export function ShipBuild() {
   };
 
   const afterJob = async () => { const p = await reload(); if (p) setProject(p); };
+  // Work on this ship carries on while the user is on another model; when it finishes, show the result.
+  const work = useProjectWork(id, () => void afterJob(), jobs);
+
+  const closeThread = () => { setSelPin(null); setShownPart(null); };
+  /** Open an issue's thread because the user clicked it: its part lights up. */
+  const openPin = (p: Pin, x: number, y: number) => { setSelPin({ id: p.id, x, y }); setSelPart(p.part); setShownPart(p.part); setDraft(null); };
 
   const onPick = (r: PickResult) => {
     setPinMode(false);
-    setSelPin(null);
+    closeThread();
     const l = local(r.clientX, r.clientY);
     setDraft({ part: r.part, chosen: r.part, point: r.point, x: l.x, y: l.y });
     setDraftText(''); setDraftErr(null);
@@ -89,7 +109,7 @@ export function ShipBuild() {
 
   const startHiddenDraft = (p: Part) => {
     const c: Vec3 = [(p.bounds_min[0] + p.bounds_max[0]) / 2, (p.bounds_min[1] + p.bounds_max[1]) / 2, (p.bounds_min[2] + p.bounds_max[2]) / 2];
-    setSelPin(null); setViewing(null);
+    closeThread(); setViewing(null);
     setDraft({ part: p.path, chosen: p.path, point: blenderToGltf(c), x: 40, y: 40 });
     setSelPart(p.path); setDraftText(''); setDraftErr(null);
   };
@@ -144,21 +164,31 @@ export function ShipBuild() {
 
   const report = project?.build_report ?? {};
   const building = !!project && !project.model_url;
+  const hint = viewing ? `Viewing older v${viewing}, read-only. Commenting takes you back to the current version.`
+    : pinMode ? (hover ? `Pointing at ${partLabel(hover)}. Click to comment. Esc to cancel.` : 'Click any part of the model. Esc to cancel.')
+      : 'Or click a pin to open its thread.';
+
+  const status = project ? `${project.name} · ${current ? `v${current}` : 'not built yet'} · ${busy || work.active.length ? 'working…' : 'saved'}` : '';
 
   return (
     <>
-      <TopBar title={project?.name}>
+      <TopBar title={project?.name} back="ship">
         {id && <ModeSwitch id={id} mode="build" buildLabel={buildTabLabel(project)} />}
-        <div className="topbar-right">
-          <span>{project ? `${project.name} · ${current ? `v${current}` : 'not built yet'} · ${busy ? 'working…' : 'saved'}` : ''}</span>
+        {/* Shrinks rather than overflows (back arrow, work list and a long Build label share the bar):
+            the status line and the version list give way first; the buttons never do. */}
+        <div className="topbar-right" style={{ minWidth: 0 }}>
+          <span title={status} style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{status}</span>
+          <DerivedFromLink project={project} />
           {project && project.versions.length > 0 && (
-            <select className="field" aria-label="Version shown" style={{ maxWidth: 300 }} value={shownVersion} onChange={(e) => { const n = Number(e.target.value); setViewing(n === current ? null : n); setDraft(null); }}>
+            <select className="field" aria-label="Version shown" style={{ maxWidth: 300, minWidth: 90, flex: '0 1 auto' }} value={shownVersion} onChange={(e) => { const n = Number(e.target.value); setViewing(n === current ? null : n); setDraft(null); }}>
               {[...project.versions].reverse().map((v) => (
                 <option key={v.n} value={v.n}>v{v.n}{v.n === current ? ' (current)' : ''}{v.ok === false ? ' · failed' : ''} · {v.summary}</option>
               ))}
             </select>
           )}
-          <button className="btn" onClick={() => void undo()} disabled={!project || project.can_undo === false || busy || !!viewing}
+          <button className="btn" style={{ flexShrink: 0 }} onClick={() => id && variant.show(id)} disabled={!current || !!project?.draft || waiting}
+            title={waiting ? 'Approve its design plan first' : 'A new ship copied from this one, changed as you describe; this one stays as it is'}>Make a variant</button>
+          <button className="btn" style={{ flexShrink: 0 }} onClick={() => void undo()} disabled={!project || project.can_undo === false || busy || !!viewing}
             title={project?.can_undo === false ? 'Nothing to undo' : 'Go back to the previous version'}>Undo last change</button>
         </div>
       </TopBar>
@@ -169,7 +199,7 @@ export function ShipBuild() {
             <button role="tab" className={`tab ${tab === 'comments' ? 'on' : ''}`} onClick={() => setTab('comments')}>Comments ({pins.length})</button>
           </div>
           {tab === 'chat' ? (
-            <ChatPanel messages={project?.messages ?? []} carried={carried} onSend={chat} busy={busy} projectId={id}
+            <ChatPanel messages={project?.messages ?? []} carried={carried} onSend={chat} busy={busy} projectId={id} working={work.chatWorking}
               label="Ask about the whole ship" placeholder="What's still unverified?"
               empty="For a change to one part, pin a comment on it: the AI will know exactly which part you mean. Use this chat for the whole ship."
               footer={chatErr ? <div className="jobline error" role="alert" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
@@ -178,7 +208,7 @@ export function ShipBuild() {
               </div> : null} />
           ) : (
             <CommentsTab pins={pins} parts={parts} selected={selPin?.id ?? null} viewingOld={!!viewing} working={aiWorking}
-              onPick={(p) => { setSelPin({ id: p.id, x: 40, y: 40 }); setSelPart(p.part); setDraft(null); }}
+              onPick={(p) => openPin(p, 40, 40)}
               onHidden={startHiddenDraft} />
           )}
         </aside>
@@ -186,18 +216,14 @@ export function ShipBuild() {
         <section className="stage">
           <div className="toolbar">
             <button className={`btn ${pinMode ? 'primary' : 'selected'}`} style={{ padding: '0 14px' }} disabled={!url || waiting}
-              onClick={() => { if (viewing) { setViewing(null); setPinMode(true); } else setPinMode(!pinMode); setSelPin(null); setDraft(null); }}>
+              onClick={() => { if (viewing) { setViewing(null); setPinMode(true); } else setPinMode(!pinMode); closeThread(); setDraft(null); }}>
               {pinMode ? 'Placing a comment…' : 'Comment on a part'}
             </button>
             {waiting && id ? (
-              <span className="warn" style={{ fontSize: 12 }}>
-                A placeholder: this ship is built from its design plan, which is waiting for your approval. <Link to={paths.shipResearch(id)}>Open the design plan</Link>
+              <span className="warn toolbar-hint" title={`${APPROVAL_NOTE} Open the design plan in Research.`}>
+                {APPROVAL_NOTE} <Link to={paths.shipResearch(id)}>Open the design plan</Link>
               </span>
-            ) : <span className="faint" style={{ fontSize: 12 }}>
-              {viewing ? `Viewing older v${viewing}, read-only. Commenting takes you back to the current version.`
-                : pinMode ? (hover ? `Pointing at ${partLabel(hover)}. Click to comment. Esc to cancel.` : 'Click any part of the model. Esc to cancel.')
-                  : 'Or click a pin to open its thread.'}
-            </span>}
+            ) : <span className="faint toolbar-hint" title={hint}>{hint}</span>}
             {viewing && <button className="btn primary sm" onClick={() => setViewing(null)}>Back to current v{current}</button>}
             <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
               <ViewButtons view={view} onView={(v) => { setView(v); setViewNonce((n) => n + 1); }} />
@@ -213,21 +239,21 @@ export function ShipBuild() {
             pickMode={pinMode}
             onPick={onPick}
             onHover={setHover}
-            selectedPart={draft?.chosen ?? selPart}
+            selectedPart={draft?.chosen ?? shownPart}
             joints={joints}
             pins={pins}
             selectedPinId={selPin?.id ?? null}
-            onPinClick={(p, x, y) => { const l = local(x, y); setSelPin({ id: p.id, x: l.x, y: l.y }); setSelPart(p.part); setDraft(null); }}
+            onPinClick={(p, x, y) => { const l = local(x, y); openPin(p, l.x, l.y); }}
             overlay={<>
               {pin && project && selPin && (
                 <Thread project={project} pin={pin} n={pins.indexOf(pin) + 1} at={selPin} stage={stageRef.current} shown={shownVersion}
                   busy={busy} error={actionErr} working={aiWorking(pin)} since={aiPins[pin.id]}
-                  onClose={() => setSelPin(null)}
+                  onClose={closeThread}
                   onKeep={() => void pinAction(() => api.setPinStatus(project.id, pin.id, 'resolved'))}
                   onUndo={() => void pinAction(async () => { const r = await api.undo(project.id); setProject(r.project); await api.setPinStatus(project.id, pin.id, 'open'); })}
                   onReopen={() => void pinAction(() => api.setPinStatus(project.id, pin.id, 'open'))}
                   onReply={(text) => replyPin(pin.id, pin.part, text)}
-                  onInspect={() => { setSelPart(pin.part); setInspect(true); }}
+                  onInspect={() => { setSelPart(pin.part); setShownPart(pin.part); setInspect(true); }}
                   onShowVersion={(n) => setViewing(n === current ? null : n)}
                 />
               )}
@@ -239,9 +265,10 @@ export function ShipBuild() {
               )}
             </>}
           />
-          <div style={{ padding: jobs.length || error ? '8px 16px 0' : 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ padding: jobs.length || work.others.length || error ? '8px 16px 0' : 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
             <ErrorNote error={error} retry={reload} />
             <JobLines jobs={jobs} dismiss={dismiss} />
+            <OtherWork jobs={work.others} />
           </div>
           <div className="statusbar">
             {project && !project.model_url && <span className="faint">No build yet</span>}
@@ -260,6 +287,7 @@ export function ShipBuild() {
             onPatch={(label, patch) => void run(label, () => api.patchSpec(project.id, patch), afterJob, afterJob)} />
         )}
       </div>
+      {variant.dialog}
     </>
   );
 }

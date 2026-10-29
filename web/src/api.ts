@@ -2,8 +2,8 @@
 // VITE_MOCK=1 routes every call to an in-browser mock (src/mock) for development before the
 // server exists. The default build always talks to the real /api.
 import type {
-  Attachment, Catalog, ExportResult, Health, Job, ModuleId, Part, Pin, Project, ProjectBase, ProjectKind, ProjectSummary,
-  RouteResult, Scene, SceneSpec, UnrealReport, Vec3,
+  ApproveResult, Attachment, Catalog, ExportResult, Health, Job, JobSummary, ModuleId, Part, Pin, Project, ProjectBase,
+  ProjectKind, ProjectSummary, RouteResult, Scene, SceneSpec, UnrealReport, VariantRequest, Vec3,
 } from './types';
 import { httpErrorText } from './lib/designPlan';
 
@@ -86,8 +86,13 @@ export const api = {
   setPinStatus: (id: string, pinId: string, status: 'open' | 'resolved') =>
     call<{ pin: Pin }>('PATCH', `/api/projects/${enc(id)}/pins/${enc(pinId)}`, { status }),
   undo: (id: string) => call<{ project: Project }>('POST', `/api/projects/${enc(id)}/undo`),
+  createVariant: (id: string, req: VariantRequest) =>
+    call<{ project: Project; job_id: string }>('POST', `/api/projects/${enc(id)}/variants`, req),
+  approve: (id: string) => call<ApproveResult>('POST', `/api/projects/${enc(id)}/approve`),
+  discard: (id: string) => call<{ project: Project }>('POST', `/api/projects/${enc(id)}/discard`),
 
   job: <R = unknown>(jobId: string) => call<Job<R>>('GET', `/api/jobs/${enc(jobId)}`),
+  jobs: () => call<{ jobs: JobSummary[] }>('GET', '/api/jobs'),
 
   scenes: () => call<Scene[]>('GET', '/api/scenes'),
   createScene: (spec: Omit<SceneSpec, 'id'>) => call<{ scene: Scene }>('POST', '/api/scenes', spec),

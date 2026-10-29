@@ -10,7 +10,11 @@ Neither argument is mutated.
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
+
+_NOT_ID = re.compile(r"[^a-z0-9]+")
+VARIANT_ID_MAX = 40
 
 
 CREW_NULLABLE_SECTIONS = ("body", "clothes")
@@ -58,6 +62,21 @@ def gltf_to_blender(point: list[float]) -> list[float]:
 def label_for(path: str) -> str:
     """Contract §2 display label: '__' -> ' › ', '_' -> ' '."""
     return path.replace("__", " › ").replace("_", " ")
+
+
+def variant_id(name: str, taken: set[str]) -> str:
+    """Contract §5: a variant's spec id, from its name, unique among `taken`.
+    "PC 303 with 25 mm gun" -> "pc_303_with_25_mm_gun"; "Container ship" when taken -> "container_ship_2"."""
+    base = _NOT_ID.sub("_", str(name).lower()).strip("_")[:VARIANT_ID_MAX].strip("_") or "variant"
+    if base not in taken:
+        return base
+    n = 2
+    while True:
+        suffix = f"_{n}"
+        candidate = base[:VARIANT_ID_MAX - len(suffix)].rstrip("_") + suffix
+        if candidate not in taken:
+            return candidate
+        n += 1
 
 
 def diff_keys(a: Any, b: Any, prefix: str = "") -> list[str]:

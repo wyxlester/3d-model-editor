@@ -3,9 +3,11 @@
 // colours patch the spec through POST /spec (no AI); "Make it" sends the words through the crew
 // chat scoped to that module, so only that module changes. The viewer plays the chosen animation.
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { AiWorking, ChatPanel, ErrorNote, JobLines, Loading, TopBar, useCarried } from '../components/common';
+import { DerivedFromLink, useVariantDialog } from '../components/VariantDialog';
+import { OtherWork, useProjectWork } from '../components/JobCenter';
 import { remember, useCatalog, useJobs, useProject, useProjects } from '../hooks';
 import { paths } from '../lib/routing';
 import { assetLabel, groupClothes, mergePatch } from '../lib/spec';
@@ -49,9 +51,13 @@ export function CrewWorkshop() {
   const projects = useProjects();
   const catalog = useCatalog();
   const { jobs, run, dismiss, busy } = useJobs();
+  const [search] = useSearchParams();
+  const variant = useVariantDialog();
   const reload = project.reload;
   const { edit, optimistic } = useSpecEditor(id, run, reload);
   const sendChat = useCrewChat(id, run, reload);
+  // Work on this person carries on while the user is elsewhere; when it finishes, show the result.
+  const work = useProjectWork(id, () => void reload(), jobs);
   const [open, setOpen] = useState<Row | null>('gender');
   const [anim, setAnim] = useState<string | null>(null);
   const [clips, setClips] = useState<string[]>([]);
@@ -71,6 +77,11 @@ export function CrewWorkshop() {
 
   useEffect(() => { if (id) remember('crew', id); }, [id]);
   useEffect(() => () => clearTimeout(changedTimer.current), []);
+  const showVariant = variant.show;
+  useEffect(() => {
+    // Home routed here to make a variant: open the dialog with the request as the brief.
+    if (id && search.get('variant')) showVariant(id, [...(carried ?? [])].reverse().find((m) => m.who === 'You')?.text ?? '');
+  }, [id, search, carried, showVariant]);
 
   const p = project.data;
   const spec = useMemo(() => mergePatch((p?.spec ?? {}) as Record<string, unknown>, optimistic) as unknown as Partial<CrewSpec>, [p, optimistic]);
@@ -333,7 +344,7 @@ export function CrewWorkshop() {
 
   return (
     <>
-      <TopBar title={name}>
+      <TopBar title={name} back="crew">
         <div className="topbar-right" style={{ gap: 6, flexWrap: 'wrap', fontSize: 13 }}>
           {people.map((x) => (
             <Link key={x.id} to={paths.crew(x.id)} onClick={() => remember('crew', x.id)}
@@ -355,6 +366,7 @@ export function CrewWorkshop() {
             empty="Ask for anything about the whole person here. To change one part only, open it on the right and use “Or describe it”."
             onSend={(text, atts) => sendTracked(text, atts)}
             projectId={id}
+            working={work.chatWorking}
             footer={describing ? <AiWorking text="AI is making what you described…" since={describing.since} /> : undefined}
             afterLastAi={offerPicker ? (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
@@ -369,6 +381,7 @@ export function CrewWorkshop() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text-2)' }}>
             <span style={{ color: 'var(--text)', fontWeight: 500 }}>{name}</span><span>·</span>
             <span>{body.gender === 'female' ? 'Female' : 'Male'}, {drafts.height_cm ?? body.height_cm} cm</span>
+            <DerivedFromLink project={p} />
             <span style={{ marginLeft: 'auto' }}>Playing: {anim ? assetLabel(anim) : 'nothing'}</span>
           </div>
           {project.error && <div style={{ padding: 12 }}><ErrorNote error={project.error} retry={reload} /></div>}
@@ -376,10 +389,16 @@ export function CrewWorkshop() {
             <CrewViewer urls={p?.model_url ? [p.model_url] : []} animation={anim} playing
               onDuration={(_d, c) => setClips((old) => (old.join() === c.join() ? old : c))} />
           )}
-          {jobs.length > 0 && <div style={{ padding: '8px 16px 0' }}><JobLines jobs={jobs} dismiss={dismiss} /></div>}
+          {(jobs.length > 0 || work.others.length > 0) && (
+            <div style={{ padding: '8px 16px 0', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <JobLines jobs={jobs} dismiss={dismiss} />
+              <OtherWork jobs={work.others} />
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, padding: '12px 16px', borderTop: '1px solid var(--border)', background: 'var(--panel)', flexWrap: 'wrap', marginTop: 8 }}>
             <button className="btn" style={{ height: 36, borderRadius: 8 }} disabled title="Saved outfits need a catalogue endpoint, which the API does not have yet">Save as outfit</button>
-            <button className="btn" style={{ height: 36, borderRadius: 8 }} disabled title="The API has no copy-project endpoint yet. Use + Person and the pickers instead">Duplicate person</button>
+            <button className="btn" style={{ height: 36, borderRadius: 8 }} disabled={!p?.version || !!p?.draft} onClick={() => id && variant.show(id)}
+              title="A new crew member copied from this one, changed as you describe; this one stays as it is">Make a variant</button>
             <Link to={paths.assembly()} className="btn primary" style={{ marginLeft: 'auto', height: 36, borderRadius: 8 }}>Put crew on the ship</Link>
           </div>
         </section>
@@ -444,6 +463,7 @@ export function CrewWorkshop() {
           </div>
         </div>
       )}
+      {variant.dialog}
     </>
   );
 }

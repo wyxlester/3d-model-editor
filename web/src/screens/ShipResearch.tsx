@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api, errorText } from '../api';
 import { ChatPanel, ErrorNote, EvidenceChip, JobLines, Loading, PRIORITY, TopBar, useCarried } from '../components/common';
+import { OtherWork, useProjectWork } from '../components/JobCenter';
 import { remember, useJobs, useProject } from '../hooks';
 import { awaitingApproval, buildTabLabel, canApprove, isCustomShip, planNotice, planState, planStatusLabel, summaryLine } from '../lib/designPlan';
 import { partLabel } from '../lib/parts';
@@ -25,6 +26,13 @@ export function ShipResearch() {
   const carried = useCarried();
   const nav = useNavigate();
   const start = (useLocation().state ?? null) as ResearchStart | null;
+  // Work on this ship that this screen did not start (or no longer tracks, after leaving and coming
+  // back) shows below the chat and reloads the page when it lands. The Ship page's first research
+  // turn is picked up below with watchResearch, so it counts as this screen's own job, not twice.
+  const work = useProjectWork(id, () => void reload(), jobs);
+  // Any work on this ship, wherever it was started: the plan cannot be approved under a research turn
+  // that may redraft it, and a research turn still running from before shows as one.
+  const anyWork = busy || work.others.length > 0;
   const [sec, setSec] = useState<Sec>('summary');
   const [sel, setSel] = useState<Sel>(null);
   const [excluded, setExcluded] = useState<Record<string, boolean>>({});
@@ -75,7 +83,7 @@ export function ShipResearch() {
   const custom = isCustomShip(project);
   return (
     <>
-      <TopBar title={project?.name}>
+      <TopBar title={project?.name} back="ship">
         <ModeSwitch id={id!} mode="research" buildLabel={buildTabLabel(project)} />
         <div className="topbar-right" style={{ gap: 8 }}>
           {r ? <span className="chip green" style={{ fontSize: 12, padding: '4px 10px' }}>Research assembled</span>
@@ -94,6 +102,7 @@ export function ShipResearch() {
             onSend={ask}
             projectId={id}
             busy={busy}
+            working={work.chatWorking}
             label={custom ? 'Correct or add to the research' : 'Ask or direct the research'}
             placeholder={custom ? 'Make it 38 m and give the hull a dark grey stripe' : 'Find a true overhead photo'}
             empty={custom ? 'Describe the ship and attach photos. The AI researches it and drafts a design plan; nothing is built until you approve it.'
@@ -102,6 +111,7 @@ export function ShipResearch() {
               {start?.note && <span className="warn" style={{ fontSize: 12 }}>{start.note}</span>}
               <ErrorNote error={start?.startError ?? null} />
               <JobLines jobs={jobs} dismiss={dismiss} />
+              <OtherWork jobs={work.others} />
             </>}
           />
         </aside>
@@ -109,7 +119,7 @@ export function ShipResearch() {
         <main className="scroll" style={{ flex: 1, minWidth: 0, background: 'var(--stage)', padding: '0 24px 22px', display: 'flex', flexDirection: 'column', gap: 18 }}>
           {loading && !project && <Loading what="the research" />}
           <ErrorNote error={error} retry={reload} />
-          {project && !r && (custom ? <EmptyCustom researching={busy} /> : <EmptyResearch project={project} onRun={ask} busy={busy} />)}
+          {project && !r && (custom ? <EmptyCustom researching={anyWork} /> : <EmptyResearch project={project} onRun={ask} busy={busy} />)}
           {project && r && (
             <>
               <SectionNav r={r} sec={sec} setSec={(s) => { setSec(s); setSel(null); }} />
@@ -149,7 +159,7 @@ export function ShipResearch() {
 
         {custom && project ? (
           <aside className="side right scroll" style={{ width: 400, padding: 16, gap: 12 }}>
-            <PlanPanel project={project} busy={busy} error={planErr} onApprove={() => void approve()} onAsk={(m) => void ask(m)}
+            <PlanPanel project={project} busy={anyWork} error={planErr} onApprove={() => void approve()} onAsk={(m) => void ask(m)}
               detail={r && sel ? <DetailPanel r={r} sel={sel} onAsk={ask} busy={busy} /> : null} />
           </aside>
         ) : (

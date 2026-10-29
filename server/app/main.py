@@ -7,6 +7,7 @@ swap in fakes; the module-level `app` uses the real ones.
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 import shutil
@@ -22,16 +23,16 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from . import crew_modules
 from .agent import (AgentRunner, AgentSession, ClaudeAgentRunner, custom_research_context, module_prompt,
-                    plan_build_prompt)
+                    plan_build_prompt, variant_prompt, variant_research_prompt)
 from .builder import BlenderRunner, BuilderRunner
-from .builds import Builds, summarise_change
+from .builds import Builds, built_line, summarise_change
 from .catalog import Catalog, CatalogError
 from .config import Settings, find_claude_cli
 from .jobs import JobError, JobManager
 from .design_plan import name_from_brief, needs_plan
 from .packaging import export_scene, safe_id, stations_of
 from .router import LLM, claude_llm, route
-from .specmerge import deep_merge, gltf_to_blender, keep_crew_nulls, label_for
+from .specmerge import deep_merge, gltf_to_blender, keep_crew_nulls, label_for, variant_id
 from .store import NotFound, PlanRefused, ProjectStore, atomic_write_json, read_json
 from .uploads import UploadRejected, check_size, content_blocks, decode, resolve_type
 from .uploads import TYPES as UPLOAD_TYPES
@@ -75,7 +76,7 @@ def make_unreal_runner(settings: Settings) -> UnrealRunner:
 
 def create_app(settings: Settings | None = None, runner: BuilderRunner | None = None,
                agent: AgentRunner | None = None, llm: LLM | None = None,
-               unreal: UnrealRunner | None = None, workers: int = 3) -> FastAPI:
+               unreal: UnrealRunner | None = None, workers: int = 6) -> FastAPI:
     settings = settings or Settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     store = ProjectStore(settings.projects_dir)
@@ -112,6 +113,23 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
                            result={"version": n, "build_report": report})
         return {"version": n, "build_report": report}
 
+    def start_project(project: dict, spec: dict) -> tuple[int, Path]:
+        """Write v1's spec now, so the screen can show it while the first build runs."""
+        n, d = store.reserve_version(project["id"])
+        atomic_write_json(d / "spec.json", spec)
+        return n, d
+
+    def first_build(project: dict, n: int, d: Path, summary: str, log) -> dict:
+        log(f"• Building version {n} in Blender: {summary}")
+        report = builds.runner.build(project["kind"], d / "spec.json", d, log)
+        atomic_write_json(d / "build_report.json", report)
+        store.record_version(project["id"], n, report, summary)
+        log(built_line(n, report))
+        if not report.get("ok"):
+            raise JobError("First build failed: " + "; ".join(report.get("errors") or ["unknown"]),
+                           result={"version": n, "build_report": report})
+        return {"version": n, "build_report": report}
+
     # ---- health and catalog -----------------------------------------------------------
     @app.get("/api/health")
     def health():
@@ -130,14 +148,16 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         names = body.get("attachments") or []
         if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
             raise HTTPException(400, "attachments must be a list of file names")
-        projects = [store.api_summary(pid) for pid in store.ids()]
-        return route(msg, projects, llm, names[:10])
+        return route(msg, listed_projects(), llm, names[:10])
 
     # ---- projects -----------------------------------------------------------------------
+    def listed_projects() -> list[dict]:
+        """Every project except discarded variants."""
+        return [s for s in (store.api_summary(pid) for pid in store.ids()) if not s["discarded"]]
+
     @app.get("/api/projects")
     def list_projects():
-        out = [store.api_summary(pid) for pid in store.ids()]
-        return sorted(out, key=lambda p: p.get("updated") or "", reverse=True)
+        return sorted(listed_projects(), key=lambda p: p.get("updated") or "", reverse=True)
 
     @app.post("/api/projects")
     def create_project(body: dict = Body(...)):
@@ -152,22 +172,150 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             return create_custom_ship(body.get("name"), brief)
         spec = catalog.default_spec(kind, base)
         name = body.get("name") or spec.get("name") or base
-        project = store.create(kind, base, name, brief)
-        pid = project["id"]
-        n, d = store.reserve_version(pid)  # v1 holds the spec while the first build runs
-        atomic_write_json(d / "spec.json", spec)
+        project = store.create(kind, base, name, brief=brief)
+        n, d = start_project(project, spec)
+        job_id = jobs.submit("build", project=project["id"], label=f"First build of {name}", fn=lambda log: first_build(
+            project, n, d, f"Created from the {base} catalog default", log))
+        return {"project": store.api_project(project["id"]), "job_id": job_id}
 
-        def first_build(log):
-            report = builds.runner.build(kind, d / "spec.json", d, log)
-            atomic_write_json(d / "build_report.json", report)
-            store.record_version(pid, n, report, f"Created from the {base} catalog default")
-            if not report.get("ok"):
-                raise JobError("First build failed: " + "; ".join(report.get("errors") or ["unknown"]),
-                               result={"version": n, "build_report": report})
-            return {"version": n, "build_report": report}
+    def not_a_draft(project: dict, doing: str) -> None:
+        if project.get("discarded"):
+            raise HTTPException(409, f"{project['name']} was discarded, so it can't be {doing}.")
+        if project.get("draft"):
+            raise HTTPException(409, f"{project['name']} is a variant awaiting review. Approve it before it is {doing}.")
 
-        job_id = jobs.submit("build", first_build)
-        return {"project": store.api_project(pid), "job_id": job_id}
+    def draft_running(project: dict) -> bool:
+        """The variant's own job is still going (a server restart ends it, so a lost job counts as finished)."""
+        job = jobs.get((project.get("draft") or {}).get("job_id") or "")
+        return bool(job and job["status"] in ("queued", "running"))
+
+    @app.post("/api/projects/{pid}/variants")
+    def create_variant(pid: str, body: dict = Body(...)):
+        source = need_project(pid)
+        not_a_draft(source, "copied")
+        if not source["version"]:
+            raise HTTPException(409, "The first build has not finished yet")
+        # Lester, 29 Oct: no variant of a custom ship until its plan has been approved and built,
+        # since a variant starts already built and would skip the plan he never approved.
+        if source.get("base") == "custom" and not source.get("plan_built"):
+            raise HTTPException(409, f"{source['name']} is still a placeholder. Approve its design plan in "
+                                     "Research first; then you can make variants of it.")
+        version = body.get("version", source["version"])
+        if not isinstance(version, int) or isinstance(version, bool):
+            raise HTTPException(400, "version must be a whole number")
+        built = next((v for v in source["versions"] if v["n"] == version), None)
+        if built is None:
+            raise HTTPException(404, f"{source['name']} has no version {version}")
+        if not built["ok"]:
+            raise HTTPException(400, f"Version {version} did not build. Pick a version that did.")
+        name, brief = body.get("name"), body.get("brief")
+        if name is not None and not isinstance(name, str) or brief is not None and not isinstance(brief, str):
+            raise HTTPException(400, "name and brief must be text")
+        name = (name or "").strip() or f"{source['name']} (variant)"
+        brief = (brief or "").strip() or None
+        research = bool(body.get("research"))
+        if research and (source["kind"] != "ship" or not brief):
+            raise HTTPException(400, "Research needs a ship and a description of what is different")
+        scene = None
+        if body.get("scene"):
+            if source["kind"] != "ship":
+                raise HTTPException(400, "Only a ship variant can bring a scene along")
+            scene = load_scene(body["scene"])
+            if scene["ship"]["project"] != pid:
+                raise HTTPException(400, f"That scene is not on {source['name']}")
+
+        spec = copy.deepcopy(store.spec(pid, version))
+        spec["id"], spec["name"] = variant_id(name, store.spec_ids()), name
+        draft = {"stage": "copying", "job_id": None, "research": research,
+                 "scene": scene["id"] if scene else None, "error": None}
+        project = store.create_variant(source, version, name, brief, draft)
+        vid = project["id"]
+        if source["kind"] == "ship" and source["base"] == "custom":
+            # Lester, 29 Oct: a variant of a custom ship starts already built. plan_built opens the
+            # plan gate (needs_plan) for good; the source's design plan comes along as history, with
+            # the research revision it matches (the research is copied too) and the variant's own spec
+            # id and name, so a later approve could never build under the source's id. The variant
+            # review (approve/discard) is the check; there is no new plan approval.
+            with store.edit(vid) as p:
+                p["plan_built"] = True
+                p["research_rev"] = int(source.get("research_rev") or 0)
+                plan = copy.deepcopy(source.get("design_plan"))
+                if isinstance(plan, dict) and isinstance(plan.get("spec"), dict):
+                    plan["spec"]["id"], plan["spec"]["name"] = spec["id"], spec["name"]
+                p["design_plan"] = plan
+            project = store.load(vid)
+        n, d = start_project(project, spec)
+        if brief:
+            store.add_message(vid, "You", brief)
+
+        def work(log):
+            log(f"• Copying {source['name']} v{version}")
+            try:
+                result = first_build(project, n, d, f"Copied from {source['name']} v{version}", log)
+            except JobError as e:
+                store.set_draft(vid, stage="failed", error=str(e))
+                raise
+            failure = None
+            try:
+                if research:
+                    store.set_draft(vid, stage="researching")
+                    log("• Researching the changes from public sources")
+                    _, reply = run_agent(vid, variant_research_prompt(source, brief, project["research"]),
+                                         "research", log)
+                    store.add_message(vid, "AI", reply)
+                if brief:
+                    store.set_draft(vid, stage="changing")
+                    log("• The AI is making the changes")
+                    _, reply = run_agent(vid, variant_prompt(source, version, brief), "build", log)
+                    store.add_message(vid, "AI", reply)
+                    result["reply"] = reply
+            except Exception as e:
+                store.add_message(vid, "AI", f"Sorry, I hit a problem and stopped: {e}")
+                failure = e
+            result["version"] = store.load(vid)["version"]
+            result["build_report"] = store.report(vid, result["version"]) or {}
+            if failure:
+                store.set_draft(vid, stage="ready", error=f"The AI step failed ({failure}). What you see is the "
+                                                           "last version that built.")
+                log("• The AI step failed. You can still review what was built.")
+                raise JobError(f"AI run failed: {failure}", result=result)
+            store.set_draft(vid, stage="ready")
+            log("• Ready for your review")
+            return result
+
+        store.set_draft(vid, job_id=jobs.submit("variant", work, project=vid, label=f"Making the variant {name}"))
+        return {"project": store.api_project(vid), "job_id": store.load(vid)["draft"]["job_id"]}
+
+    @app.post("/api/projects/{pid}/approve")
+    def approve_variant(pid: str):
+        project = need_project(pid)
+        draft = project.get("draft")
+        if not draft or project.get("discarded"):
+            raise HTTPException(409, f"{project['name']} is not awaiting review")
+        if draft_running(project):
+            raise HTTPException(409, "The variant is still being made. Approve it when it is ready.")
+        if not project["version"] or not (store.report(pid, project["version"]) or {}).get("ok"):
+            raise HTTPException(409, "Nothing built to approve. Discard this variant and try again.")
+        with store.edit(pid) as p:
+            p["draft"] = None
+        scene = None
+        if draft.get("scene"):
+            try:
+                scene = copy_scene_to(load_scene(draft["scene"]), pid, lambda line: None)
+            except NotFound:  # the original scene was deleted meanwhile
+                scene = None
+        return {"project": store.api_project(pid), "scene": scene}
+
+    @app.post("/api/projects/{pid}/discard")
+    def discard_variant(pid: str):
+        project = need_project(pid)
+        if not project.get("draft") or project.get("discarded"):
+            raise HTTPException(409, "Only a variant awaiting review can be discarded")
+        if draft_running(project):
+            raise HTTPException(409, "The variant is still being made. Discard it when it is ready.")
+        with store.edit(pid) as p:
+            p["discarded"] = True
+        return {"project": store.api_project(pid)}
 
     def create_custom_ship(name: Any, brief: str | None) -> dict:
         """Contract §5 `type: "custom"`: a ship of any type from a prompt. v1 is the catalog's plain
@@ -187,25 +335,18 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
                     "there is no placeholder model. Research and the design plan still work.")
         spec["type"], spec["name"] = "custom", name
         spec["id"] = safe_id(name) if safe_id(name) != "x" else "custom_ship"
-        project = store.create("ship", "custom", name, brief)
+        project = store.create("ship", "custom", name, brief=brief)
         pid = project["id"]
-        n, d = store.reserve_version(pid)  # v1 holds the spec (built only when the catalog exists)
-        atomic_write_json(d / "spec.json", spec)
+        n, d = start_project(project, spec)  # v1 holds the spec (built only when the catalog exists)
 
-        def first_build(log):
+        def placeholder(log):
             if note:
-                log(note)
+                log(f"• {note}")
                 return {"version": 0, "note": note}
-            report = builds.runner.build("ship", d / "spec.json", d, log)
-            atomic_write_json(d / "build_report.json", report)
-            store.record_version(pid, n, report, "Created as a plain placeholder hull; research and an approved "
-                                                 "design plan shape it")
-            if not report.get("ok"):
-                raise JobError("First build failed: " + "; ".join(report.get("errors") or ["unknown"]),
-                               result={"version": n, "build_report": report})
-            return {"version": n, "build_report": report}
+            return first_build(project, n, d, "Created as a plain placeholder hull; research and an approved "
+                                              "design plan shape it", log)
 
-        job_id = jobs.submit("build", first_build)
+        job_id = jobs.submit("build", project=pid, label=f"First build of {name}", fn=placeholder)
         out = store.api_project(pid)
         if note:
             out["note"] = note
@@ -227,7 +368,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             raise HTTPException(409, str(e))
 
         def work(log):
-            log("Building the approved design plan.")
+            log("• Building the approved design plan")
             try:
                 built = build_or_fail(pid, plan["spec"], "Built from the approved design plan", log)
             except JobError as e:
@@ -236,7 +377,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
                                              f"{e}. Ask me in Research to fix it, then approve it again.")
                 raise
             store.mark_plan_built(pid)
-            log("Adding the plan's details.")
+            log("• Adding the plan's details")
             pics = reference_pictures(pid, set())
             text = plan_build_prompt(plan)
             prompt: str | list[dict] = content_blocks(text, pics) if pics else text
@@ -250,7 +391,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             return {"version": store.load(pid)["version"], "build_report": store.report(pid, store.load(pid)["version"]),
                     "reply": reply, "built_versions": [built["version"]] + session.built_versions}
 
-        return {"job_id": jobs.submit("build", work)}
+        return {"job_id": jobs.submit("build", project=pid, label=f"Building {project['name']} from the approved plan",
+                                      fn=work)}
 
     def reference_pictures(pid: str, exclude: set[str], limit: int = 4) -> list[tuple[dict, bytes]]:
         """The latest pictures attached earlier in this project's chat. The AI has no memory between
@@ -311,7 +453,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             except crew_modules.ModuleRuleError as e:
                 raise HTTPException(400, str(e))
         summary = summarise_change(old, new, "Edited in Inspect")
-        return {"job_id": jobs.submit("build", lambda log: build_or_fail(pid, new, summary, log))}
+        return {"job_id": jobs.submit("build", lambda log: build_or_fail(pid, new, summary, log),
+                                      project=pid, label="Rebuilding with your changes")}
 
     @app.post("/api/projects/{pid}/undo")
     def undo(pid: str):
@@ -430,7 +573,11 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
                     crew_modules.changed_modules(session.start_spec, store.spec(pid, version)))
             return result
 
-        return {"job_id": jobs.submit("chat", work)}
+        if module:
+            label = f"Changing {project['name']}'s {module}: {short(message)}"
+        else:
+            label = f"{'Research' if mode == 'research' else 'Chat'}: {short(message)}"
+        return {"job_id": jobs.submit("chat", work, project=pid, label=label)}
 
     def pin_prompt(pid: str, pin: dict) -> str:
         parts = store.parts(pid, store.load(pid)["version"])
@@ -483,7 +630,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         if point is not None and not (isinstance(point, list) and len(point) == 3):
             raise HTTPException(400, "point must be [x,y,z]")
         pin = store.add_pin(pid, part, point, text, body.get("author") or "You")
-        return {"pin": pin, "job_id": jobs.submit("pin", pin_job(pid, pin["id"]))}
+        return {"pin": pin, "job_id": jobs.submit("pin", pin_job(pid, pin["id"]), project=pid,
+                                                  label=f"Comment on {label_for(part)}")}
 
     @app.post("/api/projects/{pid}/pins/{pin_id}/reply")
     def reply_pin(pid: str, pin_id: str, body: dict = Body(...)):
@@ -494,7 +642,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         store.get_pin(pid, pin_id)
         refuse_unplanned_build(store.load(pid))
         store.update_pin(pid, pin_id, status="working", message=(body.get("author") or "You", text))
-        return {"job_id": jobs.submit("pin", pin_job(pid, pin_id))}
+        part = store.get_pin(pid, pin_id)["part"]
+        return {"job_id": jobs.submit("pin", pin_job(pid, pin_id), project=pid, label=f"Reply on {label_for(part)}")}
 
     @app.patch("/api/projects/{pid}/pins/{pin_id}")
     def patch_pin(pid: str, pin_id: str, body: dict = Body(...)):
@@ -505,6 +654,14 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         return {"pin": store.update_pin(pid, pin_id, status=status)}
 
     # ---- jobs ---------------------------------------------------------------------------
+    @app.get("/api/jobs")
+    def list_jobs():
+        rows = jobs.listing()
+        for r in rows:
+            p = store.load(r["project"]) if r["project"] and store.exists(r["project"]) else None
+            r["project_name"], r["project_kind"] = (p["name"], p["kind"]) if p else (None, None)
+        return {"jobs": rows}
+
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str):
         job = jobs.get(job_id)
@@ -539,6 +696,11 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
                 raise HTTPException(400, f"crew[{i}].project must be an existing crew project")
             if not isinstance(c.get("station"), str):
                 raise HTTPException(400, f"crew[{i}].station is required")
+        for ref in [ship, *crew]:
+            p = store.load(ref["project"])
+            if p.get("draft") or p.get("discarded"):
+                raise HTTPException(400, f"{p['name']} is a variant that has not been approved. "
+                                         "Approve it before putting it in a scene.")
         return {"schema": "me3d.scene_spec/1", "name": body.get("name") or "Untitled scene",
                 "ship": {"project": ship["project"], "version": int(ship.get("version") or
                                                                     store.load(ship["project"])["version"])},
@@ -546,6 +708,21 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
                           "version": int(c.get("version") or store.load(c["project"])["version"]),
                           "station": c["station"], "animation": c.get("animation") or "idle"}
                          for c in crew]}
+
+    def copy_scene_to(scene: dict, pid: str, log) -> dict:
+        """A copy of `scene` on project pid's current version, with the same crew. Crew whose station
+        that version lacks keep it and are reported, so the user moves them rather than losing them."""
+        project = store.load(pid)
+        names = {s["name"] for s in stations_of(store.parts(pid, project["version"]))}
+        missing = sorted({c["station"] for c in scene["crew"]} - names)
+        new = {"schema": "me3d.scene_spec/1", "id": "scene_" + uuid.uuid4().hex[:8],
+               "name": f"{project['name']} with crew",
+               "ship": {"project": pid, "version": project["version"]},
+               "crew": copy.deepcopy(scene["crew"])}
+        atomic_write_json(scene_path(new["id"]), new)
+        log(f"Copied the scene {scene['name']!r} onto the variant."
+            + (f" These crew points are gone: {', '.join(missing)}. Move the crew on them." if missing else ""))
+        return {"id": new["id"], "missing_stations": missing}
 
     def with_stations(scene: dict) -> dict:
         ship = scene["ship"]
@@ -583,7 +760,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
     @app.post("/api/scenes/{sid}/export")
     def export(sid: str):
         scene = load_scene(sid)
-        return {"job_id": jobs.submit("export", lambda log: export_scene(
+        return {"job_id": jobs.submit("export", label=f"Export {scene.get('name', sid)}", fn=lambda log: export_scene(
             scene, store, settings.packages_dir, log))}
 
     @app.post("/api/scenes/{sid}/unreal-test")
@@ -593,7 +770,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         def work(log):
             pkg = export_scene(scene, store, settings.packages_dir, log)
             return unreal(Path(pkg["package_dir"]), log)
-        return {"job_id": jobs.submit("unreal", work)}
+        return {"job_id": jobs.submit("unreal", work, label=f"Unreal test of {scene.get('name', sid)}")}
 
     # ---- files --------------------------------------------------------------------------
     @app.get("/api/files/{path:path}")
@@ -604,6 +781,12 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         return FileResponse(target)
 
     return app
+
+
+def short(text: str, n: int = 60) -> str:
+    """One line of at most n characters, for a job label."""
+    one = " ".join(str(text).split())
+    return one if len(one) <= n else one[: n - 1].rstrip() + "…"
 
 
 def safe_data_path(data_dir: Path, rel: str) -> Path | None:
