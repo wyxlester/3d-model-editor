@@ -1,10 +1,10 @@
 ---
-date: 2026-10-29
+date: 2026-11-11
 project: 3d_model_editor
 branch: main
 session: b7529c9c
 status: in progress
-summary: Ship and crew 3D editor designed, built, live-tested; awaiting tagline commit
+summary: Tagline finalized and on Home; Unreal export dropped
 written_by: nightly sweep
 ---
 
@@ -24,7 +24,7 @@ written_by: nightly sweep
 - Merged Bryan's research review system and Mathew's Unreal equipment persistence
 - All tests pass: server 305, web 123, Blender 245; live end-to-end tests pass
 - GitHub at 4900080; local app running
-- Tagline created and added to Home: "Prompt to production-ready 3D models for simulators" (pending commit)
+- Tagline: "Prompt to production-ready 3D models for simulators" (8 words) finalized and added to Home
 - Context deck updated with research and cost — [artifact](https://claude.ai/artifact/PiBYCnDFCT9j7QJBkoRbk5)
 
 ## Decided
@@ -40,7 +40,7 @@ written_by: nightly sweep
 - **Tagline:** "Prompt to production-ready 3D models for simulators" — 8 words, differentiates from generic 3D tools (Lester, 10:47)
 
 ## Open
-- [ ] **Lester:** Review tagline on Home at localhost (http://localhost:5173/); confirm it looks right, then commit and push
+- [ ] **Lester:** Confirm tagline on Home looks right at http://localhost:5173/; ask me to "commit n push"
 
 ## Links
 - Design canvas: https://claude.ai/artifact/67Wgj688QSRc4PycUKmw1u
