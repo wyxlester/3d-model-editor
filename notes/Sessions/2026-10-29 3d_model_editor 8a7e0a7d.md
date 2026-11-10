@@ -27,3 +27,5 @@ written_by: nightly sweep
 
 ## Links
 - Artifact: https://claude.ai/artifact/6Y5LoD8cLCm9PeMRbdHkEF
+
+blah blah, depenent on this [[VRV]]
