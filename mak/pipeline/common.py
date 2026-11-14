@@ -136,9 +136,41 @@ def load_manifest(model_dir: Path) -> dict:
     for i, p in enumerate(m.get("articulated_parts") or []):
         if not isinstance(p, dict) or not p.get("node") or p.get("dis_part") in (None, ""):
             problems.append(f"articulated_parts[{i}] needs 'node' and a 'dis_part' code (remove it to leave the part static)")
+    problems += system_problems(m.get("systems"))
     if problems:
         raise InputError(f"{model_dir}/manifest.json: " + "; ".join(problems))
     return m
+
+
+SYSTEM_KEYS = {"system", "sysdef", "remove", "keep", "bind", "params", "position_from", "position_param", "reason"}
+
+
+def system_problems(entries) -> list[str]:
+    """Shape of the manifest's optional `systems` list (systems.apply_systems reads it)."""
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        return ["systems must be a list of {system, ...} entries"]
+    out, seen = [], set()
+    for i, e in enumerate(entries):
+        if not isinstance(e, dict) or not isinstance(e.get("system"), str) or not e["system"].strip():
+            out.append(f"systems[{i}] needs 'system' (the systemName to change or add)")
+            continue
+        if e["system"] in seen:
+            out.append(f"systems[{i}]: '{e['system']}' is listed twice")
+        seen.add(e["system"])
+        if e["system"][0].isdigit():
+            out.append(f"systems[{i}]: a systemName must not start with a digit (users guide 71.4.1)")
+        unknown = set(e) - SYSTEM_KEYS
+        if unknown:
+            out.append(f"systems[{i}]: unknown key(s) {sorted(unknown)}; use {sorted(SYSTEM_KEYS)}")
+        for key in ("bind", "params"):
+            if key in e and not isinstance(e[key], dict):
+                out.append(f"systems[{i}].{key} must be an object")
+        if e.get("sysdef") and not (isinstance(e["sysdef"], str) and e["sysdef"].endswith(".sysdef")):
+            out.append(f"systems[{i}].sysdef must be a path under the systems folder, e.g. "
+                       "'weapons/phalanx-20mm-gun.sysdef'")
+    return out
 
 
 @dataclass

@@ -398,6 +398,8 @@ export interface MakSettings {
   parts: Record<string, number | null>;
   /** What the model is in VR-Forces (CONTRACT §9b); a surface ship when absent. */
   kind?: string;
+  /** Drafted system changes turned down, by systemName: those systems stay as the donor has them. */
+  systems_off?: string[];
 }
 
 export interface MakDonor {
@@ -417,12 +419,29 @@ export interface MakDraftPart {
   suggested_code: number | null;
 }
 
+/** One drafted change to the donor's systems (mak/pipeline/systems.py), with its evidence in `reason`. */
+export interface MakSystemChange {
+  /** The donor's systemName, or a new one when `sysdef` adds a system. */
+  system: string;
+  /** Moves the system (its sensor-position) to this model node: a radar part, socket or station. */
+  position_from?: string;
+  /** Part parameter -> model part node or DIS code. */
+  bind?: Record<string, string | number>;
+  remove?: boolean;
+  /** Adds this stock system, e.g. weapons/phalanx-20mm-gun.sysdef. */
+  sysdef?: string;
+  params?: Record<string, number | string | boolean>;
+  reason: string;
+}
+
 /** GET /api/projects/{id}/mak/draft: suggestions from the current version's parts. */
 export interface MakDraft {
   dis_type_hint: string;
   short_name: string;
   donors: MakDonor[];
   parts: MakDraftPart[];
+  /** How the export fits the donor's systems to this model (for `donor`); absent from older servers. */
+  systems?: { donor: string | null; changes: MakSystemChange[]; notes: string[] };
 }
 
 /** The MAK export job's result: the §9b report plus where it went. */

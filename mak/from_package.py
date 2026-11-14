@@ -11,6 +11,10 @@ Joints come from `ship/articulation.json`. Their `axis` is in the part's local f
 into the ship frame with the part's world `rotation_deg` (Blender XYZ Euler) before choosing the motion:
 about z = azimuth, about the bow axis (x) = roll ("rotation"), about the lateral axis (y) = elevation; a full
 turn about a horizontal axis is a spinning part (propeller, wheel): "visual".
+
+Systems (sensors, weapons, other) are the donor's, fitted to the model as the pipeline drafts them
+(pipeline/systems.py): sensors at the radar parts and the bridge, donor weapons rebound to the model's mounts or
+removed. `mak.json` `systems_off` lists drafted changes the user turned down (by systemName).
 """
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pipeline import inspect_glb, profiles
+from pipeline import generate, inspect_glb, profiles, systems
 from pipeline.common import safe_name
 
 DEFAULT_KIND = "surface_ship"            # what the editor builds today
@@ -93,7 +97,26 @@ def _model_name(ship_id: str) -> str:
     return name if name[0].isalpha() else f"s_{name}"
 
 
-def prepare(package_dir: Path, work_dir: Path) -> Prepared:
+def draft_systems(parts: list[dict], nodes: dict, donor: str, kind: str, cfg: dict | None,
+                  off=()) -> tuple[list[dict], list[str]]:
+    """The pipeline's `systems` draft for this donor (systems.draft_systems), less the changes in `off`.
+    ([], []) when the install or the donor isn't there."""
+    if not cfg or not donor:
+        return [], []
+    catalog = systems.load_catalog(cfg)
+    path = generate.donor_path(cfg, donor)
+    if catalog is None or not path.exists():
+        return [], []
+    profile = profiles.profile_for({"kind": kind})
+    entries, notes = systems.draft_systems(path.read_text(encoding="utf-8", errors="replace"), parts, nodes, catalog,
+                                           catalog.repositories.get(profile.platform_ope),
+                                           systems.group_for_profile(profile))
+    off = set(off or ())
+    return [e for e in entries if e["system"] not in off], notes + [
+        f"{e['system']}: kept as the donor has it (turned off in the MAK settings)" for e in entries if e["system"] in off]
+
+
+def prepare(package_dir: Path, work_dir: Path, cfg: dict | None = None) -> Prepared:
     package_dir, work_dir = Path(package_dir), Path(work_dir)
     manifest = _read(package_dir / "manifest.json", "Package manifest.json")
     if manifest.get("schema") != "me3d.package/1":
@@ -167,6 +190,10 @@ def prepare(package_dir: Path, work_dir: Path) -> Prepared:
     }
     if mak.get("short_name"):
         out["short_name"] = mak["short_name"]
+    drafted, notes = draft_systems(parts, nodes, out["donor_entity"], kind, cfg, mak.get("systems_off"))
+    if drafted:
+        out["systems"] = drafted
+    pending += [f"systems: {n}" for n in notes]
     (model_dir / "manifest.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
 
     not_exported = [f"{c.get('id')} at {c.get('station')} (VR-Forces crew need DI-Guy characters)"

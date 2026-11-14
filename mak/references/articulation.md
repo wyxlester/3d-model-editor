@@ -86,7 +86,8 @@ Weapon `componentSystem`s carry `gun-art-part-type`, `turret-art-part-type`, `el
 `rot-turret-art-part-type`, `launcher-art-part-type` and others (UG 73.1.1: `(art-part-list (primary-gun (art-part-type
 $gun-art-part-type) (attach-point ...)))`). When the systems are cloned from a donor, they keep the donor's codes.
 `validate` warns (`entity-system-artpart`) when a system names a code the entity has no part for. Example: the
-2S1 cannon expects a separate 4128 elevating mount.
+2S1 cannon expects a separate 4128 elevating mount. The manifest's `systems` list rebinds or removes them, and the
+draft fills it; which part families each parameter takes is in `systems.md`.
 
 ## Codes worth knowing (manual Table 58)
 turret 1-10: 4096 + 32(n-1) · gun 1-10: 4416 + 32(n-1) · launcher: 4736+ · radar: 5376+ · secondary turret

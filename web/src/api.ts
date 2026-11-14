@@ -121,7 +121,8 @@ export const api = {
 
   // MAK VR-Forces (CONTRACT §9b, §10).
   /** Suggestions for a ship's MAK settings from its current version's parts. */
-  makDraft: (id: string) => call<MakDraft>('GET', `/api/projects/${enc(id)}/mak/draft`),
+  makDraft: (id: string, donor?: string) =>
+    call<MakDraft>('GET', `/api/projects/${enc(id)}/mak/draft${donor ? `?donor=${encodeURIComponent(donor)}` : ''}`),
   /** Save `Project.mak` without a new version; 400 with a sentence on a bad value. */
   patchMak: (id: string, mak: MakSettings) => call<{ project: Project }>('PATCH', `/api/projects/${enc(id)}/mak`, mak),
   /** Job result: MakReport. 409 when the ship has no MAK settings. */

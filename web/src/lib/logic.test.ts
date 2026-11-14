@@ -1135,7 +1135,7 @@ describe('the scene crew on the version shown in Review', () => {
   });
 });
 // MAK VR-Forces settings (CONTRACT §9b, §10).
-import { disTypeError, installFolders, makFormStart, makRows, makSettingsOf, parseCode } from './mak';
+import { disTypeError, installFolders, makFormStart, makRows, makSettingsOf, parseCode, systemChangeText } from './mak';
 import type { MakDraft } from '../types';
 
 const makDraft: MakDraft = {
@@ -1193,6 +1193,24 @@ describe('MAK parts table', () => {
   it('leaves out saved parts the current version no longer has', () => {
     const rows = makRows(makDraft, { dis_type: '1:3:0:0:0:0:0', donor_entity: 'Patrol_Boat', short_name: null, parts: { Gone__Part: 9 } });
     expect(rows.map((r) => r.path)).not.toContain('Gone__Part');
+  });
+});
+
+describe('MAK systems', () => {
+  it('says each drafted change in words', () => {
+    expect(systemChangeText({ system: 'sensor-2', position_from: 'Mast__Radar_1', reason: '' })).toBe('Move sensor-2 to Mast › Radar 1');
+    expect(systemChangeText({ system: 'sensor', position_from: 'socket_bridge_eye', reason: '' })).toBe('Move sensor to bridge eye');
+    expect(systemChangeText({ system: 'weapon', remove: true, reason: '' })).toBe('Remove weapon');
+    expect(systemChangeText({ system: 'weapon', bind: { 'turret-art-part-type': 'Weapons__Gun_1', 'gun-art-part-type': 4448 }, reason: '' }))
+      .toBe('Bind weapon to Weapons › Gun 1, 4448');
+    expect(systemChangeText({ system: 'weapon-1', sysdef: 'weapons/phalanx-20mm-gun.sysdef', bind: { 'turret-art-part-type': 'Weapons__Phalanx_1' }, reason: '' }))
+      .toBe('Add weapon-1 (phalanx-20mm-gun) on Weapons › Phalanx 1');
+  });
+  it('saves the changes turned off, only when there are some', () => {
+    const rows = makRows(makDraft, null);
+    const form = { dis_type: '1:3:15:80:1:0:0', donor_entity: 'Super_Tanker', short_name: '' };
+    expect(makSettingsOf(form, rows)).toMatchObject({ ok: true, mak: expect.not.objectContaining({ systems_off: expect.anything() }) });
+    expect(makSettingsOf(form, rows, ['weapon', 'sensor', 'weapon'])).toMatchObject({ ok: true, mak: { systems_off: ['sensor', 'weapon'] } });
   });
 });
 

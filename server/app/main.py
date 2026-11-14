@@ -1077,11 +1077,13 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
         return {"project": with_category(store.api_project(pid))}
 
     @app.get("/api/projects/{pid}/mak/draft")
-    def mak_draft(pid: str):
+    def mak_draft(pid: str, donor: str | None = None):
         p = need_ship(pid)
         n = p["version"]
         name = (store.spec(pid, n) or {}).get("name") or p["name"]
-        return mak_export.draft(store.parts(pid, n), store.report(pid, n), name, settings)
+        return mak_export.draft(store.parts(pid, n), store.report(pid, n), name, settings,
+                                mak=store.load(pid).get("mak"), glb=store.version_dir(pid, n) / "model.glb",
+                                donor=donor)
 
     def scene_package_dir(scene: dict) -> Path | None:
         return mak_export.latest_export(settings.packages_dir, safe_id(scene["id"]), int(scene["ship"]["version"]))

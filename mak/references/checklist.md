@@ -49,6 +49,11 @@ Codes are prefixed `flt-` or `fbx-`. The FBX is re-imported in Blender; the Open
 | `.entity` objectType = `1:` + `.metx` type | entity-objecttype-format / -mismatch / entity-supertype | done |
 | Art parts: unique, parents exist, (value, rate) params, fields match, limits | entity-artpart-* | done |
 | Systems refer only to parts the entity has | entity-system-artpart | done |
+| System parts are of the family stock entities bind (systems.md) | system-artpart-category | done |
+| Sysdef exists and suits the platform's state repository (UG 71.1.4) | system-sysdef-missing / system-not-allowed | done |
+| One movement and one damage system; unique system names (UG 66.4.2-3, 72.1.1) | system-movement-count / system-damage-count / system-name-duplicate / system-name-digit | done |
+| Sensor positions inside the bounding volume | system-position-outside | done |
+| Weapons have a sensor and list known ammunition (UG 66.4, 73.2.1) | system-weapon-no-sensor / system-ammunition-unknown | done |
 | Attach points and supports inside the bounding volume | entity-attach-outside / entity-support-outside | done |
 | Donor object geometry not inherited | entity-object-geometry | done |
 | FBX_NodeNameMap additions pending deploy | node-map-additions (generate) | done |

@@ -43,7 +43,7 @@ def export(package_dir: Path, cfg: dict, mak_check: bool = True) -> dict:
         shutil.rmtree(out_dir)
     with tempfile.TemporaryDirectory() as work:
         try:
-            prepared = prepare(package_dir, Path(work))
+            prepared = prepare(package_dir, Path(work), cfg)
         except PackageError as e:
             return _report(package_dir, dict(base, checks=[{"name": "package", "pass": False, "detail": str(e)}]))
         m = prepared.manifest

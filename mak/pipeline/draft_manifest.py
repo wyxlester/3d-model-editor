@@ -13,6 +13,8 @@ Writes manifest.json, or manifest.draft.json if a manifest already exists (unles
 Fields only a person can decide are written as "TODO: ..."; load_manifest() rejects them until filled.
 Joints are mapped to DIS part codes only when the node name makes the code obvious (radar, turret, gun...).
 The rest go to "unmapped_joints", which the pipeline reports but treats as static geometry.
+"systems" fits the suggested donor's systems to the model (systems.draft_systems): sensors at its radar and
+bridge, donor weapons rebound to its mounts or removed, stock weapons for mounts named after them.
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import artparts, inspect_glb, profiles
+from . import artparts, inspect_glb, profiles, systems
 from .common import load_config, safe_name
 
 # platform .ope and ModelData category per legacy domain, from the kind profiles (profiles.py)
@@ -348,6 +350,19 @@ def draft(model_dir: Path, cfg: dict | None = None, node_map: artparts.NodeNameM
         notes.append(f"donor suggestions ({'military' if armed else 'civilian'} preferred, closest size on the same platform): "
                      + ", ".join(f"{d['entity']} {d['size_lwh']}{' [military]' if d['military'] else ''}" for d in donors))
 
+    # systems: the donor's, fitted to this model (sensor positions, weapon part bindings; systems.py)
+    drafted_systems: list[dict] = []
+    if donors and kind in profiles.PROFILES and profiles.PROFILES[kind].route == "model":
+        catalog = systems.load_catalog(cfg)
+        donor_file = Path(cfg["sms_dir"]) / cfg.get("donor_sms", "EntityLevel") / "vrfSim" / f"{donors[0]['entity']}.entity"
+        if catalog and donor_file.exists():
+            drafted_systems, sys_notes = systems.draft_systems(
+                donor_file.read_text(encoding="utf-8", errors="replace"), list(mapped.values()), nodes, catalog,
+                catalog.repositories.get(ope), systems.group_for_profile(profiles.PROFILES[kind]))
+            notes.append(f"systems: {len(drafted_systems)} change(s) to the donor's systems drafted; the rest stay "
+                         "as the donor has them (re-draft after changing donor_entity)")
+            notes += [f"systems: {n}" for n in sys_notes]
+
     manifest = {
         "_draft": "Drafted by pipeline.draft_manifest from the Blender exports. Fill every TODO, check the rest, "
                   "then run: python -m pipeline.run " + model_dir.as_posix(),
@@ -363,6 +378,7 @@ def draft(model_dir: Path, cfg: dict | None = None, node_map: artparts.NodeNameM
         "forward_axis_in_blender": forward,
         "articulated_parts": list(mapped.values()),
         "unmapped_joints": unmapped,
+        **({"systems": drafted_systems} if drafted_systems else {}),
         "export_info": {
             "spec_params": {k: v for k, v in ((spec or {}).get("params") or {}).items() if k.endswith("_m")},
             "stations": stations,

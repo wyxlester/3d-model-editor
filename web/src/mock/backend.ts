@@ -446,7 +446,7 @@ const MAK_SUGGEST: Record<string, number> = { Roof__Searchlight: 4096, Mast__Cam
 /** Scenes with a passing MAK export this page load, and the entity name it made. */
 const makExported: Record<string, string> = {};
 
-function makDraftOf(p: Project): MakDraft {
+function makDraftOf(p: Project, donor?: string): MakDraft {
   if (p.kind !== 'ship') throw new HttpErr(400, 'MAK export is for ships only.');
   return {
     dis_type_hint: '1:3:0:0:0:0:0', short_name: String(p.spec.id ?? p.id).replace(/[^A-Za-z0-9]/g, '').slice(0, 12).toUpperCase(),
@@ -455,6 +455,15 @@ function makDraftOf(p: Project): MakDraft {
       path: x.path, motion: MAK_MOTION[x.joint!.axis] ?? 'rotation', min_deg: x.joint!.min_deg, max_deg: x.joint!.max_deg,
       priority: x.joint!.priority, suggested_code: MAK_SUGGEST[x.path] ?? null,
     })),
+    systems: {
+      donor: donor ?? p.mak?.donor_entity ?? MAK_DONORS[0].entity,
+      changes: [
+        ...p.parts.filter((x) => x.joint).slice(0, 1).map((x) => ({
+          system: 'sensor', position_from: x.path, reason: `active-radar-sensor at the radar part ${x.path}, not the donor's position` })),
+        { system: 'weapon', remove: true, reason: "phalanx-20mm-gun needs turret + gun parts (the donor's [4096, 4416]); the model has no free mount that carries them" },
+      ],
+      notes: ["sensor-2 (sonar-sensor): the model has no location for it; the donor's sensor-position is kept"],
+    },
   };
 }
 
@@ -467,7 +476,8 @@ function patchMak(p: Project, mak: MakSettings): void {
     if (!have.has(part)) throw new HttpErr(400, `${part} isn't a part of v${p.version}.`);
     if (code !== null && !Number.isInteger(code)) throw new HttpErr(400, `The code for ${part} must be a whole number or null.`);
   }
-  p.mak = { dis_type: mak.dis_type, donor_entity: mak.donor_entity, short_name: mak.short_name ?? null, parts: { ...mak.parts } };
+  p.mak = { dis_type: mak.dis_type, donor_entity: mak.donor_entity, short_name: mak.short_name ?? null, parts: { ...mak.parts },
+    ...(mak.systems_off?.length ? { systems_off: [...mak.systems_off] } : {}) };
   save();
 }
 
@@ -741,7 +751,7 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
       ],
     }));
   }
-  if ((r = m(/^\/api\/projects\/([^/]+)\/mak\/draft$/)) && method === 'GET') return makDraftOf(proj(r[1]));
+  if ((r = m(/^\/api\/projects\/([^/]+)\/mak\/draft(?:\?donor=([^&]*))?$/)) && method === 'GET') return makDraftOf(proj(r[1]), r[2] ? decodeURIComponent(r[2]) : undefined);
   if ((r = m(/^\/api\/projects\/([^/]+)\/mak$/)) && method === 'PATCH') { const p = proj(r[1]); patchMak(p, body as MakSettings); return { project: strip(p) }; }
   if ((r = m(/^\/api\/scenes\/([^/]+)\/mak-export$/)) && method === 'POST') return makExport(r[1]);
   if (method === 'GET' && path === '/api/mak/sms') return { sms: MAK_SMS };

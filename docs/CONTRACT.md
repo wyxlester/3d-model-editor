@@ -405,7 +405,10 @@ hand import), `submarine`, `ground_vehicle`, `fixed_wing`, `rotary_wing`, `space
 (§1). A munition also gets `mak/sms/ammunitionParams.additions.mtl`, which the installer merges into the
 SMS's ammunition table. Humans and animals are DI-Guy characters in VR-Forces, not models: the pipeline can
 write them from a manifest (`kind: human | animal`), but the editor's crew are still listed in
-`not_exported`. Writes:
+`not_exported`. The `.entity`'s systems (sensors, weapons, other) are the donor's, fitted to the model: sensors
+moved to its radar parts and bridge, donor weapons rebound to its mounts or removed, a stock weapon added for a
+mount named after it (`mak/references/systems.md`). `mak.json` `systems_off` lists drafted changes the user
+turned down, by system name; those systems stay as the donor has them. Writes:
 
 ```
 <package_dir>/mak/
@@ -431,7 +434,9 @@ renamed. A package without `mak.json` `name` (made before this rule) falls back 
 
 `<name>` is the model name above. Checks include MAK's own reader loading the model (`medfTool --writeNodeInfo`)
 and seeing every part's comment. Crew are listed in `not_exported` (VR-Forces humans are DI-Guy characters,
-not yet supported). Joints whose part has no DIS code stay static and are listed in `pending`. The exit code
+not yet supported). Joints whose part has no DIS code stay static and are listed in `pending`. Each system
+change is a check (`generate:system-changed`, `-added`, `-removed`) with its reason; what the draft could not fit
+is in `pending`, prefixed `systems:`. The exit code
 comes from `ok`. Nothing is written into the VR-Forces install; installing is `mak/install.py` (§10).
 
 ## 10. Server HTTP API (FastAPI, port 8787; the web app proxies `/api`)
@@ -494,8 +499,8 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | POST `/api/scenes/{id}/export` | | `{"job_id"}` → result `{"package_dir","zip_url"}` |
 | POST `/api/scenes/{id}/unreal-test` | | `{"job_id"}` → result: the Unreal report. 409 while an editor opened by `/api/unreal/open` is still open (a test rebuilds that level) |
 | POST `/api/unreal/open` | `{"level"}`: a report's `level` (`/Game/ME3D/<id>/L_<id>`) | `{"opened","level","project"}`: the Unreal editor, with its window, on this computer, showing the test project at that level (sun, sky and sea added by the harness; not part of the package). 400 not such a level, 404 no longer on disk, 409 a test is running or the editor is already open, 503 no Unreal 5.8. *(Proposed 29 Oct; awaiting Lester.)* |
-| GET `/api/projects/{id}/mak/draft` | | `{"dis_type_hint","short_name","donors":[{"entity","objectType","size_lwh","military"}],"parts":[{"path","motion","min_deg","max_deg","priority","suggested_code"}]}`: suggestions from the current version's parts (ships only; 400 for crew) |
-| PATCH `/api/projects/{id}/mak` | `Project.mak` | `{"project"}`; no new version. 400 with a sentence: DIS type not 7 integers, donor not in the installed EntityLevel SMS, a part not on the current version, a code not an integer or null, an unknown `kind` |
+| GET `/api/projects/{id}/mak/draft` | optional query `donor` | `{"dis_type_hint","short_name","donors":[{"entity","objectType","size_lwh","military"}],"parts":[{"path","motion","min_deg","max_deg","priority","suggested_code"}],"systems":{"donor","changes":[{"system","reason",...}],"notes":[str]}}`: suggestions from the current version's parts (ships only; 400 for crew). `systems` is what the export changes in the donor's systems, for `donor`, else the saved donor, else the first suggestion; a change has `position_from`, `bind`, `params`, `remove` or `sysdef` (§9b) |
+| PATCH `/api/projects/{id}/mak` | `Project.mak` | `{"project"}`; no new version. 400 with a sentence: DIS type not 7 integers, donor not in the installed EntityLevel SMS, a part not on the current version, a code not an integer or null, an unknown `kind`, `systems_off` not a list of names |
 | POST `/api/scenes/{id}/mak-export` | | `{"job_id"}` → result: the §9b report plus `{"package_dir","output_dir","zip_url"}`. 409 when the ship has no `mak` settings |
 | GET `/api/mak/sms` | | `{"sms":[str]}`: custom SMSs in the VR-Forces install (stock ones left out) |
 | POST `/api/scenes/{id}/mak-install` | `{"sms","confirm":true}` | `{"job_id"}` → result `{"sms","written":[path],"merged":[path],"backups_dir"}` (`merged` = tables an entry was added to, e.g. a munition's `ammunitionParams.mtl`): copies the scene's latest passing MAK export into that SMS and SharedData, backing up every file it replaces under `data/mak_backups/`. 400 a stock or unknown SMS or no `confirm`; 409 no passing MAK export for this scene |
@@ -526,7 +531,8 @@ it on every page, so work carries on, and is reported, while the user is on anot
 `PATCH /api/projects/{id}/mak` without making a version:
 `{"dis_type": "1:3:15:80:1:0:0", "donor_entity": "Super_Tanker", "short_name": str|null,
 "parts": {"Mast__Radar_1": 5376, "Lifesaving__Davit_P1": null}}`, plus an optional `"kind"` (§9b;
-`surface_ship` when absent). `dis_type` is the 7-field DIS entity
+`surface_ship` when absent) and an optional `"systems_off": [str]` (drafted system changes turned down, §9b).
+`dis_type` is the 7-field DIS entity
 type; `donor_entity` names a stock `.entity` whose systems and visuals the ship copies; `parts` maps moving
 parts to DIS articulated-part codes (null = stays static).
 

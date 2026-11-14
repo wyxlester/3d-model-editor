@@ -1,5 +1,5 @@
 // MAK VR-Forces settings (CONTRACT §9b, §10): the Review panel's form logic. Pure, unit tested.
-import type { MakDraft, MakSettings } from '../types';
+import type { MakDraft, MakSettings, MakSystemChange } from '../types';
 import { partLabel } from './parts';
 
 /** Null when `s` is a DIS entity type (7 colon-separated integers), else a sentence for the user. */
@@ -54,8 +54,26 @@ export function makFormStart(draft: MakDraft, saved: MakSettings | null | undefi
   return { dis_type: draft.dis_type_hint, donor_entity: draft.donors[0]?.entity ?? '', short_name: draft.short_name };
 }
 
-/** The PATCH /mak body from the form and table, or the first thing to fix. */
-export function makSettingsOf(form: MakForm, rows: MakRow[]): { ok: true; mak: MakSettings } | { ok: false; error: string } {
+/** One line for a drafted system change, in the panel's words. */
+export function systemChangeText(c: MakSystemChange): string {
+  const where = (n: string) => (n.includes('__') ? partLabel(n) : n.replace(/^socket_/, '').replace(/_/g, ' '));
+  if (c.remove) return `Remove ${c.system}`;
+  if (c.sysdef) {
+    const what = c.sysdef.split('/').pop()!.replace(/\.sysdef$/, '');
+    const on = c.bind ? Object.values(c.bind).map((v) => (typeof v === 'string' ? where(v) : String(v))) : [];
+    return `Add ${c.system} (${what})${on.length ? ` on ${[...new Set(on)].join(', ')}` : ''}${c.position_from ? ` at ${where(c.position_from)}` : ''}`;
+  }
+  const parts: string[] = [];
+  if (c.position_from) parts.push(`move ${c.system} to ${where(c.position_from)}`);
+  if (c.bind) parts.push(`bind ${c.system} to ${[...new Set(Object.values(c.bind).map((v) => (typeof v === 'string' ? where(v) : String(v))))].join(', ')}`);
+  if (c.params) parts.push(`set ${Object.entries(c.params).map(([k, v]) => `${k} ${v}`).join(', ')}`);
+  const text = parts.join('; ') || `change ${c.system}`;
+  return text[0].toUpperCase() + text.slice(1);
+}
+
+/** The PATCH /mak body from the form and table, or the first thing to fix. `off` = drafted system changes
+ * turned down (saved only when there are some). */
+export function makSettingsOf(form: MakForm, rows: MakRow[], off: string[] = []): { ok: true; mak: MakSettings } | { ok: false; error: string } {
   const disErr = disTypeError(form.dis_type);
   if (disErr) return { ok: false, error: disErr };
   if (!form.donor_entity.trim()) return { ok: false, error: 'Pick a donor entity: the ship copies its systems and visuals.' };
@@ -68,7 +86,10 @@ export function makSettingsOf(form: MakForm, rows: MakRow[]): { ok: true; mak: M
   const short = form.short_name.trim();
   return {
     ok: true,
-    mak: { dis_type: form.dis_type.split(':').map((f) => f.trim()).join(':').trim(), donor_entity: form.donor_entity.trim(), short_name: short || null, parts },
+    mak: {
+      dis_type: form.dis_type.split(':').map((f) => f.trim()).join(':').trim(), donor_entity: form.donor_entity.trim(), short_name: short || null, parts,
+      ...(off.length ? { systems_off: [...new Set(off)].sort() } : {}),
+    },
   };
 }
 

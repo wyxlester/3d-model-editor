@@ -267,6 +267,7 @@ if __name__ == "__main__":
 
 
 LINCOLN = ROOT / "models" / "USS Abraham Lincoln"
+HAVE_INSTALL = (Path(CFG["sms_dir"]) / CFG.get("donor_sms", "EntityLevel") / "vrfSim" / "systems").is_dir()
 
 
 @unittest.skipUnless((LINCOLN / "parts.json").exists() and list(LINCOLN.glob("*.glb")), "Lincoln exports not present")
@@ -290,3 +291,13 @@ class TestLincolnExports(unittest.TestCase):
         self.assertEqual(sorted(j["node"] for j in self.m["unmapped_joints"]),
                          ["Elevator__3", "Elevator__4", "Hull__Rudder_2", "Hull__Rudder_3", "Hull__Rudder_4"])
         self.assertTrue(all("Table 58 has" in j["reason"] for j in self.m["unmapped_joints"]))
+
+    @unittest.skipUnless(HAVE_INSTALL, "VR-Forces install not present")
+    def test_systems_drafted_from_the_model(self):
+        """Sensors move to the highest radar part and the bridge eye. The weapon mounts are azimuth-only, and
+        every stock ship weapon also needs an elevating part, so none is added: the notes say what is missing."""
+        moved = {e["system"]: e.get("position_from") for e in self.m.get("systems", [])}
+        self.assertIn("Radar__Scanner", moved.values())
+        self.assertIn("socket_bridge_eye", moved.values())
+        self.assertFalse(any(e.get("sysdef", "").startswith("weapons/") for e in self.m.get("systems", [])))
+        self.assertTrue(any("Weapons__Phalanx_1: phalanx-20mm-gun" in n for n in self.notes), self.notes)

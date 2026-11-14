@@ -88,6 +88,16 @@ def test_kind_is_optional_and_checked(make_client, vrf):
         assert r.status_code == 400 and "kind must be one of" in r.json()["detail"], r.text
 
 
+def test_systems_off_saved_and_checked(make_client, vrf):
+    c = make_client()
+    ship = create_ready(c)
+    r = c.patch(f"/api/projects/{ship['id']}/mak", json={**GOOD, "systems_off": ["weapon", "sensor", "weapon"]})
+    assert r.status_code == 200 and r.json()["project"]["mak"]["systems_off"] == ["sensor", "weapon"], r.text
+    for bad in ("weapon", [""], [3]):
+        r = c.patch(f"/api/projects/{ship['id']}/mak", json={**GOOD, "systems_off": bad})
+        assert r.status_code == 400 and "systems_off" in r.json()["detail"], r.text
+
+
 def test_static_part_and_missing_short_name_allowed(make_client, vrf):
     c = make_client()
     ship = create_ready(c)
@@ -110,6 +120,8 @@ def test_draft(make_client, vrf):
                            "priority": "P1", "suggested_code": None}]
     assert d["dis_type_hint"].startswith("1:3:")
     assert d["short_name"] == "Container"
+    assert d["systems"] == {"donor": None, "changes": [], "notes": []}     # fake install: no sysdefs
+    assert c.get(f"/api/projects/{ship['id']}/mak/draft?donor=Super_Tanker").json()["systems"]["changes"] == []
 
 
 def test_export_needs_settings(make_client, vrf):

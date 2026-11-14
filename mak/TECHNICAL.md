@@ -3,7 +3,7 @@
 How the importer that turns a glTF binary model (`.glb`) into a VR-Forces 5.1.1 simulation object was built,
 how to run it, what it supports, what it assumes, and what is still open.
 
-Audience: an engineer who will run, maintain or extend it. Status as of 2026-11-14: branches `feat/mak-export` and
+Audience: an engineer who will run, maintain or extend it. Status as of 2026-11-15: branches `feat/mak-export` and
 `feat/mak-kinds` of this repository; standalone project `vrf-pipeline`, branch `feat/model-kinds`.
 
 > **Not yet verified end to end in VR-Forces for anything but one surface ship.** Every other model kind is
@@ -91,6 +91,7 @@ Pipeline (`vrf-pipeline/pipeline/`, copied to `mak/pipeline/`):
 | `glb.py` | full glb geometry reader (positions, normals, UVs, materials, images) into the MAK frame; `waterline_supports`, `ground_supports` |
 | `openflight.py` | OpenFlight 16.1 writer and reader; DOF nodes, `@dis` comments, face colours, textures; `medfTool` check |
 | `artparts.py` | DIS articulated-part codes (ACM Table 58), default motions and limits, FBX node-name map |
+| `systems.py` | **systems**: sysdef reader and catalog of the install (categories, platforms allowed, part parameters, ammunition, stock usage), applying the manifest's `systems` to the cloned `.entity`, drafting them from the model, system checks |
 | `convert.py` | model conversion entry (OpenFlight, or FBX via Blender) |
 | `verify_fbx.py` | compares a written model's dump with the glb (parts, pivots, bounds) |
 | `leaf.py` | element definitions: finds the donor's (best-match type lookup), renames and retargets it, Boost serialisation details |
@@ -105,13 +106,13 @@ Editor integration (`mak/`, `server/app/`, `web/src/`):
 
 | File | Responsibility |
 |---|---|
-| `mak/from_package.py` | `me3d.package/1` + `ship/mak.json` -> a pipeline model folder and manifest (joint axes turned into the ship frame, part codes, kind, names) |
+| `mak/from_package.py` | `me3d.package/1` + `ship/mak.json` -> a pipeline model folder and manifest (joint axes turned into the ship frame, part codes, kind, names, the systems draft less `systems_off`) |
 | `mak/run_mak_export.py` | CONTRACT §9b script: package -> `mak/` output + `mak_export_report.json` |
-| `mak/draft_mak.py` | suggestions for the Review panel (DIS type hint, short name, donors, part codes) |
+| `mak/draft_mak.py` | suggestions for the Review panel (DIS type hint, short name, donors, part codes, system changes for the chosen donor) |
 | `mak/install.py` | installs an export into a custom SMS, with backups; merges munition table entries |
 | `server/app/mak.py` | settings validation, draft, export runner (subprocess, like the Unreal runner), latest export, install |
 | `server/app/main.py`, `packaging.py`, `store.py` | endpoints; `ship/mak.json` and `rotation_deg` in the package; `Project.mak` |
-| `web/src/components/MakPanel.tsx`, `lib/mak.ts` | Review > MAK: settings, export with checks, install dialog |
+| `web/src/components/MakPanel.tsx`, `lib/mak.ts` | Review > MAK: settings, system changes with a checkbox each, export with checks, install dialog |
 
 ### 2.3 How the two copies relate
 
@@ -252,6 +253,7 @@ python -m pipeline.run models/MyShip
 | `forward_axis_in_blender` | yes for models | `+Y`, `-Y`, `+X`, `-X`: which Blender axis is the front |
 | `articulated_parts` | no | list of `{node, dis_part, parent, motion?, min?, max?, max_rate?}`; `dis_part` from ACM Table 58; `motion` one of `azimuth`, `elevation`, `rotation`, `extension`, `translate_x/y/z`, `visual`; angles in degrees, extensions in metres, rates per second |
 | `unmapped_joints` | no | joints left static, reported only |
+| `systems` | no | changes to the donor's systems (6.11): `{system, position_from?, bind?, params?, remove?, sysdef?, reason?}`; drafted by `draft_manifest`; absent = the donor's systems unchanged |
 | `short_name` | no | 11-character DIS marking |
 | `walkable` | no | buildings: model becomes its own object geometry, embedded in the terrain |
 | `munition_class` | munitions | `missile`, `ballistic_missile`, `bomb`, `rocket`, `round`, `torpedo`, `naval_mine` |
@@ -263,7 +265,9 @@ python -m pipeline.run models/MyShip
 ### 5.3 Editor: Review > MAK
 
 1. **Settings** (saved on the ship project, no new version): DIS type, donor entity, short name, a DIS code or
-   "static" per moving part, optional `kind`. "Draft" fills suggestions.
+   "static" per moving part, optional `kind`. "Draft" fills suggestions. **Systems** lists the changes the export
+   makes to the donor's systems (6.11) for the donor picked, each with its reason and a checkbox; unticked ones
+   are saved as `systems_off` and the donor's system is kept as it is.
 2. **Export for VR-Forces**: builds the package, runs `mak/run_mak_export.py` in a subprocess, shows every check,
    offers a zip of `mak/`.
 3. **Install into VR-Forces...**: lists custom SMSs, names every folder it will write, needs confirmation.
@@ -272,8 +276,8 @@ Endpoints (CONTRACT §10):
 
 | Method and path | Body | Result |
 |---|---|---|
-| `GET /api/projects/{id}/mak/draft` | | `{dis_type_hint, short_name, donors[], parts[]}` |
-| `PATCH /api/projects/{id}/mak` | `Project.mak` | `{project}`; 400 with a sentence on a bad DIS type, unknown donor, part not on the current version, bad code, unknown kind |
+| `GET /api/projects/{id}/mak/draft[?donor=]` | | `{dis_type_hint, short_name, donors[], parts[], systems: {donor, changes[], notes[]}}`; the systems draft is for `donor`, else the saved donor, else the first suggestion |
+| `PATCH /api/projects/{id}/mak` | `Project.mak` | `{project}`; 400 with a sentence on a bad DIS type, unknown donor, part not on the current version, bad code, unknown kind, `systems_off` not a list of names |
 | `POST /api/scenes/{id}/mak-export` | | job; result = report + `{package_dir, output_dir, zip_url}`; 409 without settings |
 | `GET /api/mak/sms` | | `{sms: [custom SMS names]}` |
 | `POST /api/scenes/{id}/mak-install` | `{sms, confirm: true}` | job; result `{sms, written[], merged[], backups_dir}`; 400 stock/unknown SMS, 409 no passing export |
@@ -281,8 +285,8 @@ Endpoints (CONTRACT §10):
 
 `Project.mak` / `ship/mak.json`:
 `{"dis_type": "1:3:15:80:1:0:0", "donor_entity": "Super_Tanker", "short_name": null,
-"parts": {"Mast__Radar_1": 5376, "Lifesaving__Davit_P1": null}, "kind": "surface_ship"}`; the package copy
-also carries `"name"` (the project's name).
+"parts": {"Mast__Radar_1": 5376, "Lifesaving__Davit_P1": null}, "kind": "surface_ship", "systems_off": ["weapon"]}`;
+`kind` and `systems_off` are optional. The package copy also carries `"name"` (the project's name).
 
 Scripts, also usable without the server:
 ```
@@ -328,8 +332,9 @@ attributes are kept on first occurrences only, as Boost writes them. Matches the
 
 ### 6.4 Simulation object
 Cloned from the donor (systems, signatures, behaviours; UG 65.3.1), then: object type `1:` + DIS type,
-articulated parts, bounding volume from the model, support points, labels, kind flags. The donor's object
-geometry and navigation data are dropped (they describe the donor's shape).
+articulated parts, the manifest's system changes (6.11), bounding volume from the model (a custom offset is added
+when the donor has none: 833 stock entities use `ground-center`), support points, labels, kind flags. The donor's
+object geometry and navigation data are dropped (they describe the donor's shape).
 
 ### 6.5 Support points
 | Rule | Kinds | How |
@@ -393,9 +398,38 @@ animals have none, and VR-Forces shows them from the `.entity` alone.
 Errors: `dis-type-collision`, `model-def-collision`, `model-file-missing`, `ommx-no-filename`,
 `element-def-missing`, `leaf-model-def-missing`, `leaf-boost-class-ids`, `entity-objecttype-mismatch`,
 `entity-artpart-parent`, `entity-artpart-params`, `entity-artpart-limits`, `munition-type-wildcard`,
-`character-unknown`. Warnings: `entity-system-artpart` (a donor weapon system refers to a part the model lacks),
+`character-unknown`, and for systems `system-sysdef-missing`, `system-not-allowed`, `system-name-duplicate`,
+`system-name-digit`, `system-movement-count`, `system-damage-count`, `system-unknown`, `system-bind-unknown`,
+`system-position-unknown`. Warnings: `entity-system-artpart` (a system refers to a part the model lacks),
+`system-artpart-category`, `system-position-outside`, `system-weapon-no-sensor`, `system-ammunition-unknown`,
 `entity-support-outside`, `entity-attach-outside`, `dis-type-kind`. Inspect: `origin-z`, `origin-cg`,
 `scale-too-large/small`, `forward-axis`, pivot and hierarchy rules, `kind-untested`.
+
+### 6.11 Systems (`systems.py`)
+The `.entity`'s sensors, weapons and other systems are the donor's (UG 65.3.1), edited by the manifest's
+`systems` list. Full rules and evidence: `references/systems.md`.
+- **Catalog.** Every `.sysdef` in the SMS is read (S-expressions; weapon and damage templates folded in, UG 71.4,
+  73.1.1). For each: categories, the state repositories it allows (UG 71.1.4; matched to the platform `.ope`'s
+  `parameter-type`), its part parameters (`*-art-part-type` with their `art-part-category`), fixed part codes,
+  ammunition, and how stock entities use it. Cached in the system temp folder.
+- **What ties a system to the model.** Sensors: `sensor-position`, which feeds the sensor's offset (UG 71.4.2,
+  72.1.2). Weapons: part parameters bound to the entity's articulated parts. Stock entities bind
+  `elevating-turret-art-part-type` to turret, gun and launcher codes, and `gun-art-part-type` also to 8192, so
+  the check uses what the install does, not the category alone. No stock sensor is bound to a radar part.
+- **Draft** (`draft_manifest`; in the editor, at export, less `systems_off`):
+  - radar sensors at the highest radar part (else `socket_radar`); visual and IR sensors at `socket_bridge_eye`
+    (else `station__helm`); others keep the donor's position, with a note;
+  - donor weapons kept when the model has their parts, else rebound to a free mount of the model (parameters
+    assigned top-down, each to a part of a family stock entities bind it to), else removed with the reason;
+  - a stock weapon added for a mount whose name names it (`phalanx`, `ram`), when the platform allows it and the
+    mount has every part it needs; ammunition counts are the stock median. Otherwise a note says what is missing;
+  - a sensor added when weapons remain and the donor has none (UG 66.4); everything else stays the donor's.
+- **Apply** (`generate`): edits the cloned `componentSystem`s in place; new ones go after the donor's, in the
+  stock form. Each change is a `system-changed`/`-added`/`-removed` finding with its reason. A manifest without
+  `systems` changes nothing.
+- Results: Harmony's passive radar sensor moves to `Mast__Radar_1` (136, -4, -56.1 body) and its visual sensor to
+  the bridge eye; Lincoln's radar sensor to `Radar__Scanner`, and with the Nimitz donor its four weapons are
+  removed because its mounts are azimuth-only (Q20).
 
 ## 7. Assumptions
 
@@ -405,7 +439,9 @@ Errors: `dis-type-collision`, `model-def-collision`, `model-file-missing`, `ommx
 | Origin: land = ground-contact plane at the yaw axis; air/space = centre of gravity; surface/subsurface = waterline at the centre of buoyancy | ACM 21.2.1, Table 43 |
 | Editor ships: +X bow, +Y port, +Z up, origin at the waterline amidships; parts named `Group__Part`; joint pivot = node origin; joint axis local, turned by `rotation_deg` | CONTRACT §1-§3 |
 | A moving part is one node with its geometry beneath it, no rotation or scale in the neutral pose, child parts under the parent | ACM 21.4 |
-| The donor is the same kind, and its systems suit the new object | UG 65.3.1 (a copy keeps the donor's behaviour) |
+| The donor is the same kind, and its systems suit the new object once fitted (6.11) | UG 65.3.1 (a copy keeps the donor's behaviour) |
+| A sensor detects from its `sensor-position`; the radar part's pivot or the bridge eye is a better place than the donor's | UG 71.4.2, 72.1.2; not yet checked in VR-Forces (Q16) |
+| A weapon drives whatever parts its part parameters name, so rebinding them to the model's parts works | UG 73.1.1, 73.3.1; install (1372 of 1383 bindings match the entity's parts); not yet checked in VR-Forces (Q19) |
 | `.entity` object type = super-type `1` (individual) + DIS type | UG D.3.1 |
 | Model schema: `Watercraft` for ships, `Entity` otherwise, `DiGuyCharacter` for characters | ACM 15.1; counted in the install |
 | Ship supports belong on the waterline, not the keel | install (144 of 159 stock ships); the SOE's calculate button put them on the keel. Open question |
@@ -417,13 +453,13 @@ Errors: `dis-type-collision`, `model-def-collision`, `model-file-missing`, `ommx
 
 ### 8.1 Test suites
 
-| Suite | Command | Count (2026-11-14) | Covers |
+| Suite | Command | Count (2026-11-15) | Covers |
 |---|---|---|---|
-| vrf-pipeline | `python -m unittest discover -s tests` | 118 | artparts, inspect rules, OpenFlight write/read, colours, entity building, hand-import comparisons, drafts, profiles, one full run per kind |
-| editor `mak/tests` | `server/.venv/Scripts/python -m pytest mak/tests -q` | 135 (+7 skipped without the Harmony and Lincoln files) | the pipeline tests, package conversion, install, draft, export script, editor rules (no MAK-derived files) |
+| vrf-pipeline | `python -m unittest discover -s tests` | 150 | artparts, inspect rules, OpenFlight write/read, colours, entity building, hand-import comparisons, drafts, profiles, one full run per kind, systems (sysdef reader, catalog, apply, checks, drafts) |
+| editor `mak/tests` | `server/.venv/Scripts/python -m pytest mak/tests -q` | 170 (+8 skipped without the Harmony and Lincoln files) | the pipeline tests, package conversion, systems draft and `systems_off`, install, draft, export script, editor rules (no MAK-derived files) |
 | editor `tests/mak` | `server/.venv/Scripts/python -m pytest tests/mak -q` | 1 (slow) | export of a built package with the real `medfTool` |
-| editor server | `server/.venv/Scripts/python -m pytest server/tests -q` | 320 | endpoints, settings validation, export job with a fake runner, install refusals and backups |
-| editor web | `cd web && npm run typecheck && npm test` | 133 | panel logic, DIS type checks |
+| editor server | `server/.venv/Scripts/python -m pytest server/tests -q` | 321 | endpoints, settings validation (`systems_off` included), export job with a fake runner, install refusals and backups |
+| editor web | `cd web && npm run typecheck && npm test` | 135 | panel logic, DIS type checks, system change text |
 
 Tests that need VR-Forces skip without it. The MAK manuals and SOE-written files are not in the editor repository
 (licence), so the editor's tests rebuild expectations from the installed donor instead.
@@ -448,14 +484,15 @@ After the fixes, the bounding volume and both radars (attach points, axes, limit
 - Install into a real custom SMS has been exercised only on a fake install tree in tests.
 - Rotors, propellers and wheels are static: no `@dis animation` sequences (ACM 14.3, 21.6).
 - No damage-state geometry (`@dis switch damage`, ACM 21.5) and no LODs.
-- **Sensors stay at the donor's positions** (usually the origin). A sensor system in the `.entity` (`sensor` =
-  visual, `sensor-2` = passive radar) is the simulated detection, and its `sensor-position` is where line-of-sight
-  checks start (UG ch. 51). It is separate from the articulated radar, which is only the visual model turning on
-  the mast. Harmony's sensors therefore look from the waterline amidships, about 56 m below its radar: terrain or
-  a coastline in between can block detection that the mast would see over, and the geometric horizon is near zero
-  instead of about 30 km. With the donor's short ranges (4 km visual, 10 km passive radar) the open-water effect
-  is probably small. Stock ships mostly do the same (275 of 352 sensor systems at down = 0). Not checked in
-  VR-Forces. Details and the fix option: `references/open-questions.md` Q16.
+- **Systems are fitted, not designed.** The draft moves sensors and rebinds or removes weapons (6.11); it does
+  not choose sensors or weapons the donor lacks, except a stock weapon a mount is named after and a sensor for
+  weapons. Ranges, rounds and other values stay the donor's or the stock median.
+- **Sensor and weapon changes are not checked in VR-Forces yet**: that detection runs from the new positions
+  (Q16) and that a rebound or added weapon slews the model's parts (Q19). Sonar and gimbaled sensors keep the
+  donor's positions.
+- **Azimuth-only weapon mounts get no weapon.** Every stock ship weapon needs an elevating gun or launcher part as
+  well; Lincoln's six mounts are single joints, so the draft says which joint to add (Q20). Guns without parts
+  (`muzzle-offset`, as on the F-16) are not drafted.
 - Detonation power and weapon ammunition lists for a new munition are set by hand (UG 73, 74.2.2).
 - Humans and animals use a stock DI-Guy character; a custom mesh would need DI-Guy authoring tools (ACM 25.2).
 - Editor: exports ships only; crew are listed in `not_exported`. The Review panel has no kind field, and its
@@ -476,9 +513,9 @@ Planned, not done:
 2. Editor crew as DI-Guy characters: character picker in Review > MAK, contract change for crew settings.
 3. Kind field and per-kind donor/part suggestions in the Review panel.
 4. Animation sequences for rotors, propellers and wheels; damage switch nodes.
-5. Sensor position from the model (option, not applied): radar sensor at a radar part's pivot (codes 5376 and up),
-   visual sensor at `socket_bridge_eye` or `station__helm` when present, else the donor's; a report finding says
-   where each sensor went (Q16).
+5. Check the systems in VR-Forces: the SOE's Edit Properties shows each system's position (UG 66.4.4); detection
+   from the mast (Q16); a rebound weapon slewing the model's parts (Q19). Add elevating joints to Lincoln's weapon
+   mounts so stock weapons can be drafted for them (Q20).
 6. Install test against a real custom SMS.
 7. Review and merge `feat/mak-export` and `feat/mak-kinds`.
 

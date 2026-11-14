@@ -15,7 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import from_package  # noqa: E402
 from make_package import ARTICULATION, MAK, make_package  # noqa: E402
-from pipeline.common import load_manifest  # noqa: E402
+from pipeline.common import load_config, load_manifest  # noqa: E402
+
+CFG = load_config()
+HAVE_INSTALL = (Path(CFG["sms_dir"]) / "EntityLevel" / "vrfSim" / "systems").is_dir()
 
 
 class Base(unittest.TestCase):
@@ -110,6 +113,24 @@ class TestPrepare(Base):
         self.assertEqual(p.model_dir.name, "USS Abraham Lincoln")
         self.assertEqual(load_manifest(p.model_dir)["name"], "USS Abraham Lincoln")      # passes the name rule
         self.assertEqual(self.convert(mak=dict(MAK, name="MV Ann: 1/2")).manifest["name"], "MV Ann 1 2")
+
+    def test_no_install_no_systems(self):
+        self.assertNotIn("systems", self.convert().manifest)        # without a config the donor's stay as they are
+
+    @unittest.skipUnless(HAVE_INSTALL, "VR-Forces install not present")
+    def test_systems_drafted_for_the_donor_and_systems_off(self):
+        """2S1's cannon binds 4096/4416/4128 and the fixture has only turret 4096 + gun 4416: the draft removes it.
+        Turning that change off keeps the donor's weapon, and the report says so."""
+        pkg = make_package(self.tmp)
+        m = from_package.prepare(pkg, self.tmp / "work", CFG).manifest
+        weapon = next(e for e in m["systems"] if e["system"] == "weapon")
+        self.assertTrue(weapon["remove"])
+        self.assertIn("M284-155mm-cannon", weapon["reason"])
+        load_manifest(self.tmp / "work" / m["name"])                       # passes the manifest's systems check
+        pkg = make_package(self.tmp, mak=dict(MAK, systems_off=["weapon"]))
+        p = from_package.prepare(pkg, self.tmp / "work", CFG)
+        self.assertFalse(any(e["system"] == "weapon" for e in p.manifest.get("systems", [])))
+        self.assertIn("systems: weapon: kept as the donor has it (turned off in the MAK settings)", p.pending)
 
     def test_ship_id_starting_with_digit(self):
         m = self.convert(ship_id="3_series", name="3-Series").manifest

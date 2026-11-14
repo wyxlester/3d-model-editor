@@ -9,7 +9,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import draft_mak  # noqa: E402
-from pipeline.common import make_config  # noqa: E402
+from pipeline.common import load_config, make_config  # noqa: E402
+
+HAVE_INSTALL = (Path(load_config()["sms_dir"]) / "EntityLevel" / "vrfSim" / "systems").is_dir()
 
 PARTS = [
     {"path": "Hull__Main", "parent": None, "joint": None, "station": None, "origin_m": [0, 0, 0], "rotation_deg": [0, 0, 0]},
@@ -46,6 +48,19 @@ class TestDraft(unittest.TestCase):
         self.assertTrue(self.d["dis_type_hint"].startswith("1:3:"))
         self.assertEqual(self.d["short_name"], "Harmony of")
         self.assertEqual(self.d["donors"], [])
+
+    def test_no_systems_without_install(self):
+        self.assertEqual(self.d["systems"], {"donor": None, "changes": [], "notes": []})
+
+    @unittest.skipUnless(HAVE_INSTALL, "VR-Forces install not present")
+    def test_systems_follow_the_chosen_donor(self):
+        """Radar sensors go to the highest radar part. parts.json has no sockets, so without the glb the visual
+        sensor keeps the donor's position, and a note says so."""
+        d = draft_mak.draft(PARTS, REPORT, "Harmony of the Seas", load_config(), donor="Super_Tanker")
+        self.assertEqual(d["systems"]["donor"], "Super_Tanker")
+        moved = {e["system"]: e["position_from"] for e in d["systems"]["changes"]}
+        self.assertEqual(moved, {"sensor-2": "Mast__Radar_1"})          # passive radar; both radars at 56 m
+        self.assertTrue(any("visual-sensor" in n for n in d["systems"]["notes"]), d["systems"]["notes"])
 
     def test_ship_frame_to_mak_bounds(self):
         b = draft_mak.mak_bounds(REPORT)

@@ -4,7 +4,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { api, errorText, fileUrl } from '../api';
 import { useLoad } from '../hooks';
-import { disTypeError, installFolders, makFormStart, makRows, makSettingsOf, parseCode, type MakForm, type MakRow } from '../lib/mak';
+import { disTypeError, installFolders, makFormStart, makRows, makSettingsOf, parseCode, systemChangeText, type MakForm, type MakRow } from '../lib/mak';
 import type { MakDraft, MakInstallResult, MakReport, Project } from '../types';
 import { ErrorNote } from './common';
 
@@ -17,13 +17,20 @@ export function MakSettingsForm({ project, onSaved }: { project: Project; onSave
   const [err, setErr] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [off, setOff] = useState<string[]>(project.mak?.systems_off ?? []);
   const ids = { dis: useId(), donor: useId(), short: useId() };
+  // The systems draft follows the donor picked in the form (the export drafts for the saved donor).
+  const donorPicked = form?.donor_entity ?? '';
+  const sysDraft = useLoad<MakDraft | null>(
+    () => (donorPicked && draft.data && donorPicked !== draft.data.systems?.donor ? api.makDraft(project.id, donorPicked) : Promise.resolve(null)),
+    [project.id, project.version, donorPicked, draft.data]);
 
   // Start (again) from the saved settings whenever a draft for this version arrives.
   useEffect(() => {
     if (!draft.data) return;
     setForm(makFormStart(draft.data, project.mak));
     setRows(makRows(draft.data, project.mak));
+    setOff(project.mak?.systems_off ?? []);
     setDirty(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- project.mak is read once per draft
   }, [draft.data]);
@@ -38,7 +45,7 @@ export function MakSettingsForm({ project, onSaved }: { project: Project; onSave
   const donor = d.donors.find((x) => x.entity === form.donor_entity);
 
   const save = async () => {
-    const built = makSettingsOf(form, rows);
+    const built = makSettingsOf(form, rows, off);
     if (!built.ok) { setErr(built.error); return; }
     setSaving(true); setErr(null);
     try {
@@ -110,6 +117,9 @@ export function MakSettingsForm({ project, onSaved }: { project: Project; onSave
         </table>
       ) : <span className="faint">v{project.version} has no moving parts, so the ship goes to VR-Forces as one rigid model.</span>}
 
+      <MakSystems systems={(sysDraft.data ?? d).systems} loading={sysDraft.loading && !!donorPicked && donorPicked !== d.systems?.donor}
+        off={off} onToggle={(name, on) => { setOff(on ? off.filter((x) => x !== name) : [...off, name]); setDirty(true); setSavedNote(false); }} />
+
       <span style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <button className="btn primary" onClick={() => void save()} disabled={saving || !dirty && !!project.mak}>{saving ? 'Saving…' : 'Save settings'}</button>
         {savedNote && <span className="ok">Saved. No new version was made.</span>}
@@ -117,6 +127,36 @@ export function MakSettingsForm({ project, onSaved }: { project: Project; onSave
         {!project.mak && !dirty && <span className="faint">Not saved yet. Save before exporting.</span>}
       </span>
       <ErrorNote error={err} />
+    </div>
+  );
+}
+
+/** The donor's systems as the export will fit them to this model: one checkbox per drafted change. */
+function MakSystems({ systems, loading, off, onToggle }: {
+  systems: MakDraft['systems']; loading: boolean; off: string[]; onToggle: (system: string, on: boolean) => void;
+}) {
+  if (!systems) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <span style={{ fontWeight: 500 }}>Systems</span>
+      <span className="faint" style={{ fontSize: 12 }}>
+        Sensors, weapons and other systems are copied from {systems.donor ?? 'the donor'}. These changes fit them to this model; untick one to keep the donor's.
+      </span>
+      {loading ? <span className="faint">Drafting the systems for this donor…</span>
+        : !systems.changes.length ? <span className="faint">No changes: the donor's systems are copied as they are.</span>
+        : systems.changes.map((c) => {
+          const on = !off.includes(c.system);
+          return (
+            <label key={c.system} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <input type="checkbox" checked={on} onChange={(e) => onToggle(c.system, e.target.checked)} style={{ marginTop: 3 }} />
+              <span style={{ display: 'flex', flexDirection: 'column' }}>
+                <span className={on ? undefined : 'faint'}>{systemChangeText(c)}</span>
+                <span className="faint" style={{ fontSize: 12 }}>{c.reason}</span>
+              </span>
+            </label>
+          );
+        })}
+      {!loading && systems.notes.map((n) => <span key={n} className="muted" style={{ fontSize: 12 }}>{n}</span>)}
     </div>
   );
 }

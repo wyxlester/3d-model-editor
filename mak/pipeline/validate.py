@@ -6,6 +6,9 @@ Checks:
   - .metx DIS type is 7 integers and is not already mapped in the install (collision = error)
   - model definition name does not collide with one in the install
   - the element definition named in .metx exists (in output .leaf, or pending)
+  - .entity: objectType, articulated parts, attach points and supports inside the bounding volume
+  - .entity systems (systems.py): sysdef exists and suits the platform, part bindings, one movement and damage
+    system, sensor positions, weapons have a sensor and list known ammunition
 """
 from __future__ import annotations
 
@@ -17,6 +20,7 @@ import xml.etree.ElementTree as ET
 from functools import lru_cache
 from pathlib import Path
 
+from . import systems
 from .common import DIS_TYPE_RE, Finding, has_errors, load_config, print_findings
 
 PLACEHOLDER = re.compile(r"\$\{[^}]+\}")
@@ -148,11 +152,23 @@ def validate(out_dir: Path, cfg: dict) -> list[Finding]:
     entities = sorted((out_dir / "sms" / "vrfSim").glob("*.entity"))
     if not entities:
         f.append(Finding("pending", "no-entity", "no .entity simulation object yet"))
+    catalog = systems.load_catalog(cfg) if entities else None
+    ammo = known_ammunition(cfg, out_dir) if catalog else set()
     for p in entities:
         root = _parse(p, f)
         if root is not None:
-            f += validate_entity(p.name, root, metx_types)
+            f += validate_entity(p.name, root, metx_types, catalog, ammo)
     return f
+
+
+def known_ammunition(cfg: dict, out_dir: Path) -> set[str]:
+    """Names weapons may list: the install's ammunitionParams.mtl plus our additions (users guide 73.2.1)."""
+    names: set[str] = set()
+    for p in (Path(cfg["sms_dir"]) / cfg.get("donor_sms", "EntityLevel") / "ammunitionParams.mtl",
+              out_dir / "sms" / "ammunitionParams.additions.mtl"):
+        if p.exists():
+            names |= systems.ammunition_names(p.read_text(encoding="utf-8", errors="replace"))
+    return names
 
 
 # ------------------------------------------------------------------ .entity
@@ -173,7 +189,8 @@ def _pos(el, name):
     return None if x is None else tuple(float(x.get(k, 0)) for k in ("forward", "right", "down"))
 
 
-def validate_entity(fname: str, root, metx_types: set[str]) -> list[Finding]:
+def validate_entity(fname: str, root, metx_types: set[str], catalog: systems.Catalog | None = None,
+                    ammunition: set[str] | frozenset = frozenset()) -> list[Finding]:
     """Consistency of a generated .entity (users guide 64-66, stock 5.1.1 .entity layout)."""
     f: list[Finding] = []
     so = root.find("simObject")
@@ -219,14 +236,13 @@ def validate_entity(fname: str, root, metx_types: set[str]) -> list[Finding]:
             if lo is not None and hi is not None and lo > hi:
                 f.append(Finding("error", "entity-artpart-limits", f"{fname}: part {code} {lo_name} {lo} > {hi_name} {hi}"))
 
-    # weapon systems refer to art parts by code
-    for cs in so.findall("componentSystem"):
-        for el in cs.findall("int"):
-            name = el.get("paramName", "")
-            if name.endswith("art-part-type") and el.text and int(el.text) > 0 and int(el.text) not in codes:
-                f.append(Finding("warning", "entity-system-artpart",
-                                 f"{fname}: system '{cs.get('systemName')}' uses {name}={el.text}, which this entity has no part for "
-                                 "(inherited from the donor?); fix the manifest parts or the system in the SOE"))
+    # systems: sysdefs, part bindings, sensor positions (systems.py). Lifeforms keep the donor's parts, so
+    # their weapon bindings are the donor's own and are not checked against our (empty) list.
+    if not lifeform:
+        ope = so.get("platform", "").replace(chr(92), "/").rsplit("/", 1)[-1]
+        repo = catalog.repositories.get(ope) if catalog else None
+        for x in systems.check_entity_systems(so, catalog, repo, set(codes)) +                 systems.check_ammunition(so, catalog, set(ammunition)):
+            f.append(Finding(x.level, x.code, f"{fname}: {x.message}"))
 
     # attach points inside the bounding volume
     bv = so.find("boundingVolume")

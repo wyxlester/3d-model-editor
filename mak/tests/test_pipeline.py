@@ -266,6 +266,35 @@ class TestGenerateValidate(TmpDir):
         codes = {x.code for x in validate.validate(self.lay.root, CFG)}
         self.assertIn("entity-system-artpart", codes)   # 2S1 cannon wants 4096/4416/4128
 
+    @unittest.skipUnless(HAVE_DONOR, "donor .entity not present")
+    def test_manifest_systems_fix_the_donor_weapon(self):
+        """The fixture has turret 4096 and gun 4416 but not the cannon's 4128: rebinding the elevating turret to
+        the gun, or removing the weapon, clears the warning; the sensor moves to the turret's pivot."""
+        rebound = manifest(systems=[{"system": "weapon", "bind": {"elevating-turret-art-part-type": "gun"}},
+                                    {"system": "sensor", "position_from": "turret"}])
+        notes = self.gen(rebound)
+        self.assertEqual([x.code for x in notes if x.code.startswith("system-")], ["system-changed", "system-changed"])
+        so = ET.parse(self.lay.entity(MANIFEST["display_name"])).getroot().find("simObject")
+        found = validate.validate(self.lay.root, CFG)
+        self.assertNotIn("entity-system-artpart", {x.code for x in found}, found)
+        pos = so.find("componentSystem[@systemName='sensor']/bodyPosition[@paramName='sensor-position']")
+        pivot = artparts.model_to_body(self.glb["nodes"]["turret"]["pivot"])
+        self.assertEqual([float(pos.get(k)) for k in ("forward", "right", "down")], [round(v, 9) + 0.0 for v in pivot])
+        self.gen(manifest(systems=[{"system": "weapon", "remove": True}]))
+        so = ET.parse(self.lay.entity(MANIFEST["display_name"])).getroot().find("simObject")
+        self.assertIsNone(so.find("componentSystem[@systemName='weapon']"))
+        self.assertNotIn("entity-system-artpart", {x.code for x in validate.validate(self.lay.root, CFG)})
+
+    @unittest.skipUnless(HAVE_DONOR, "donor .entity not present")
+    def test_ground_center_donor_gets_an_offset(self):
+        """833 stock entities (e.g. Nimitz-class_Carrier) have offsetType ground-center and no <offset>: a custom
+        volume needs one, or VR-Forces centres it on the origin."""
+        self.gen(manifest(donor_entity="Nimitz-class_Carrier", kind="surface_ship", domain="surface",
+                          platform_ope="Surface_Ship.ope"))
+        bv = ET.parse(self.lay.entity(MANIFEST["display_name"])).getroot().find("simObject/boundingVolume")
+        self.assertEqual(bv.get("offsetType"), "custom")
+        self.assertIsNotNone(bv.find("offset"))
+
 
 # ---------------------------------------------------------------- ship support points
 def box_hull(lo, hi):

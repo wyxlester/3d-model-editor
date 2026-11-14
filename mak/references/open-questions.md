@@ -22,33 +22,28 @@ Resolve each against the install, or with a real import in the GUI, then update 
   The hand import has no explicit parts (the SOE takes them from the model, UG 66.3), so this is unconfirmed.
 - **Q14 Support points and bounding volume.** The hand import kept the donor's values (not recalculated). Compare ours
   with SOE "Calculate Support Points and Bounding Volume from Displayed Model" (UG 66.1.1, 66.1.3).
-- **Q15 Donor weapon systems.** Cloned systems keep the donor's part codes (e.g. 2S1 needs 4128).
+- **Q15 Donor weapon systems.** Cloned systems keep the donor's part codes (e.g. 2S1 needs 4128). **Handled in the
+  draft** (`references/systems.md`): each donor weapon is kept, rebound to one of the model's mounts, or removed,
+  with the reason. Whether VR-Forces drives a rebound weapon on our parts is Q19.
 - **Q16 Sensor position.** Two different things in the `.entity` sound alike:
   - an **articulated part** (e.g. radar 5376) is visual: a DOF node in the model that VR-Forces turns in the 3D
     view, plus its part entry. Harmony's radars sit correctly on the mast (attach point 136, ±4, -56.15).
   - a **sensor system** (`componentSystem` `sensor` = visual sensor, `sensor-2` = passive radar) is the simulated
-    detection. Its `sensor-position` is the point line-of-sight checks start from (UG ch. 51; it feeds
-    `sensor-offset` in the sensor's `.sysdef`).
+    detection. Its `sensor-position` feeds `sensor-offset` in the sensor's `.sysdef` (UG 71.4.2, 72.1.2): the
+    point detection is computed from.
 
-  The two are not linked: the turning radar mesh does not carry the simulated radar. The `.entity` is cloned from
-  the donor, whose sensors sit at the origin (0, 0, 0); for a ship that is the waterline amidships, about 56 m
-  below Harmony's radar.
+  The two are not linked in the install: no stock sensor is bound to a radar part. The donor's sensors sit at the
+  origin (0, 0, 0); for a ship that is the waterline amidships, about 56 m below Harmony's radar. Stock ships
+  mostly do the same (275 of 352 sensor systems on stock surface ships at down = 0, 77 raised).
 
-  Impact (reasoned, **not checked in VR-Forces**):
-  - Detection runs from sea level, so a coastline, island or terrain in between can block it where the mast
-    would see over.
-  - Geometric horizon: about 30 km from 56 m, near zero from sea level. Whether VR-Forces models the earth's
-    curvature in these checks is unconfirmed.
-  - With the donor's short ranges (visual 4 km, passive radar 10 km) the difference over open water is probably
-    small; it matters most near land.
-  - Stock ships mostly do the same: 275 of 352 sensor systems on stock surface ships sit at down = 0, 77 are
-    raised. So this is a realism gap, not an error.
+  **Applied in the draft** (`references/systems.md`): radar sensors at the highest radar part's pivot (else
+  `socket_radar`), visual and IR sensors at `socket_bridge_eye` (else `station__helm`); others keep the donor's,
+  with a note. Each move is reported (`system-changed`). Harmony: passive radar at (136, -4, -56.1), visual at
+  (151, 0, -38.2).
 
-  Option, **not applied**: set `sensor-position` from the model when it has the information, else keep the
-  donor's: the radar sensor at the pivot of a radar part (codes 5376 and up, already in `articulated_parts`);
-  the visual sensor at `socket_bridge_eye`, or `station__helm`, when the Blender exports have them. Open points:
-  which sensor system matches which part (by its `.sysdef` name), and a report finding that says where each
-  sensor was placed. Then check in VR-Forces with the line-of-sight display (UG ch. 51).
+  **Still to check in VR-Forces:** Edit Properties in the SOE should show the red dots on the mast and the bridge
+  (UG 66.4.4). In a scenario, compare detection near land with a sea-level copy; the intervisibility display
+  starts from the bounding volume's centre, not the sensor (UG 51.1), so judge by detections.
 - **Q17 DtRwVisualMetaData.** On save, the SOE adds a `visual-meta-data` block (here `Watercraft.meta`, marking
   variance). We don't. Needed?
 - **Q18 More parts than Table 58 codes.** Table 58 has one rudder code (1025) and two deck elevator codes
@@ -56,6 +51,16 @@ Resolve each against the install, or with a real import in the GUI, then update 
   1-2 and leaves the rest static (`unmapped_joints` says why). Open: can several DOF nodes carry the same
   `@dis articulated_part` code, so one `.entity` part turns all four rudders together? Check in VR-Forces by
   giving rudders 2-4 code 1025 in the model only (one `.entity` descriptor) and moving the rudder.
+- **Q19 Rebound and added weapons.** The draft rebinds a donor weapon's `*-art-part-type` parameters to the
+  model's parts, or adds a stock weapon for a mount named after it, binding each parameter to a part of the family
+  stock entities use for it (`Catalog.bindings`). Check in VR-Forces that the weapon slews and elevates those
+  parts (UG 73.3.1) and fires from the muzzle `end-point`.
+- **Q20 Azimuth-only weapon mounts.** USS Abraham Lincoln's Phalanx, RAM and Sea Sparrow mounts are single
+  azimuth joints. Every stock ship weapon that matches them by name needs an elevating part too:
+  `phalanx-20mm-gun` needs turret + gun, and `ram-missile-launcher` needs rot-turret + elevating-turret +
+  launcher. So no weapon is added; the draft says which joint is missing. Options: add the elevating joints in
+  the Blender model (preferred, matches stock), or test whether a weapon works with `gun-art-part-type` = -1.
+  No stock entity does that: all 11 -1 values are parents.
 
 ## Resolved
 - **Q2 8-field vs 7-field type.** `.entity` objectType = VR-Forces object super-type + 7-field DIS type (UG D.3.1).

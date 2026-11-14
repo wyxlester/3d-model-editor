@@ -3,8 +3,8 @@
 Turns an export package's ship (contract §8) into a VR-Forces entity, **without Blender**. This is the "MAK
 adapter" of `docs/PLAN.md`. Contract: §9b (script and report) and §10 (`Project.mak`, endpoints).
 
-Origin: copied from the `vrf-pipeline` project, branch `feat/model-kinds`, commit `5598134`
-(2026-11-14). That project's MAK manuals and hand-import fixtures are not copied here: they are MAK material and
+Origin: copied from the `vrf-pipeline` project, branch `feat/model-kinds`, commit `9c9e697`
+(2026-11-15). That project's MAK manuals and hand-import fixtures are not copied here: they are MAK material and
 this repository is public. `references/` cites manual sections instead.
 
 **Technical document** (architecture, dependencies, usage, features, assumptions, limitations, open work):
@@ -23,7 +23,7 @@ Model kinds (ships, vehicles, aircraft, buildings, munitions, humans, animals): 
 | `sms/gui/visuals/UserData/<name>.ommx` | model definition (schema `Watercraft`, `filename` only) |
 | `sms/gui/visuals/Entity/<name>.leaf` | element definition: the donor's, renamed, 3D and XR models pointed at ours |
 | `sms/gui/visuals/Entity/<name>.metx` | DIS type -> element definition |
-| `sms/vrfSim/<display name>.entity` | simulation object, cloned from the donor entity (systems, signatures), with our type, parts, size and labels. `<display name>` is the ship project's name (`ship/mak.json` `name`), not the template name in the ship metadata |
+| `sms/vrfSim/<display name>.entity` | simulation object, cloned from the donor entity (systems, signatures), with our type, parts, size and labels; the donor's sensors moved to the ship's radar and bridge and its weapons rebound or removed (`references/systems.md`; untick changes in Review > MAK). `<display name>` is the ship project's name (`ship/mak.json` `name`), not the template name in the ship metadata |
 | `visual-import/` | the three definition files together, for Simulation Object Editor > File > Import Visual Models |
 
 This layout is what the Simulation Object Editor itself wrote in a hand import of the same ship (2026-11-14):
@@ -32,7 +32,8 @@ the `.metx` and `.ommx` match exactly, and the `.leaf` matches line for line apa
 ## Checks in the report
 The input glb (scale, origin, part pivots and hierarchy); the written `.flt` re-read (parts, pivots, bounds, colours,
 DOF limits and comments); **MAK's own reader** (`medfTool --writeNodeInfo`) loads it and sees every part; the
-definitions cross-reference; the `.entity` is consistent (type, parts, systems).
+definitions cross-reference; the `.entity` is consistent (type, parts, systems: each sysdef exists and suits the
+platform, part bindings, sensor positions, weapons have a sensor).
 
 ## Installing into VR-Forces
 `python mak/install.py <package_dir>/mak <sms>` (or Review > MAK > Install in the editor) copies the model into

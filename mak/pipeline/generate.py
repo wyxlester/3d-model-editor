@@ -4,7 +4,8 @@ Layout (matches what the Simulation Object Editor wrote in the hand-import test)
   sms/gui/visuals/UserData/<name>.ommx   model definition: schema Watercraft (surface) or Entity, filename only
   sms/gui/visuals/Entity/<name>.metx     DIS type -> element definition <name>
   sms/gui/visuals/Entity/<name>.leaf     element definition: the donor's, renamed, 3D/XR model -> <name> (leaf.py)
-  sms/vrfSim/<display name>.entity       donor .entity cloned (users guide 65.3.1); type, parts, size, labels replaced
+  sms/vrfSim/<display name>.entity       donor .entity cloned (users guide 65.3.1); type, parts, size, labels replaced,
+                                         systems edited as the manifest's `systems` says (systems.py)
   visual-import/                         the three definition files together, for SOE File > Import Visual Models
   SharedData/ModelData/<category>/<name>/<name>.flt|.fbx   the model (convert stage)
   appData/importConfig/FBX_NodeNameMap.additions.csv       FBX route only
@@ -21,7 +22,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from string import Template
 
-from . import artparts, inspect_glb, leaf, mtl, profiles
+from . import artparts, inspect_glb, leaf, mtl, profiles, systems
 from . import glb as glbmod
 from .artparts import Part
 from .common import (TEMPLATES, Finding, InputError, Layout, check_model_dir, layout_for, load_config, load_manifest,
@@ -227,7 +228,8 @@ def build_character_entity(donor_xml: str, manifest: dict, table: dict[str, dict
     return ET.ElementTree(root), f
 
 
-def build_entity(donor_xml: str, manifest: dict, parts: list[Part], glb: dict, model_path: str) -> tuple[ET.ElementTree, list[Finding]]:
+def build_entity(donor_xml: str, manifest: dict, parts: list[Part], glb: dict, model_path: str,
+                 catalog: systems.Catalog | None = None) -> tuple[ET.ElementTree, list[Finding]]:
     f: list[Finding] = []
     root = ET.fromstring(donor_xml)
     so = root.find("simObject")
@@ -249,12 +251,19 @@ def build_entity(donor_xml: str, manifest: dict, parts: list[Part], glb: dict, m
             lst.append(el)
     so.insert(idx, lst)
 
+    # systems: the donor's, with the manifest's changes (sensor positions, weapon part bindings, additions)
+    f += systems.apply_systems(so, manifest, parts, glb, catalog)
+
     # size and supports
     volume, (left, right), other = supports_and_volume(glb["bounds_mak_frame"])
     bv = so.find("boundingVolume")
     if bv is not None:
         bv.set("offsetType", "custom")
         dims, off = bv.find("dimensions"), bv.find("offset")
+        if off is None and dims is not None:
+            # ground-center donors (Nimitz-class_Carrier, 833 stock entities) have no offset; a custom one needs it
+            off = ET.Element("offset")
+            bv.insert(list(bv).index(dims) + 1, off)
         if dims is not None:
             for k in ("length", "width", "height"):
                 dims.set(k, _fmt(volume[k]))
@@ -419,7 +428,8 @@ def generate(manifest: dict, lay: Layout, glb: dict | None = None, cfg: dict | N
         if character:
             tree, notes = build_character_entity(donor_xml, manifest, mtl.load_characters(cfg))
         else:
-            tree, notes = build_entity(donor_xml, manifest, parts, glb, lay.model_shared_path())
+            catalog = systems.load_catalog(cfg) if manifest.get("systems") else None
+            tree, notes = build_entity(donor_xml, manifest, parts, glb, lay.model_shared_path(), catalog)
         target = lay.entity(manifest["display_name"])
         target.parent.mkdir(parents=True, exist_ok=True)
         tree.write(target, encoding="utf-8", xml_declaration=True)
