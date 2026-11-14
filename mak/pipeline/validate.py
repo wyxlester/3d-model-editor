@@ -114,7 +114,9 @@ def validate(out_dir: Path, cfg: dict) -> list[Finding]:
                 f.append(Finding("error", "model-file-missing", f"{fn} -> {target} not found (did convert run?)"))
 
     leaves = sorted(defs.glob("*.leaf"))
-    if not leaves:
+    if not leaves and not element_names_needed:
+        pass      # a DI-Guy lifeform with no element definition: shown from the .entity's character settings
+    elif not leaves:
         f.append(Finding("pending", "no-leaf", f"no .leaf yet; element definitions {sorted(element_names_needed)} unresolved"))
     else:
         found: set[str] = set()
@@ -134,7 +136,10 @@ def validate(out_dir: Path, cfg: dict) -> list[Finding]:
                         continue
                     attrs = {a.findtext("myName"): a.findtext("myValue") for a in vis.findall("myAttributes/item")}
                     md = attrs.get("modeldefinition")
-                    if md and md not in model_defs and md not in idx["models"]:
+                    # a DI-Guy element lists several model definitions, tab separated (random appearances)
+                    missing = [x for x in (md or "").split("	") if x and x not in model_defs and x not in idx["models"]]
+                    if missing:
+                        md = ", ".join(missing)
                         f.append(Finding("error", "leaf-model-def-missing", f"{p.name}: '{name}' 3D model uses model "
                                          f"definition '{md}', defined neither in UserData/*.ommx nor in the install"))
         for name in element_names_needed - found:
@@ -187,8 +192,10 @@ def validate_entity(fname: str, root, metx_types: set[str]) -> list[Finding]:
     if so.get("matchType") not in (None, ot):
         f.append(Finding("warning", "entity-matchtype", f"{fname}: matchType {so.get('matchType')} != objectType {ot}"))
 
-    # articulated parts
-    parts = so.findall("DtSimArtPartDescriptorList/DtSimArtPartDescriptor")
+    # articulated parts. A lifeform keeps its donor's stock part list (weapon, head ...), which uses shapes
+    # these checks do not cover, and the pipeline does not write it.
+    lifeform = so.get("platform", "").replace(chr(92), "/").rsplit("/", 1)[-1] in ("Human.ope", "Animal.ope")
+    parts = [] if lifeform else so.findall("DtSimArtPartDescriptorList/DtSimArtPartDescriptor")
     codes: dict[int, ET.Element] = {}
     for d in parts:
         code = int(_num(d, "int", "art-part-type") or 0)

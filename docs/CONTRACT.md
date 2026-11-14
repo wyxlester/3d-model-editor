@@ -396,7 +396,15 @@ python mak/run_mak_export.py <package_dir> [--vrf <vrforces folder>] [--shared-d
 
 Turns the package's ship into a VR-Forces 5.1.1 entity, without Blender (`mak/README.md`). Defaults:
 `ME3D_VRF_DIR` else `C:\MAK\vrforces5.1.1`; `ME3D_MAK_SHARED_DATA` else `C:\MAK\SharedData\18\latest`.
-Needs `ship/mak.json` (DIS type and donor entity). Every ship is `surface`, bow +X (§1). Writes:
+Needs `ship/mak.json` (DIS type and donor entity). The model's **kind** (`mak.json` `kind`, `surface_ship`
+when absent) picks a profile in `mak/pipeline/profiles.py`: platform file, ModelData folder, model schema,
+where the origin sits and how support points are set. Kinds: `surface_ship` (the only one checked against a
+hand import), `submarine`, `ground_vehicle`, `fixed_wing`, `rotary_wing`, `space_object`, `building`,
+`static_object`, `munition`; other kinds add a check named `inspect:kind-untested`. Bow is +X for every kind
+(§1). A munition also gets `mak/sms/ammunitionParams.additions.mtl`, which the installer merges into the
+SMS's ammunition table. Humans and animals are DI-Guy characters in VR-Forces, not models: the pipeline can
+write them from a manifest (`kind: human | animal`), but the editor's crew are still listed in
+`not_exported`. Writes:
 
 ```
 <package_dir>/mak/
@@ -480,10 +488,10 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | POST `/api/scenes/{id}/unreal-test` | | `{"job_id"}` → result: the Unreal report. 409 while an editor opened by `/api/unreal/open` is still open (a test rebuilds that level) |
 | POST `/api/unreal/open` | `{"level"}`: a report's `level` (`/Game/ME3D/<id>/L_<id>`) | `{"opened","level","project"}`: the Unreal editor, with its window, on this computer, showing the test project at that level (sun, sky and sea added by the harness; not part of the package). 400 not such a level, 404 no longer on disk, 409 a test is running or the editor is already open, 503 no Unreal 5.8. *(Proposed 29 Oct; awaiting Lester.)* |
 | GET `/api/projects/{id}/mak/draft` | | `{"dis_type_hint","short_name","donors":[{"entity","objectType","size_lwh","military"}],"parts":[{"path","motion","min_deg","max_deg","priority","suggested_code"}]}`: suggestions from the current version's parts (ships only; 400 for crew) |
-| PATCH `/api/projects/{id}/mak` | `Project.mak` | `{"project"}`; no new version. 400 with a sentence: DIS type not 7 integers, donor not in the installed EntityLevel SMS, a part not on the current version, a code not an integer or null |
+| PATCH `/api/projects/{id}/mak` | `Project.mak` | `{"project"}`; no new version. 400 with a sentence: DIS type not 7 integers, donor not in the installed EntityLevel SMS, a part not on the current version, a code not an integer or null, an unknown `kind` |
 | POST `/api/scenes/{id}/mak-export` | | `{"job_id"}` → result: the §9b report plus `{"package_dir","output_dir","zip_url"}`. 409 when the ship has no `mak` settings |
 | GET `/api/mak/sms` | | `{"sms":[str]}`: custom SMSs in the VR-Forces install (stock ones left out) |
-| POST `/api/scenes/{id}/mak-install` | `{"sms","confirm":true}` | `{"job_id"}` → result `{"sms","written":[path],"backups_dir"}`: copies the scene's latest passing MAK export into that SMS and SharedData, backing up every file it replaces under `data/mak_backups/`. 400 a stock or unknown SMS or no `confirm`; 409 no passing MAK export for this scene |
+| POST `/api/scenes/{id}/mak-install` | `{"sms","confirm":true}` | `{"job_id"}` → result `{"sms","written":[path],"merged":[path],"backups_dir"}` (`merged` = tables an entry was added to, e.g. a munition's `ammunitionParams.mtl`): copies the scene's latest passing MAK export into that SMS and SharedData, backing up every file it replaces under `data/mak_backups/`. 400 a stock or unknown SMS or no `confirm`; 409 no passing MAK export for this scene |
 | GET `/api/files/{path}` | | serves files under the data folder (zips, packages) |
 
 `Project`:
@@ -510,7 +518,8 @@ it on every page, so work carries on, and is reported, while the user is on anot
 `mak` (ships only; absent until saved) holds the MAK VR-Forces choices (§9b), changed by
 `PATCH /api/projects/{id}/mak` without making a version:
 `{"dis_type": "1:3:15:80:1:0:0", "donor_entity": "Super_Tanker", "short_name": str|null,
-"parts": {"Mast__Radar_1": 5376, "Lifesaving__Davit_P1": null}}`. `dis_type` is the 7-field DIS entity
+"parts": {"Mast__Radar_1": 5376, "Lifesaving__Davit_P1": null}}`, plus an optional `"kind"` (§9b;
+`surface_ship` when absent). `dis_type` is the 7-field DIS entity
 type; `donor_entity` names a stock `.entity` whose systems and visuals the ship copies; `parts` maps moving
 parts to DIS articulated-part codes (null = stays static).
 

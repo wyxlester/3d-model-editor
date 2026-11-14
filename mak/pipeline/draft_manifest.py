@@ -23,17 +23,12 @@ import re
 import sys
 from pathlib import Path
 
-from . import artparts, inspect_glb
+from . import artparts, inspect_glb, profiles
 from .common import load_config
 
-DOMAIN_DEFAULTS = {   # platform .ope and ModelData category, from the 5.1.1 install
-    "land": ("Ground_Vehicle.ope", "Vehicles/Wheeled"),
-    "air": ("Fixed_Wing_Aircraft.ope", "Vehicles/FixedWing"),
-    "surface": ("Surface_Ship.ope", "Vehicles/Surface"),
-    "subsurface": ("Subsurface_Vehicle.ope", "Vehicles/Subsurface"),
-    "space": ("Space_Object.ope", "Vehicles/Space"),
-    "lifeform": ("Human.ope", "Lifeforms"),
-}
+# platform .ope and ModelData category per legacy domain, from the kind profiles (profiles.py)
+DOMAIN_DEFAULTS = {d: (profiles.PROFILES[k].platform_ope, profiles.PROFILES[k].category)
+                   for d, k in profiles.KIND_FOR_DOMAIN.items()}
 
 # node-name keyword -> (first code, step between instances). Only unambiguous names.
 NAME_CODES = [
@@ -150,11 +145,15 @@ def suggest_code(node: str, used: set[int], counters: dict) -> int | None:
 ARMED_PENALTY = 2.0   # a donor's systems are copied into the new entity (users guide 65.3.1)
 
 
-def suggest_donors(cfg: dict, domain: str, bounds: dict, top: int = 3, armed: bool = False) -> list[dict]:
-    """Stock entities on the domain's platform with the closest bounding volume (log-size distance).
+def suggest_donors(cfg: dict, domain: str, bounds: dict, top: int = 3, armed: bool = False,
+                   ope: str | None = None) -> list[dict]:
+    """Stock entities on the kind's platform with the closest bounding volume (log-size distance).
+    `domain` may be a legacy domain or a kind name; `ope` names the platform file directly (munition classes).
     Military donors (weapon systems or the "Military" GUI category: IFF, data links, radars) are pushed down
     unless `armed`, and civilian ones are pushed down when it is."""
-    ope = DOMAIN_DEFAULTS.get(domain, (None,))[0]
+    if ope is None and domain in profiles.PROFILES:
+        ope = profiles.PROFILES[domain].platform_ope
+    ope = ope or DOMAIN_DEFAULTS.get(domain, (None,))[0]
     vrfsim = Path(cfg["sms_dir"]) / cfg.get("donor_sms", "EntityLevel") / "vrfSim"
     if not ope or not vrfsim.exists():
         return []
@@ -182,7 +181,9 @@ def suggest_donors(cfg: dict, domain: str, bounds: dict, top: int = 3, armed: bo
 
 
 # ------------------------------------------------------------------ draft
-def draft(model_dir: Path, cfg: dict | None = None, node_map: artparts.NodeNameMap | None = None) -> tuple[dict, list[str]]:
+def draft(model_dir: Path, cfg: dict | None = None, node_map: artparts.NodeNameMap | None = None,
+          kind: str | None = None, munition_class: str | None = None) -> tuple[dict, list[str]]:
+    """`kind` (profiles.KINDS) says what the model is when the exports cannot tell, e.g. a building or a missile."""
     cfg = cfg or load_config()
     node_map = node_map if node_map is not None else artparts.load_node_map(cfg.get("fbx_node_name_map"))
     notes: list[str] = []
@@ -216,11 +217,18 @@ def draft(model_dir: Path, cfg: dict | None = None, node_map: artparts.NodeNameM
 
     forward, why_fwd = infer_forward_axis(nodes, bounds)
     domain, why_dom = infer_domain(spec, bounds)
+    if kind:
+        chosen = {"kind": kind, **({"munition_class": munition_class} if munition_class else {})}
+        profile = profiles.profile_for(chosen)
+        domain, why_dom = profile.domain, f"kind {kind}"
+        ope, category = profile.platform_ope, profile.category
+    else:
+        kind = profiles.KIND_FOR_DOMAIN.get(domain, f"{TODO}one of {', '.join(profiles.KINDS)}")
+        ope, category = DOMAIN_DEFAULTS.get(domain, (f"{TODO}platform .ope", f"{TODO}ModelData category"))
     notes.append(f"forward_axis_in_blender = {forward} (from {why_fwd})")
-    notes.append(f"domain = {domain} (from {why_dom})")
+    notes.append(f"kind = {kind}, domain = {domain} (from {why_dom})")
 
     display = (spec or {}).get("name") or glb_path.stem
-    ope, category = DOMAIN_DEFAULTS.get(domain, (f"{TODO}platform .ope", f"{TODO}ModelData category"))
 
     # spec.meta can be stale template data: say so when it contradicts the geometry
     meta = (spec or {}).get("meta") or {}
@@ -268,7 +276,8 @@ def draft(model_dir: Path, cfg: dict | None = None, node_map: artparts.NodeNameM
 
     # weapon-like joints (turret/gun/launcher codes) suggest an armed donor
     armed = any(artparts.is_weapon(p["dis_part"]) or 4096 <= p["dis_part"] < 4416 for p in mapped.values())
-    donors = suggest_donors(cfg, domain, inspect_glb.analyse(glb_path, forward)["bounds_mak_frame"], armed=armed) \
+    donors = suggest_donors(cfg, domain, inspect_glb.analyse(glb_path, forward)["bounds_mak_frame"], armed=armed,
+                            ope=None if ope.startswith(TODO) else ope) \
         if not forward.startswith(TODO) and not domain.startswith(TODO) else []
     if donors:
         notes.append(f"donor suggestions ({'military' if armed else 'civilian'} preferred, closest size on the same platform): "
@@ -279,6 +288,8 @@ def draft(model_dir: Path, cfg: dict | None = None, node_map: artparts.NodeNameM
                   "then run: python -m pipeline.run " + model_dir.as_posix(),
         "name": identifier(display),
         "display_name": display,
+        "kind": kind,
+        **({"munition_class": munition_class} if munition_class else {}),
         "domain": domain,
         "dis_type": f"{TODO}7-field DIS type unique in the install, e.g. kind:domain:country:category:subcategory:specific:extra",
         "donor_entity": donors[0]["entity"] if donors else f"{TODO}stock .entity name in {cfg.get('donor_sms', 'EntityLevel')}/vrfSim",
@@ -301,13 +312,16 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("model_dir", type=Path, help="models/<Name> holding the .glb and the Blender exports")
     ap.add_argument("--force", action="store_true", help="overwrite an existing manifest.json")
+    ap.add_argument("--kind", choices=profiles.KINDS, help="what the model is, when the exports cannot tell "
+                    "(a building, an aircraft, a missile ...)")
+    ap.add_argument("--munition-class", choices=sorted(profiles.MUNITION_CLASSES), help="with --kind munition")
     args = ap.parse_args(argv)
     if args.model_dir.suffix.lower() == ".glb":
         print(f"input error: '{args.model_dir.as_posix()}' is a .glb file; give its model folder, e.g. "
               f"python -m pipeline.draft_manifest {args.model_dir.parent.as_posix()}", file=sys.stderr)
         return 2
     try:
-        manifest, notes = draft(args.model_dir)
+        manifest, notes = draft(args.model_dir, kind=args.kind, munition_class=args.munition_class)
     except (DraftError, FileNotFoundError) as e:
         print(f"draft error: {e}", file=sys.stderr)
         return 1

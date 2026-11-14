@@ -3,9 +3,12 @@
 Turns an export package's ship (contract §8) into a VR-Forces entity, **without Blender**. This is the "MAK
 adapter" of `docs/PLAN.md`. Contract: §9b (script and report) and §10 (`Project.mak`, endpoints).
 
-Origin: copied from the `vrf-pipeline` project, branch `feat/openflight-writer`, commit `f710b01`
+Origin: copied from the `vrf-pipeline` project, branch `feat/openflight-writer`, commit `9e549da` (branch `feat/model-kinds`)
 (2026-11-14). That project's MAK manuals and hand-import fixtures are not copied here: they are MAK material and
 this repository is public. `references/` cites manual sections instead.
+
+Model kinds (ships, vehicles, aircraft, buildings, munitions, humans, animals): `pipeline/profiles.py` and
+`references/kinds.md`. Only the ship has been checked against a hand import in the Simulation Object Editor.
 
 ## What it writes
 

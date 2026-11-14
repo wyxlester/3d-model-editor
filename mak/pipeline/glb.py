@@ -249,3 +249,44 @@ def waterline_supports(model: Model, front: float = 0.3, rear: float = 0.35, ins
     r = lambda v: round(v, 3) + 0.0   # noqa: E731
     return {"left": [r(yf), r(cx - side), 0.0], "right": [r(yf), r(cx + side), 0.0], "other": [r(yr), r(cx), 0.0],
             "waterline_length": r(length), "waterline_beam": r(2 * max(abs(p[0] - cx) for p in pts))}
+
+
+def ground_supports(model: Model) -> dict | None:
+    """Three support points on the lowest geometry (users guide 66.1.3: where the model touches the ground).
+
+    Works for anything that stands on the ground: wheels, tracks, landing gear, a building's base. Looks at the
+    vertices in the lowest 5% of the model's height (at least 2 cm): the widest of them give the left/right
+    pair (their front end when they run the length of the model, as on a truck or a building), and the low
+    point furthest from that pair along the model gives the third, on the centreline. For a tricycle-gear
+    aircraft that is main gear + nose wheel. Returns body-frame (forward, right, down) points."""
+    pts = sorted({p for n in model.nodes.values() for t in n.triangles for p in t.p})   # each vertex once
+    if not pts:
+        return None
+    zmin, zmax = min(p[2] for p in pts), max(p[2] for p in pts)
+    low = [p for p in pts if p[2] <= zmin + max(0.05 * (zmax - zmin), 0.02)]
+    cx = (min(p[0] for p in low) + max(p[0] for p in low)) / 2
+    half = max(abs(p[0] - cx) for p in low)
+    y0, y1 = min(p[1] for p in low), max(p[1] for p in low)
+    span = max(y1 - y0, 1e-9)
+    wide = [p for p in low if abs(p[0] - cx) >= 0.8 * half] or low
+    wy0, wy1 = min(p[1] for p in wide), max(p[1] for p in wide)
+    if wy1 - wy0 > 0.3 * span:                       # contact runs along the model: use its front end
+        wide = [p for p in wide if p[1] >= wy1 - 0.15 * (wy1 - wy0)]
+    yp = sum(p[1] for p in wide) / len(wide)
+    side = max(abs(p[0] - cx) for p in wide)
+    far = y0 if abs(y0 - yp) >= abs(y1 - yp) else y1
+    third = [p[1] for p in low if abs(p[1] - far) <= 0.1 * span]
+    yo = sum(third) / len(third)
+    r = lambda v: round(v, 3) + 0.0   # noqa: E731
+    down = r(-zmin)
+    return {"left": [r(yp), r(cx - side), down], "right": [r(yp), r(cx + side), down], "other": [r(yo), r(cx), down]}
+
+
+def add_supports(report: dict, glb_path: Path, manifest: dict) -> None:
+    """Put the support points the kind's profile asks for into an inspect report (generate.build_entity reads them)."""
+    from . import profiles
+    strategy = profiles.profile_for(manifest).supports
+    if strategy == "waterline":
+        report["waterline_supports"] = waterline_supports(load(glb_path, manifest["forward_axis_in_blender"]))
+    elif strategy == "ground":
+        report["ground_supports"] = ground_supports(load(glb_path, manifest["forward_axis_in_blender"]))

@@ -152,15 +152,31 @@ def leaf_text(item: ET.Element) -> str:
 
 # ------------------------------------------------------------------ donor lookup
 def element_name_for_type(definitions_dir: Path, dis7: str) -> tuple[str, Path] | None:
-    """Exact 7-field mapping in the install's .metx files -> (element definition name, metx file)."""
+    """The install's .metx mapping for a 7-field type -> (element definition name, metx file).
+    An exact mapping wins; otherwise the best match, where -1 in a mapping stands for any value (stock
+    buildings and animals are mapped this way, e.g. the hangar 5:1:0:2:1:1:0 by 5:1:-1:2:1:1:-1). Among
+    wildcard matches the one with the most exact fields wins, earlier fields counting more."""
+    want = dis7.split(":")
+    best: tuple[tuple, str, Path] | None = None
     for p in sorted(Path(definitions_dir).rglob("*.metx")):
         try:
-            for it in ET.parse(p).getroot().iter("item"):
-                if it.findtext("first") == dis7 and it.findtext("second"):
-                    return it.findtext("second"), p
+            items = list(ET.parse(p).getroot().iter("item"))
         except ET.ParseError:
             continue
-    return None
+        for it in items:
+            first, second = it.findtext("first"), it.findtext("second")
+            if not first or not second:
+                continue
+            if first == dis7:
+                return second, p
+            have = first.split(":")
+            if len(have) != len(want) or any(h not in ("-1", w) for h, w in zip(have, want)):
+                continue
+            exact = tuple(h == w for h, w in zip(have, want))
+            score = (sum(exact), exact)
+            if best is None or score > best[0]:
+                best = (score, second, p)
+    return (best[1], best[2]) if best else None
 
 
 def find_element(definitions_dir: Path, element: str) -> tuple[ET.Element, Path] | None:

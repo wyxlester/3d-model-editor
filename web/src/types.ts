@@ -396,6 +396,8 @@ export interface MakSettings {
   donor_entity: string;
   short_name: string | null;
   parts: Record<string, number | null>;
+  /** What the model is in VR-Forces (CONTRACT §9b); a surface ship when absent. */
+  kind?: string;
 }
 
 export interface MakDonor {
@@ -441,6 +443,8 @@ export interface MakReport {
 export interface MakInstallResult {
   sms: string;
   written: string[];
+  /** Tables an entry was added to (e.g. a munition's ammunitionParams.mtl). */
+  merged?: string[];
   /** null when no existing file was replaced. */
   backups_dir: string | null;
 }

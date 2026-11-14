@@ -1,8 +1,11 @@
 """me3d.package/1 (contract §8) -> a model folder the pipeline runs on (contract §9b).
 
-Everything the pipeline used to infer is fixed by the editor's contract: every ship is `surface`, bow +X
-(§1), origin at the waterline amidships, part names `Group__Part` (§2). What VR-Forces needs on top comes from
-`ship/mak.json` (the project's MAK settings): DIS type, donor entity, a DIS part code per moving part.
+Everything the pipeline used to infer is fixed by the editor's contract: bow +X (§1), origin at the
+waterline amidships, part names `Group__Part` (§2). What VR-Forces needs on top comes from `ship/mak.json`
+(the project's MAK settings): DIS type, donor entity, a DIS part code per moving part, and optionally `kind`.
+The kind (pipeline/profiles.py; `surface_ship` unless the settings say otherwise) decides the platform file,
+the ModelData folder, the model schema and how support points are set, so a new kind of editor model needs
+no change here.
 
 Joints come from `ship/articulation.json`. Their `axis` is in the part's local frame (§3), so it is turned
 into the ship frame with the part's world `rotation_deg` (Blender XYZ Euler) before choosing the motion:
@@ -18,10 +21,10 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pipeline import inspect_glb
+from pipeline import inspect_glb, profiles
 
-SHIP_DEFAULTS = {"domain": "surface", "forward_axis_in_blender": "+X",
-                 "model_category_dir": "Vehicles/Surface", "platform_ope": "Surface_Ship.ope"}
+DEFAULT_KIND = "surface_ship"            # what the editor builds today
+FORWARD_AXIS = "+X"                      # contract §1: +X is the bow, for every model the editor exports
 AXES = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}
 
 
@@ -109,7 +112,7 @@ def prepare(package_dir: Path, work_dir: Path) -> Prepared:
     shutil.copyfile(glb, model_dir / "model.glb")
 
     # parent = nearest ancestor in the model's node tree that is itself an exported part
-    nodes = inspect_glb.analyse(model_dir / "model.glb", SHIP_DEFAULTS["forward_axis_in_blender"])["nodes"]
+    nodes = inspect_glb.analyse(model_dir / "model.glb", FORWARD_AXIS)["nodes"]
     mapped = {p for p, c in codes.items() if isinstance(c, int)}
     pending, parts, unmapped = [], [], []
     for part, j in joints.items():
@@ -127,10 +130,21 @@ def prepare(package_dir: Path, work_dir: Path) -> Prepared:
         parts.append({"node": part, "dis_part": int(codes[part]), "parent": parent, "motion": motion,
                       "min": float(j.get("min_deg") or 0.0), "max": float(j.get("max_deg") or 0.0)})
 
+    kind = mak.get("kind") or DEFAULT_KIND
+    try:
+        profile = profiles.profile_for({"kind": kind})
+    except profiles.ProfileError as e:
+        raise PackageError(f"MAK settings: {e}")
+    if profile.route != "model":
+        raise PackageError(f"MAK settings: kind '{kind}' is a DI-Guy character, not a model; it cannot be the ship")
     out = {
         "name": name,
         "display_name": meta.get("name") or manifest.get("name") or name,
-        **SHIP_DEFAULTS,
+        "kind": kind,
+        "domain": profile.domain,
+        "forward_axis_in_blender": FORWARD_AXIS,
+        "model_category_dir": profile.category,
+        "platform_ope": profile.platform_ope,
         "dis_type": mak.get("dis_type", ""),
         "donor_entity": mak.get("donor_entity", ""),
         "articulated_parts": parts,

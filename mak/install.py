@@ -21,6 +21,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+from pipeline import mtl  # noqa: E402
 from pipeline.common import make_config  # noqa: E402
 
 STOCK_SMS = {"EntityLevel", "AggregateLevel", "AggregateLevelBase", "base", "MAKTest"}
@@ -55,6 +56,9 @@ def _targets(mak_dir: Path, cfg: dict, sms: str) -> list[tuple[Path, Path, str]]
     return out
 
 
+AMMUNITION_ADDITIONS = "ammunitionParams.additions.mtl"      # written for munitions (pipeline/generate.py)
+
+
 def install(mak_dir: Path, sms: str, cfg: dict, backups_root: Path) -> dict:
     mak_dir = Path(mak_dir)
     if not SMS_NAME.match(sms or "") or ".." in sms:
@@ -67,7 +71,10 @@ def install(mak_dir: Path, sms: str, cfg: dict, backups_root: Path) -> dict:
         raise InstallError(f"No custom SMS called {sms} in {sms_dir} (custom SMSs: {have})")
     if not list((mak_dir / "sms" / "vrfSim").glob("*.entity")):
         raise InstallError(f"{mak_dir} has no sms/vrfSim/*.entity; run the MAK export first")
-    if not list((mak_dir / "SharedData").rglob("*.flt")) and not list((mak_dir / "SharedData").rglob("*.fbx")):
+    # a DI-Guy lifeform has no model definition and no model file; everything else must bring its model
+    has_model_def = any((mak_dir / "sms" / "gui").rglob("*.ommx"))
+    if has_model_def and not list((mak_dir / "SharedData").rglob("*.flt")) \
+            and not list((mak_dir / "SharedData").rglob("*.fbx")):
         raise InstallError(f"{mak_dir} has no model file under SharedData; run the MAK export first")
 
     targets = _targets(mak_dir, cfg, sms)
@@ -80,12 +87,34 @@ def install(mak_dir: Path, sms: str, cfg: dict, backups_root: Path) -> dict:
             b.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(dst, b)
             backed_up += 1
+    # a munition's ammunition entry is merged into the SMS's table, not copied over it (users guide 73)
+    additions = mak_dir / "sms" / AMMUNITION_ADDITIONS
+    table = sms_dir / sms / "ammunitionParams.mtl"
+    merged_text = None
+    if additions.is_file():
+        current = table.read_text(encoding="utf-8", errors="replace") if table.exists() else ""
+        try:
+            merged_text, changed = mtl.merge_ammunition(current, additions.read_text(encoding="utf-8"))
+        except ValueError as e:
+            raise InstallError(f"{table.name}: {e}")
+        if not changed:
+            merged_text = None
+        elif table.exists():
+            b = backups_dir / "sms" / table.name
+            b.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(table, b)
+            backed_up += 1
     written = []
     for src, dst, _ in targets:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
         written.append(str(dst))
-    return {"sms": sms, "written": written, "backups_dir": str(backups_dir) if backed_up else None}
+    merged = []
+    if merged_text is not None:
+        table.write_text(merged_text, encoding="utf-8")
+        merged.append(str(table))
+    return {"sms": sms, "written": written, "merged": merged,
+            "backups_dir": str(backups_dir) if backed_up else None}
 
 
 def main(argv=None) -> int:

@@ -12,6 +12,7 @@ Layout (matches what the Simulation Object Editor wrote in the hand-import test)
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import re
 import shutil
@@ -20,7 +21,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from string import Template
 
-from . import artparts, inspect_glb, leaf
+from . import artparts, inspect_glb, leaf, mtl, profiles
 from . import glb as glbmod
 from .artparts import Part
 from .common import (TEMPLATES, Finding, InputError, Layout, check_model_dir, layout_for, load_config, load_manifest,
@@ -44,8 +45,9 @@ def element_def_name(manifest: dict) -> str:
 
 
 def model_schema(manifest: dict) -> str:
-    """Every stock surface-ship model definition (114 of 114) uses Watercraft; other vehicles use Entity."""
-    return "Watercraft" if manifest["domain"] == "surface" else "Entity"
+    """Every stock surface-ship model definition (114 of 114) uses Watercraft; all other models use Entity
+    (profiles.py)."""
+    return profiles.profile_for(manifest).schema
 
 
 def short_name(manifest: dict) -> str:
@@ -163,6 +165,68 @@ def supports_and_volume(bounds: dict) -> tuple[dict, tuple, tuple]:
     return volume, (left, right), other
 
 
+def _set_bool(so: ET.Element, name: str, value: bool) -> None:
+    el = so.find(f"bool[@paramName='{name}']")
+    if el is None:                                   # keep it with the other bools, as the editor writes them
+        bools = so.findall("bool")
+        el = ET.Element("bool", paramName=name)
+        so.insert(list(so).index(bools[-1]) + 1 if bools else len(so), el)
+    el.text = "True" if value else "False"
+
+
+def build_character_entity(donor_xml: str, manifest: dict, table: dict[str, dict]) -> tuple[ET.ElementTree, list[Finding]]:
+    """A human or animal: the donor lifeform with a DI-Guy character chosen (Adding Content manual 25.2;
+    users guide 66.1.10). Size, supports, systems and articulated parts stay the donor's."""
+    f: list[Finding] = []
+    root = ET.fromstring(donor_xml)
+    so = root.find("simObject")
+    if so is None:
+        raise ValueError("donor .entity has no <simObject>")
+    ot = object_type(manifest)
+    so.set("objectType", ot)
+    so.set("matchType", ot)
+
+    def set_str(name, value):
+        el = so.find(f"string[@paramName='{name}']")
+        if el is None:
+            el = ET.SubElement(so, "string", paramName=name)
+        el.text = value
+    character = manifest["character_type"]
+    info = table.get(character)
+    if table and info is None:
+        f.append(Finding("error", "character-unknown", f"'{character}' is not in character_animations_table.mtl; "
+                         "list the choices with: python -m pipeline.mtl characters"))
+    elif not table:
+        f.append(Finding("warning", "character-unchecked", "character_animations_table.mtl not found; "
+                         f"'{character}' not checked"))
+    donor_character = so.findtext("string[@paramName='character-type']")
+    set_str("character-type", character)
+    if manifest.get("character_appearance"):
+        set_str("character-appearance", manifest["character_appearance"])
+    elif donor_character != character:
+        set_str("character-appearance", "random")       # the donor's appearance belongs to the donor's character
+        set_str("head", "default")
+    animation = manifest.get("animation")
+    if animation:
+        # the table lists what can be tasked; stock entities also use built-in ones (e.g. soldier_17 "stand_ready")
+        if info and animation not in info["animations"]:
+            f.append(Finding("warning", "animation-unlisted", f"'{animation}' is not in the table's list for "
+                             f"'{character}'; check it in the Simulation Object Editor"))
+        set_str("animation", animation)
+    elif donor_character != character:
+        f.append(Finding("warning", "animation-donor", "the default animation is the donor's and the character "
+                         "changed; set 'animation' in the manifest or in the Simulation Object Editor"))
+    _set_bool(so, "di-guy-enabled", True)
+    set_str("gui-label", manifest["display_name"])
+    set_str("gui-unique-id", f"ModelSet-vrfpipeline-{manifest['name']}")
+    set_str("short-name", short_name(manifest))
+    set_str("gui-description", f"Created by vrf-pipeline: DI-Guy character {character}")
+    f.append(Finding("info", "character", f"DI-Guy character '{character}'"
+                     + (f" ({info['display_name']})" if info else "") + "; no model file is imported for a lifeform"))
+    ET.indent(root, space="   ")
+    return ET.ElementTree(root), f
+
+
 def build_entity(donor_xml: str, manifest: dict, parts: list[Part], glb: dict, model_path: str) -> tuple[ET.ElementTree, list[Finding]]:
     f: list[Finding] = []
     root = ET.fromstring(donor_xml)
@@ -197,15 +261,20 @@ def build_entity(donor_xml: str, manifest: dict, parts: list[Part], glb: dict, m
         if off is not None:
             for k, v in zip(("forward", "right", "down"), volume["offset"]):
                 off.set(k, _fmt(v))
-    if manifest["domain"] == "land":
+    profile = profiles.profile_for(manifest)
+    if profile.supports == "ground":
+        gs = glb.get("ground_supports")     # from the lowest geometry (glb.ground_supports); else from bounds
+        if gs:
+            left, right, other = gs["left"], gs["right"], gs["other"]
         for name, model_p in (("left-support", left), ("right-support", right), ("other-support", other)):
             el = so.find(f"bodyPosition[@paramName='{name}']")
             if el is not None:   # model_p is already (forward, right, down)
                 for k, v in zip(("forward", "right", "down"), model_p):
                     el.set(k, _fmt(v))
-        f.append(Finding("info", "supports-estimated", "support points estimated from bounds; refine with "
+        f.append(Finding("info", "supports-estimated", "support points estimated from "
+                         + ("the lowest geometry" if gs else "bounds") + "; refine with "
                          "'Calculate Support Points' in the Simulation Object Editor (users guide 66.1.3)"))
-    elif manifest["domain"] == "surface" and glb.get("waterline_supports"):
+    elif profile.supports == "waterline" and glb.get("waterline_supports"):
         ws = glb["waterline_supports"]   # already body frame (forward, right, down), down = 0 at the waterline
         for name, key in (("left-support", "left"), ("right-support", "right"), ("other-support", "other")):
             el = so.find(f"bodyPosition[@paramName='{name}']")
@@ -228,8 +297,23 @@ def build_entity(donor_xml: str, manifest: dict, parts: list[Part], glb: dict, m
     set_str("gui-unique-id", f"ModelSet-vrfpipeline-{manifest['name']}")
     set_str("short-name", short_name(manifest))
     set_str("gui-description", f"Imported by vrf-pipeline from {model_path}")
+    for name, value in profile.entity_flags.items():      # e.g. cultural features are gravity aligned (UG 66.1.8)
+        _set_bool(so, name, value)
     geo = so.find("string[@paramName='object-geometry-filename']")
-    if geo is not None and geo.text:
+    if manifest.get("walkable"):
+        # Our own OpenFlight model as object geometry, embedded in the terrain, so characters can walk in and
+        # around it (users guide 66.1.6-66.1.7). The model path uses the .entity form of the variable.
+        if geo is None:
+            geo = ET.SubElement(so, "string", paramName="object-geometry-filename")
+        geo.text = model_path.replace("$(SHARED_DATA_DIR)", "@(SHARED_DATA_DIR)")
+        _set_bool(so, "use-object-geometry", True)
+        _set_bool(so, "embed-into-terrain", True)
+        nav = so.find("string[@paramName='nav-data-path']")
+        if nav is not None:
+            nav.text = None      # the donor's navigation data belongs to the donor's geometry
+        f.append(Finding("info", "object-geometry", "the model is its own object geometry and embeds into the "
+                         "terrain; navigation data is generated when it is placed in a scenario (users guide 66.1.7)"))
+    elif geo is not None and geo.text:
         geo.text = None   # object geometry must be OpenFlight/MEDF/GDB (users guide 66.1.6); don't inherit the donor's
         use = so.find("bool[@paramName='use-object-geometry']")
         if use is not None:
@@ -268,11 +352,16 @@ def generate(manifest: dict, lay: Layout, glb: dict | None = None, cfg: dict | N
         shutil.rmtree(stale)
     lay.definitions.mkdir(parents=True, exist_ok=True)
     lay.ommx.parent.mkdir(parents=True, exist_ok=True)
+    profile = profiles.profile_for(manifest)
+    character = profile.route == "diguy"      # humans and animals: no model file, the donor's DI-Guy visuals
 
-    lay.ommx.write_text(_render("model_definition.ommx.tmpl",
-                                model_def_name=model_def_name(manifest), schema=model_schema(manifest),
-                                filename=lay.model_shared_path()), encoding="utf-8")
-    out.append(Finding("info", "wrote-ommx", f"{lay.ommx} (schema {model_schema(manifest)})"))
+    if character:
+        lay.ommx.unlink(missing_ok=True)
+    else:
+        lay.ommx.write_text(_render("model_definition.ommx.tmpl",
+                                    model_def_name=model_def_name(manifest), schema=model_schema(manifest),
+                                    filename=lay.model_shared_path()), encoding="utf-8")
+        out.append(Finding("info", "wrote-ommx", f"{lay.ommx} (schema {model_schema(manifest)})"))
 
     lay.metx.write_text(_render("entity_type_map.metx.tmpl",
                                 dis_type=manifest["dis_type"],
@@ -296,13 +385,26 @@ def generate(manifest: dict, lay: Layout, glb: dict | None = None, cfg: dict | N
         ot = re.search(r'objectType="([^"]+)"', donor_xml)
         try:
             item, donor_element, src = leaf.donor_element(Path(cfg["definitions_dir"]), ot.group(1) if ot else "")
-            new = leaf.normalise_item(leaf.retarget(item, element_def_name(manifest), model_def_name(manifest),
-                                                    model_schema(manifest), xr=True))
+            if character:                 # keep the donor's DI-Guy model definition; only the name changes
+                new = copy.deepcopy(item)
+                new.find("myName").text = element_def_name(manifest)
+                new = leaf.normalise_item(new)
+            else:
+                new = leaf.normalise_item(leaf.retarget(item, element_def_name(manifest), model_def_name(manifest),
+                                                        model_schema(manifest), xr=True))
             lay.leaf.write_text(leaf.leaf_text(new), encoding="utf-8")
             out.append(Finding("info", "wrote-leaf", f"{lay.leaf} (from donor element '{donor_element}' in {src.name}; "
                                                      f"parent '{new.findtext('myParentName')}')"))
         except leaf.LeafError as e:
-            out.append(Finding("error", "leaf-failed", str(e)))
+            if character:
+                # Stock animals have no element definition of their own: VR-Forces shows a DI-Guy lifeform from
+                # the character named in its .entity (Adding Content manual 25.2.1, 25.2.3).
+                lay.metx.unlink(missing_ok=True)
+                lay.leaf.unlink(missing_ok=True)
+                out.append(Finding("info", "no-element-definition", "the donor has no element definition of its "
+                                   "own, so none is written; the character comes from the .entity"))
+            else:
+                out.append(Finding("error", "leaf-failed", str(e)))
 
     if lay.visual_import.exists():
         shutil.rmtree(lay.visual_import)
@@ -311,16 +413,62 @@ def generate(manifest: dict, lay: Layout, glb: dict | None = None, cfg: dict | N
         if p.exists():
             shutil.copy2(p, lay.visual_import / p.name)
 
-    if glb is None:
+    if glb is None and not character:
         out.append(Finding("pending", "entity-not-generated", "no glb inspection report given"))
     elif donor_xml is not None:
-        tree, notes = build_entity(donor_xml, manifest, parts, glb, lay.model_shared_path())
+        if character:
+            tree, notes = build_character_entity(donor_xml, manifest, mtl.load_characters(cfg))
+        else:
+            tree, notes = build_entity(donor_xml, manifest, parts, glb, lay.model_shared_path())
         target = lay.entity(manifest["display_name"])
         target.parent.mkdir(parents=True, exist_ok=True)
         tree.write(target, encoding="utf-8", xml_declaration=True)
         out.append(Finding("info", "wrote-entity", f"{target} (donor: {donor})"))
         out += notes
+        if profile.kind == "munition":
+            out += write_munition_tables(manifest, lay, cfg, donor_xml)
     return out
+
+
+def write_munition_tables(manifest: dict, lay: Layout, cfg: dict, donor_xml: str) -> list[Finding]:
+    """What makes a munition usable (users guide 66.5, 73, 74.2.2): an ammunitionParams.mtl entry, so weapon
+    systems can list it, and detonation power. The entry is written as an additions file; merging it into a
+    custom simulation model set is a deploy step. Other entities are never edited here."""
+    f: list[Finding] = []
+    dis7 = manifest["dis_type"]
+    if "-1" in dis7.split(":"):
+        f.append(Finding("error", "munition-type-wildcard", f"munition type {dis7} must not contain -1 "
+                         "(it is used in fire and detonation interactions; users guide 73)"))
+        return f
+    sms = Path(cfg["sms_dir"]) / cfg.get("donor_sms", "EntityLevel")
+    ammo_path = sms / "ammunitionParams.mtl"
+    ammo = ammo_path.read_text(encoding="utf-8", errors="replace") if ammo_path.exists() else ""
+    donor_type = re.search(r'objectType="1:([^"]+)"', donor_xml)
+    donor_entry = mtl.find_ammunition(ammo, donor_type.group(1)) if ammo and donor_type else None
+    if ammo and mtl.find_ammunition(ammo, dis7):
+        f.append(Finding("error", "munition-type-collision", f"munition type {dis7} is already in {ammo_path.name}"))
+        return f
+    tags = re.findall(r'"([^"]+)"', re.search(r'paramName="gui-categories">([^<]*)', donor_xml).group(1)) \
+        if 'paramName="gui-categories"' in donor_xml else ["3D Model", "Entity", "Munition"]
+    entry = mtl.ammunition_entry(manifest["name"], dis7, manifest["display_name"],
+                                 donor_entry.text(ammo) if donor_entry else None, tags)
+    lay.ammunition_additions.parent.mkdir(parents=True, exist_ok=True)
+    lay.ammunition_additions.write_text(entry, encoding="utf-8")
+    f.append(Finding("info", "wrote-ammunition-entry", f"{lay.ammunition_additions} ("
+                     + (f"from the donor's entry '{donor_entry.name}'" if donor_entry else "plain unguided entry: "
+                        "the donor has none") + ")"))
+    f.append(Finding("pending", "ammunition-merge", f"merge {lay.ammunition_additions.name} into the custom "
+                     "simulation model set's ammunitionParams.mtl at deploy, or no weapon can list this munition"))
+    det = "".join((p.read_text(encoding="utf-8", errors="replace") if p.exists() else "")
+                  for p in (sms / "detonationParams.mtl", Path(cfg["sms_dir"]) / "base" / "detonationParams.mtl"))
+    donor_has = bool(donor_type and mtl.has_detonation_entry(det, donor_type.group(1)))
+    f.append(Finding("pending", "detonation-power", "set the detonation power on the munition's Detonation tab in the "
+                     "Simulation Object Editor (users guide 74.2.2); "
+                     + ("the donor has its own detonation entry to copy from" if donor_has else
+                        "the donor relies on a best-match entry, which may not match the new type")))
+    f.append(Finding("pending", "weapon-ammunition-list", "add the munition to the ammunition list of each weapon "
+                     "system that should fire it (users guide 73); the importer does not edit other entities"))
+    return f
 
 
 def main(argv=None) -> int:
@@ -334,9 +482,7 @@ def main(argv=None) -> int:
         return 2
     cfg = load_config()
     glb = inspect_glb.analyse(args.model_dir / "model.glb", manifest["forward_axis_in_blender"])
-    if manifest["domain"] == "surface":
-        glb["waterline_supports"] = glbmod.waterline_supports(
-            glbmod.load(args.model_dir / "model.glb", manifest["forward_axis_in_blender"]))
+    glbmod.add_supports(glb, args.model_dir / "model.glb", manifest)
     findings = generate(manifest, layout_for(manifest, fmt=cfg.get("model_format", "flt")), glb, cfg)
     print_findings("generate", findings)
     return 1 if any(x.level == "error" for x in findings) else 0

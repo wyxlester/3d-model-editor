@@ -70,6 +70,26 @@ Five artefacts, all now generated (layout matches what the Simulation Object Edi
     133 logic tests and build passed. Harmony exported end to end through the real API and UI: every check
     passed, MAK's reader loaded it with both radars.
 
+- **Any model kind, not only ships** (vrf-pipeline branch `feat/model-kinds`; here branch `feat/mak-kinds`,
+  not committed yet):
+  - One profile per kind in `mak/pipeline/profiles.py`: DIS kind and domain, platform file, ModelData folder,
+    model schema, where the origin sits, how support points are set. Kinds: ground vehicle, fixed-wing,
+    helicopter, surface ship, submarine, space object, building, static object, munition, human, animal.
+  - Evidence (manual sections, no copied text): origin per domain (Adding Content 21.2.1); every stock model
+    definition uses the `Entity` schema except ships and buoys (`Watercraft`) and characters
+    (`DiGuyCharacter`); stock type mappings use -1 as a wildcard, so the donor's visual is found by best
+    match; lifeforms are DI-Guy characters chosen in the `.entity` (Adding Content 25.2, Users Guide
+    66.1.10), so a human or animal is not a model import; buildings are cultural features that can embed
+    in the terrain with their own model as object geometry (Users Guide 66.1.6-66.1.8); a simulated
+    munition also needs an entry in the SMS's ammunition table before a weapon can fire it (Users Guide
+    66.5, 73, 74.2.2).
+  - Support points now come from the geometry for everything that stands on the ground (lowest 5% of the
+    model: main gear plus nose wheel on an aircraft, front corners plus rear centre on a building).
+  - Gates: one full export per kind with stock donors, MAK's reader loading each model. **Only the ship is
+    checked against a hand import**; every other kind reports `kind-untested`.
+  - Editor: `mak.json` takes an optional `kind`; the installer merges a munition's ammunition entry into the
+    custom SMS's table (with a backup). Crew are still listed as not exported.
+
 ## Decisions
 - OpenFlight is the default model format; FBX via Blender stays as an option.
 - Integration (approved plan): the pipeline moves into this repo as `mak/`, alongside `unreal/`; MAK settings
@@ -87,6 +107,11 @@ Five artefacts, all now generated (layout matches what the Simulation Object Edi
 - [ ] **Bryan:** confirm the donor for passenger ships (`Super_Tanker` vs `Cruise_Ship`).
 - [ ] **Bryan / DTS:** do ship support points belong at the waterline (stock ships) or on the keel (the editor's
   button)? Check in VR-Forces that Harmony floats at the right height.
+- [ ] **Bryan / DTS:** one hand import per new kind (ground vehicle, aircraft, building, munition, human) to
+  compare with the export, as was done for the ship.
+- [ ] **DTS:** can a custom human or animal mesh be used without DI-Guy authoring tools?
+- [ ] **Claude:** export the editor's crew as DI-Guy characters (character picker in Review > MAK); rotors,
+  propellers and wheels as animation sequences; destroyed-state geometry.
 - [ ] **Claude:** sensor position (donor sensors sit at the waterline origin; `socket_bridge_eye` could set it).
 - [ ] **Later:** crew in VR-Forces needs DI-Guy characters (separate research); `.medf` encryption.
 

@@ -20,7 +20,11 @@ from .store import read_json
 
 MakRunner = Callable[[Path, Callable[[str], None]], dict]
 DIS_TYPE = re.compile(r"^-?\d+(:-?\d+){6}$")
-KEYS = {"dis_type", "donor_entity", "short_name", "parts"}
+KEYS = {"dis_type", "donor_entity", "short_name", "parts", "kind"}
+# Kinds a built model can be exported as (mak/pipeline/profiles.py; humans and animals are DI-Guy characters,
+# not models). The editor builds ships today, so `kind` is optional and means surface_ship when absent.
+MODEL_KINDS = ("surface_ship", "submarine", "ground_vehicle", "fixed_wing", "rotary_wing", "space_object",
+               "building", "static_object", "munition")
 REPORT = "mak_export_report.json"
 
 
@@ -77,7 +81,13 @@ def validate(body, parts: list, settings: Settings) -> dict:
             raise MakRefused(400, f"{part} is not a moving part of this version")
         if code is not None and (isinstance(code, bool) or not isinstance(code, int) or not 0 < code < 65536):
             raise MakRefused(400, f"The DIS code for {part} must be an integer (1-65535) or null")
-    return {"dis_type": dis.strip(), "donor_entity": donor.strip(), "short_name": short, "parts": dict(codes)}
+    out = {"dis_type": dis.strip(), "donor_entity": donor.strip(), "short_name": short, "parts": dict(codes)}
+    kind = body.get("kind")
+    if kind is not None:
+        if kind not in MODEL_KINDS:
+            raise MakRefused(400, f"kind must be one of: {', '.join(MODEL_KINDS)}")
+        out["kind"] = kind
+    return out
 
 
 def draft(parts: list, report: dict, name: str, settings: Settings) -> dict:

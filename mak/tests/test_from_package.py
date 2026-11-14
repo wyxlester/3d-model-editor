@@ -73,6 +73,16 @@ class TestPrepare(Base):
         m = self.convert(articulation=art).manifest
         self.assertEqual(m["articulated_parts"][1]["motion"], "visual")
 
+    def test_kind_comes_from_the_settings_and_defaults_to_a_ship(self):
+        self.assertEqual(self.convert().manifest["kind"], "surface_ship")
+        m = self.convert(mak=dict(MAK, kind="ground_vehicle")).manifest
+        self.assertEqual((m["kind"], m["domain"], m["platform_ope"], m["model_category_dir"], m["forward_axis_in_blender"]),
+                         ("ground_vehicle", "land", "Ground_Vehicle.ope", "Vehicles/Wheeled", "+X"))
+        with self.assertRaisesRegex(from_package.PackageError, "kind must be one of"):
+            self.convert(mak=dict(MAK, kind="spaceship"))
+        with self.assertRaisesRegex(from_package.PackageError, "DI-Guy"):
+            self.convert(mak=dict(MAK, kind="human"))
+
     def test_crew_listed_as_not_exported(self):
         crew = [{"id": "crew_a", "glb": "crew/crew_a.glb", "station": "station__helm", "animation": "idle",
                  "location_m": [0, 0, 0], "rotation_deg": [0, 0, 0]}]

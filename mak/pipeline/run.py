@@ -17,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import artparts, convert, generate, inspect_glb, openflight, validate, verify_fbx
+from . import artparts, convert, generate, inspect_glb, openflight, profiles, validate, verify_fbx
 from . import glb as glbmod
 from .common import (Finding, InputError, Layout, check_model_dir, has_errors, layout_for, load_config,
                      load_manifest, print_findings)
@@ -61,10 +61,18 @@ def run(model_dir: Path, skip_convert: bool = False, output_root: Path | None = 
     parts = artparts.resolve_parts(manifest, node_map)
 
     glb = model_dir / "model.glb"
-    report = inspect_glb.analyse(glb, manifest["forward_axis_in_blender"])
-    if manifest["domain"] == "surface":     # support points on the waterline (glb.waterline_supports)
-        report["waterline_supports"] = glbmod.waterline_supports(glbmod.load(glb, manifest["forward_axis_in_blender"]))
-    stages["inspect"] = inspect_glb.check(report, manifest, cfg["limits"], node_map)
+    profile = profiles.profile_for(manifest)
+    character = profile.route == "diguy"           # humans and animals: a DI-Guy character, no model to import
+    if character:
+        report = None
+        stages["inspect"] = [Finding("info", "no-model", f"a {profile.label.lower()} uses a DI-Guy character; "
+                                     "model.glb is not read (Adding Content manual 25.2)"),
+                             Finding("info", "kind-untested", f"'{profile.kind}' imports have not been compared with "
+                                     "a hand import in the Simulation Object Editor yet; check the result there")]
+    else:
+        report = inspect_glb.analyse(glb, manifest["forward_axis_in_blender"])
+        glbmod.add_supports(report, glb, manifest)     # support points from the geometry, by the kind's rule
+        stages["inspect"] = inspect_glb.check(report, manifest, cfg["limits"], node_map)
     if fmt == "fbx" and not node_map.parts:
         stages["inspect"].append(Finding("warning", "no-node-map", f"FBX_NodeNameMap.csv not found at {node_map.source}; part names unchecked"))
     for old, new in artparts.rename_map(parts).items():
@@ -76,7 +84,9 @@ def run(model_dir: Path, skip_convert: bool = False, output_root: Path | None = 
                                          + ", ".join(j["node"] for j in unmapped[:6]) + (" ..." if len(unmapped) > 6 else "")))
 
     if not has_errors(stages["inspect"]):
-        if skip_convert:
+        if character:
+            pass
+        elif skip_convert:
             stages["convert"] = [Finding("warning", "convert-skipped", "--skip-convert given")]
         else:
             for other in ("flt", "fbx"):        # drop a model file left by a run in the other format
@@ -108,6 +118,8 @@ def run(model_dir: Path, skip_convert: bool = False, output_root: Path | None = 
 
     result = {
         "model": manifest["name"],
+        "kind": profile.kind,
+        "kind_status": profile.status,
         "model_format": fmt,
         "glb": report,
         "stages": {k: [x.to_dict() for x in v] for k, v in stages.items()},

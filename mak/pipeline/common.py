@@ -66,6 +66,8 @@ def check_model_dir(arg: Path) -> Path:
             f"    python -m pipeline.run {folder.as_posix()}")
     if not arg.is_dir():
         raise InputError(f"model folder '{arg.as_posix()}' does not exist")
+    if not (arg / "model.glb").exists() and _is_character(arg):
+        return arg                       # humans and animals pick a DI-Guy character; there is no model to import
     if not (arg / "model.glb").exists():
         others = sorted(p.name for p in arg.glob("*.glb"))
         hint = f"rename '{others[0]}' to model.glb" if len(others) == 1 else "put the model there as model.glb"
@@ -78,18 +80,39 @@ def check_model_dir(arg: Path) -> Path:
     return arg
 
 
+def _is_character(model_dir: Path) -> bool:
+    from . import profiles
+    try:
+        m = json.loads((model_dir / "manifest.json").read_text(encoding="utf-8"))
+        return profiles.profile_for(m).route == "diguy"
+    except (OSError, ValueError):
+        return False
+
+
 def load_manifest(model_dir: Path) -> dict:
+    from . import profiles
     m = json.loads((model_dir / "manifest.json").read_text(encoding="utf-8"))
     todo = [k for k, v in m.items() if isinstance(v, str) and v.startswith("TODO")]
     if todo:
         raise InputError(f"{model_dir.as_posix()}/manifest.json still has TODO values: "
                          + "; ".join(f"{k} ({m[k][6:]})" for k in todo))
     problems = []
-    for key in ("name", "display_name", "domain", "dis_type", "model_category_dir", "forward_axis_in_blender"):
-        if not m.get(key):
-            problems.append(f"manifest missing '{key}'")
     if m.get("domain") and m["domain"] not in DOMAINS:
         problems.append(f"domain must be one of {sorted(DOMAINS)}")
+    route = "model"
+    try:
+        profiles.apply_defaults(m)       # kind -> domain, platform .ope, ModelData folder (profiles.py)
+        route = profiles.profile_for(m).route
+    except profiles.ProfileError as e:
+        problems.append(str(e))
+    if route == "diguy":
+        m.setdefault("forward_axis_in_blender", "+Y")
+        if not m.get("character_type"):
+            problems.append("a human or animal needs 'character_type' (a DI-Guy character; see "
+                            "python -m pipeline.mtl characters)")
+    for key in ("name", "display_name", "dis_type", "forward_axis_in_blender"):
+        if not m.get(key):
+            problems.append(f"manifest missing '{key}'")
     if m.get("dis_type") and not DIS_TYPE_RE.match(m["dis_type"]):
         problems.append("dis_type must be 7 colon-separated integers, e.g. 1:1:225:6:99:1:0")
     if m.get("forward_axis_in_blender") and m["forward_axis_in_blender"] not in FORWARD_AXES:
@@ -162,6 +185,11 @@ class Layout:
 
     def entity(self, display_name: str) -> Path:
         return self.sms_vrfsim / f"{display_name}.entity"
+
+    @property
+    def ammunition_additions(self) -> Path:
+        """Munitions: the entry to merge into <sms>/ammunitionParams.mtl at deploy (users guide 73)."""
+        return self.root / "sms" / "ammunitionParams.additions.mtl"
 
     @property
     def node_map_additions(self) -> Path:

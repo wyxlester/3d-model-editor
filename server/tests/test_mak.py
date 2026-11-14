@@ -78,6 +78,16 @@ def test_bad_settings_refused(make_client, vrf, change, words):
     assert r.status_code == 400 and words in r.json()["detail"], r.text
 
 
+def test_kind_is_optional_and_checked(make_client, vrf):
+    c = make_client()
+    ship = create_ready(c)
+    r = c.patch(f"/api/projects/{ship['id']}/mak", json={**GOOD, "kind": "surface_ship"})
+    assert r.status_code == 200 and r.json()["project"]["mak"]["kind"] == "surface_ship", r.text
+    for bad in ("human", "spaceship"):                  # a lifeform is a DI-Guy character, not a model
+        r = c.patch(f"/api/projects/{ship['id']}/mak", json={**GOOD, "kind": bad})
+        assert r.status_code == 400 and "kind must be one of" in r.json()["detail"], r.text
+
+
 def test_static_part_and_missing_short_name_allowed(make_client, vrf):
     c = make_client()
     ship = create_ready(c)

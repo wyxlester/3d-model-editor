@@ -86,6 +86,37 @@ class TestInstall(unittest.TestCase):
         with self.assertRaisesRegex(install.InstallError, "entity"):
             install.install(self.out, "MyShips", self.cfg, self.backups)
 
+    def test_munition_entry_is_merged_into_the_ammunition_table(self):
+        entry = ('   (test-missile \n      (munition-type 2 2 225 1 99 0 0)\n      (warhead -1)\n'
+                 '      (gui-label "Test Missile")\n   )\n')
+        (self.out / "sms" / "ammunitionParams.additions.mtl").write_text(entry)
+        table = self.vrf / "data" / "simulationModelSets" / "MyShips" / "ammunitionParams.mtl"
+        table.write_text('(ammunition-params \n   (old-one \n      (munition-type 2 2 225 1 1 0 0)\n   )\n)\n')
+        r = install.install(self.out, "MyShips", self.cfg, self.backups)
+        self.assertEqual(r["merged"], [str(table)])
+        text = table.read_text()
+        self.assertIn("(old-one", text)                                  # the table is added to, not replaced
+        self.assertIn("(munition-type 2 2 225 1 99 0 0)", text)
+        self.assertIn("(old-one", (Path(r["backups_dir"]) / "sms" / "ammunitionParams.mtl").read_text())
+        self.assertNotIn("test-missile", (Path(r["backups_dir"]) / "sms" / "ammunitionParams.mtl").read_text())
+        self.assertFalse((table.parent / "ammunitionParams.additions.mtl").exists())   # the additions file stays out
+        again = install.install(self.out, "MyShips", self.cfg, self.backups)
+        self.assertEqual(again["merged"], [])                            # already there: nothing to add
+        self.assertEqual(table.read_text().count("test-missile"), 1)
+
+    def test_munition_entry_makes_the_table_when_the_sms_has_none(self):
+        (self.out / "sms" / "ammunitionParams.additions.mtl").write_text(
+            '   (test-missile \n      (munition-type 2 2 225 1 99 0 0)\n   )\n')
+        r = install.install(self.out, "MyShips", self.cfg, self.backups)
+        table = Path(r["merged"][0])
+        self.assertTrue(table.read_text().startswith("(ammunition-params"))
+
+    def test_character_export_needs_no_model_file(self):
+        shutil.rmtree(self.out / "SharedData")
+        (self.out / "sms" / "gui" / "visuals" / "UserData" / "boat.ommx").unlink()
+        r = install.install(self.out, "MyShips", self.cfg, self.backups)
+        self.assertEqual(len(r["written"]), 3)                           # .entity, .leaf, .metx
+
     def test_custom_sms_listing(self):
         self.assertEqual(install.custom_sms(self.cfg), ["MyShips"])
 

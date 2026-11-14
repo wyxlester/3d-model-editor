@@ -329,18 +329,27 @@ def check(report: dict, manifest: dict | None, limits: dict, node_map: artparts.
     if report["animations"]:
         f.append(Finding("warning", "gltf-animations", f"{report['animations']} glTF animation(s) are ignored; VR-Forces drives parts from the simulation"))
 
-    domain = (manifest or {}).get("domain")
+    from . import profiles                # late import: glb.py imports this module
+    profile = None
+    if manifest and (manifest.get("kind") or manifest.get("domain")):
+        profile = profiles.profile_for(manifest)
+        mismatch = profiles.dis_type_problem(manifest)
+        if mismatch:
+            f.append(Finding("warning", "dis-type-kind", mismatch + " (SISO-REF-010)"))
+        if profile.status != "verified":
+            f.append(Finding("info", "kind-untested", f"'{profile.kind}' imports have not been compared with a hand "
+                             "import in the Simulation Object Editor yet; check the result there"))
     tol = max(0.02, 0.02 * longest)
-    if domain == "land":  # manual 21.2.1: origin on ground-contact plane, at yaw axis
-        if abs(b["min"][2]) > tol:
-            f.append(Finding("error", "origin-z", f"land model lowest point z={b['min'][2]} m; origin must be on the ground plane"))
-    if domain in {"air", "space"} and not (b["min"][2] < 0 < b["max"][2]):
+    # manual 21.2.1, Table 43: where the origin sits depends on the kind
+    if profile and profile.origin == "ground" and abs(b["min"][2]) > tol:
+        f.append(Finding("error", "origin-z", f"{profile.label.lower()} lowest point z={b['min'][2]} m; origin must be on the ground plane"))
+    if profile and profile.origin == "cg" and not (b["min"][2] < 0 < b["max"][2]):
         f.append(Finding("warning", "origin-cg", "air/space origin should be at the CG, inside the model's bounds"))
     for axis, i in (("x", 0), ("y", 1)):
         centre = (b["min"][i] + b["max"][i]) / 2
         if abs(centre) > 0.25 * ext[i] + tol:
             f.append(Finding("warning", f"origin-{axis}", f"bbox centre {axis}={centre:.3f} m is far from origin; yaw axis should pass near the centre"))
-    if domain in {"land", "surface", "subsurface"} and ext[1] < ext[0] * 0.6:
+    if profile and profile.long_axis_forward and ext[1] < ext[0] * 0.6:
         f.append(Finding("warning", "forward-axis", f"model is much wider (X={ext[0]}) than long (Y={ext[1]}); is forward_axis_in_blender right?"))
 
     f += check_articulation(report, manifest, node_map or artparts.NodeNameMap())
