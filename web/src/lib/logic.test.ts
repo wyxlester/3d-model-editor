@@ -1134,3 +1134,95 @@ describe('the scene crew on the version shown in Review', () => {
     expect(stationWords('station__passenger_1')).toBe('passenger 1');
   });
 });
+// MAK VR-Forces settings (CONTRACT §9b, §10).
+import { disTypeError, installFolders, makFormStart, makRows, makSettingsOf, parseCode } from './mak';
+import type { MakDraft } from '../types';
+
+const makDraft: MakDraft = {
+  dis_type_hint: '1:3:0:0:0:0:0', short_name: 'PC303',
+  donors: [
+    { entity: 'Patrol_Boat', objectType: '1:1:3:0:0:0:0:0', size_lwh: [16, 4, 3], military: true },
+    { entity: 'Super_Tanker', objectType: '1:1:3:15:80:1:0:0', size_lwh: [300, 50, 30], military: false },
+  ],
+  parts: [
+    { path: 'Roof__Searchlight', motion: 'azimuth', min_deg: -170, max_deg: 170, priority: 'P1', suggested_code: 4096 },
+    { path: 'Cabin__Door', motion: 'rotation', min_deg: 0, max_deg: 100, priority: 'P1', suggested_code: null },
+    { path: 'Mast__Camera', motion: 'azimuth', min_deg: -180, max_deg: 180, priority: 'P1', suggested_code: 5376 },
+  ],
+};
+
+describe('MAK DIS type', () => {
+  it('accepts 7 colon-separated integers', () => {
+    expect(disTypeError('1:3:15:80:1:0:0')).toBeNull();
+    expect(disTypeError(' 1:3:15:80:1:0:0 ')).toBeNull();
+    expect(disTypeError('1:3:-1:80:1:0:0')).toBeNull();
+  });
+  it('says what is wrong otherwise', () => {
+    expect(disTypeError('')).toMatch(/7/);
+    expect(disTypeError('1:3:15:80:1:0')).toMatch(/7/);
+    expect(disTypeError('1:3:15:80:1:0:0:0')).toMatch(/7/);
+    expect(disTypeError('1:3:15:80:1:x:0')).toMatch(/whole number/);
+    expect(disTypeError('1:3:15:80:1.5:0:0')).toMatch(/whole number/);
+    expect(disTypeError('1:3::80:1:0:0')).toMatch(/whole number/);
+  });
+});
+
+describe('MAK part codes', () => {
+  it('reads a code, a blank (static) or junk', () => {
+    expect(parseCode('4096')).toBe(4096);
+    expect(parseCode(' 5376 ')).toBe(5376);
+    expect(parseCode('')).toBeNull();
+    expect(parseCode('  ')).toBeNull();
+    expect(parseCode('40.5')).toBe('bad');
+    expect(parseCode('abc')).toBe('bad');
+    expect(parseCode('-3')).toBe('bad');
+  });
+});
+
+describe('MAK parts table', () => {
+  it('uses the draft suggestions when nothing is saved', () => {
+    const rows = makRows(makDraft, null);
+    expect(rows.map((r) => [r.path, r.code])).toEqual([['Roof__Searchlight', '4096'], ['Cabin__Door', ''], ['Mast__Camera', '5376']]);
+    expect(rows[0]).toMatchObject({ label: 'Roof › Searchlight', motion: 'azimuth', min_deg: -170, max_deg: 170, suggested: 4096 });
+  });
+  it('lets saved values win, a saved null included', () => {
+    const rows = makRows(makDraft, { dis_type: '1:3:0:0:0:0:0', donor_entity: 'Patrol_Boat', short_name: null,
+      parts: { Roof__Searchlight: null, Cabin__Door: 4352, Gone__Part: 9 } });
+    expect(rows.map((r) => [r.path, r.code])).toEqual([['Roof__Searchlight', ''], ['Cabin__Door', '4352'], ['Mast__Camera', '5376']]);
+  });
+  it('leaves out saved parts the current version no longer has', () => {
+    const rows = makRows(makDraft, { dis_type: '1:3:0:0:0:0:0', donor_entity: 'Patrol_Boat', short_name: null, parts: { Gone__Part: 9 } });
+    expect(rows.map((r) => r.path)).not.toContain('Gone__Part');
+  });
+});
+
+describe('MAK form', () => {
+  it('starts from the draft when nothing is saved', () => {
+    expect(makFormStart(makDraft, null)).toEqual({ dis_type: '1:3:0:0:0:0:0', donor_entity: 'Patrol_Boat', short_name: 'PC303' });
+  });
+  it('starts from the saved settings', () => {
+    expect(makFormStart(makDraft, { dis_type: '1:3:15:80:1:0:0', donor_entity: 'Super_Tanker', short_name: null, parts: {} }))
+      .toEqual({ dis_type: '1:3:15:80:1:0:0', donor_entity: 'Super_Tanker', short_name: '' });
+  });
+  it('builds the PATCH body, or says what to fix', () => {
+    const rows = makRows(makDraft, null);
+    rows[1] = { ...rows[1], code: '4352' };
+    expect(makSettingsOf({ dis_type: ' 1:3:15:80:1:0:0 ', donor_entity: 'Super_Tanker', short_name: ' ' }, rows)).toEqual({
+      ok: true, mak: { dis_type: '1:3:15:80:1:0:0', donor_entity: 'Super_Tanker', short_name: null,
+        parts: { Roof__Searchlight: 4096, Cabin__Door: 4352, Mast__Camera: 5376 } },
+    });
+    expect(makSettingsOf({ dis_type: '1:3', donor_entity: 'Super_Tanker', short_name: 'X' }, rows)).toMatchObject({ ok: false });
+    expect(makSettingsOf({ dis_type: '1:3:15:80:1:0:0', donor_entity: '', short_name: 'X' }, rows)).toMatchObject({ ok: false, error: expect.stringMatching(/donor/i) });
+    rows[2] = { ...rows[2], code: 'x' };
+    expect(makSettingsOf({ dis_type: '1:3:15:80:1:0:0', donor_entity: 'Super_Tanker', short_name: 'X' }, rows))
+      .toMatchObject({ ok: false, error: expect.stringMatching(/Mast › Camera/) });
+  });
+});
+
+describe('MAK install folders', () => {
+  it('names the three places an install writes', () => {
+    expect(installFolders('MyShips', 'pcg_pc303')).toEqual([
+      'SharedData/ModelData/Vehicles/Surface/pcg_pc303/', 'MyShips/vrfSim', 'MyShips/gui/visuals',
+    ]);
+  });
+});

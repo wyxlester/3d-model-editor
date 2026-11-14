@@ -226,6 +226,8 @@ export interface Project {
   can_undo?: boolean;
   /** The version POST /undo returns to; null when there is nothing to undo (CONTRACT §10). */
   undo_to?: number | null;
+  /** Ships only: the MAK VR-Forces choices (CONTRACT §9b, §10); absent until saved. */
+  mak?: MakSettings | null;
 }
 
 export type DraftStage = 'copying' | 'researching' | 'changing' | 'ready' | 'failed';
@@ -318,6 +320,8 @@ export interface Health {
   mpfb: boolean;
   ai: boolean;
   unreal: boolean;
+  /** VR-Forces and its medfTool found (CONTRACT §10). Absent from an older server. */
+  mak?: boolean;
 }
 
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
@@ -380,6 +384,65 @@ export interface UnrealReport {
   engine: string;
   level: string;
   checks: { name: string; pass: boolean; detail: string }[];
+}
+
+// MAK VR-Forces export (CONTRACT §9b, §10).
+
+/** `Project.mak`: what the ship becomes in VR-Forces. A part mapped to null stays static. */
+export interface MakSettings {
+  /** The 7-field DIS entity type, e.g. "1:3:15:80:1:0:0". */
+  dis_type: string;
+  /** A stock `.entity` whose systems and visuals the ship copies. */
+  donor_entity: string;
+  short_name: string | null;
+  parts: Record<string, number | null>;
+}
+
+export interface MakDonor {
+  entity: string;
+  objectType: string;
+  size_lwh: [number, number, number];
+  military: boolean;
+}
+
+export interface MakDraftPart {
+  path: string;
+  /** azimuth | elevation | rotation | visual | translate_z | … */
+  motion: string;
+  min_deg: number;
+  max_deg: number;
+  priority: string;
+  suggested_code: number | null;
+}
+
+/** GET /api/projects/{id}/mak/draft: suggestions from the current version's parts. */
+export interface MakDraft {
+  dis_type_hint: string;
+  short_name: string;
+  donors: MakDonor[];
+  parts: MakDraftPart[];
+}
+
+/** The MAK export job's result: the §9b report plus where it went. */
+export interface MakReport {
+  ok: boolean;
+  vrforces: string;
+  name: string;
+  dis_type: string;
+  checks: { name: string; pass: boolean; detail: string }[];
+  pending: string[];
+  not_exported: string[];
+  package_dir?: string;
+  output_dir: string;
+  /** null when the export wrote no output (e.g. the package had no MAK settings). */
+  zip_url: string | null;
+}
+
+export interface MakInstallResult {
+  sms: string;
+  written: string[];
+  /** null when no existing file was replaced. */
+  backups_dir: string | null;
 }
 
 // Research (CONTRACT §12).

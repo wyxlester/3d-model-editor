@@ -40,6 +40,7 @@ from .store import NotFound, PlanRefused, ProjectStore, atomic_write_json, read_
 from .uploads import UploadRejected, check_size, content_blocks, decode, resolve_type
 from .uploads import TYPES as UPLOAD_TYPES
 from .unreal_editor import Refused, UnrealEditorWindow
+from . import mak as mak_export
 
 UnrealRunner = Callable[[Path, Callable[[str], None]], dict]
 SCENE_ID = re.compile(r"^scene_[a-z0-9]+$")
@@ -83,7 +84,7 @@ def make_unreal_runner(settings: Settings) -> UnrealRunner:
 def create_app(settings: Settings | None = None, runner: BuilderRunner | None = None,
                agent: AgentRunner | None = None, llm: LLM | None = None,
                unreal: UnrealRunner | None = None, unreal_window: UnrealEditorWindow | None = None,
-               workers: int = 6) -> FastAPI:
+               workers: int = 6, mak: mak_export.MakRunner | None = None) -> FastAPI:
     settings = settings or Settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     store = ProjectStore(settings.projects_dir)
@@ -93,6 +94,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
     llm = llm or claude_llm(settings.route_model)
     unreal = unreal or make_unreal_runner(settings)
     unreal_window = unreal_window or UnrealEditorWindow(settings)
+    mak = mak or mak_export.make_runner(settings)
     # Every project job's log is kept with the project, so its work can be reviewed later.
     jobs = JobManager(workers=workers, on_finish=lambda job: store.save_job_log(job["project"], job)
                       if job.get("project") else None)
@@ -144,7 +146,8 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
     @app.get("/api/health")
     def health():
         return {"blender": settings.blender.exists(), "mpfb": settings.mpfb_dir.is_dir(),
-                "ai": find_claude_cli() is not None, "unreal": settings.unreal_cmd.exists()}
+                "ai": find_claude_cli() is not None, "unreal": settings.unreal_cmd.exists(),
+                "mak": mak_export.available(settings)}
 
     @app.get("/api/catalog")
     def get_catalog():
@@ -1054,6 +1057,77 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             pkg = export_scene(scene, store, settings.packages_dir, log)
             return unreal(Path(pkg["package_dir"]), log)
         return {"job_id": jobs.submit("unreal", work, label=f"Unreal test of {scene.get('name', sid)}")}
+
+    # ---- MAK VR-Forces export (contract §9b, §10) -------------------------------------------
+    def need_ship(pid: str) -> dict:
+        p = need_project(pid)
+        if p["kind"] != "ship":
+            raise HTTPException(400, "MAK settings are for ships; crew are not exported to VR-Forces yet")
+        return p
+
+    @app.patch("/api/projects/{pid}/mak")
+    def patch_mak(pid: str, body: Any = Body(...)):
+        p = need_ship(pid)
+        try:
+            settings_mak = mak_export.validate(body, store.parts(pid, p["version"]), settings)
+        except mak_export.MakRefused as e:
+            raise HTTPException(e.status, str(e))
+        with store.edit(pid) as proj:
+            proj["mak"] = settings_mak
+        return {"project": with_category(store.api_project(pid))}
+
+    @app.get("/api/projects/{pid}/mak/draft")
+    def mak_draft(pid: str):
+        p = need_ship(pid)
+        n = p["version"]
+        name = (store.spec(pid, n) or {}).get("name") or p["name"]
+        return mak_export.draft(store.parts(pid, n), store.report(pid, n), name, settings)
+
+    def scene_package_dir(scene: dict) -> Path | None:
+        return mak_export.latest_export(settings.packages_dir, safe_id(scene["id"]), int(scene["ship"]["version"]))
+
+    @app.post("/api/scenes/{sid}/mak-export")
+    def mak_export_scene(sid: str):
+        scene = load_scene(sid)
+        if not store.load(scene["ship"]["project"]).get("mak"):
+            raise HTTPException(409, "The ship has no MAK settings yet: set its DIS type and donor entity first")
+
+        def work(log):
+            pkg = export_scene(scene, store, settings.packages_dir, log)
+            pkg_dir = Path(pkg["package_dir"])
+            report = mak(pkg_dir, log)
+            return dict(report, package_dir=str(pkg_dir), output_dir=str(pkg_dir / "mak"),
+                        zip_url=mak_export.zip_output(pkg_dir, settings.packages_dir) if (pkg_dir / "mak").is_dir() else None)
+        return {"job_id": jobs.submit("mak", work, label=f"MAK export of {scene.get('name', sid)}")}
+
+    @app.get("/api/mak/sms")
+    def mak_sms():
+        return {"sms": mak_export.custom_sms(settings)}
+
+    @app.post("/api/scenes/{sid}/mak-install")
+    def mak_install(sid: str, body: dict = Body(...)):
+        scene = load_scene(sid)
+        sms = body.get("sms")
+        if body.get("confirm") is not True:
+            raise HTTPException(400, "Installing writes into VR-Forces; send confirm: true")
+        pkg_dir = scene_package_dir(scene)
+        if pkg_dir is None:
+            raise HTTPException(409, "There is no passing MAK export of this scene yet; export it first")
+        try:
+            mak_export.check_install_target(sms, settings)
+        except mak_export.MakRefused as e:
+            raise HTTPException(e.status, str(e))
+
+        def work(log):
+            log(f"• Installing {pkg_dir.name} into the VR-Forces SMS {sms}")
+            try:
+                result = mak_export.install(pkg_dir, sms, settings)
+            except mak_export.MakRefused as e:
+                raise JobError(str(e))
+            log(f"• Wrote {len(result['written'])} file(s)"
+                + (f"; replaced files backed up to {result['backups_dir']}" if result["backups_dir"] else ""))
+            return result
+        return {"job_id": jobs.submit("mak-install", work, label=f"Install {scene.get('name', sid)} into VR-Forces SMS {sms}")}
 
     @app.post("/api/unreal/open")
     def unreal_open(body: dict = Body(...)):

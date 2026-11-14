@@ -2,7 +2,7 @@
 // VITE_MOCK=1 routes every call to an in-browser mock (src/mock) for development before the
 // server exists. The default build always talks to the real /api.
 import type {
-  ApproveResult, Attachment, Catalog, ChatModule, ExportResult, Health, Job, JobLogRecord, JobSummary, Material, Part, Pin, Project, ProjectBase,
+  ApproveResult, Attachment, Catalog, ChatModule, ExportResult, Health, Job, JobLogRecord, JobSummary, MakDraft, MakReport, MakSettings, Material, Part, Pin, Project, ProjectBase,
   ProjectKind, ProjectSummary, Research, ResearchVersion, RouteResult, Scene, SceneSpec, UnrealReport, VariantRequest, Vec3,
 } from './types';
 import { httpErrorText } from './lib/designPlan';
@@ -118,10 +118,23 @@ export const api = {
   unrealTest: (id: string) => call<{ job_id: string }>('POST', `/api/scenes/${enc(id)}/unreal-test`),
   /** Open the level a Unreal test built in the Unreal editor, with its window, on this computer. */
   unrealOpen: (level: string) => call<{ opened: boolean; level: string; project: string }>('POST', '/api/unreal/open', { level }),
+
+  // MAK VR-Forces (CONTRACT §9b, §10).
+  /** Suggestions for a ship's MAK settings from its current version's parts. */
+  makDraft: (id: string) => call<MakDraft>('GET', `/api/projects/${enc(id)}/mak/draft`),
+  /** Save `Project.mak` without a new version; 400 with a sentence on a bad value. */
+  patchMak: (id: string, mak: MakSettings) => call<{ project: Project }>('PATCH', `/api/projects/${enc(id)}/mak`, mak),
+  /** Job result: MakReport. 409 when the ship has no MAK settings. */
+  makExport: (sceneId: string) => call<{ job_id: string }>('POST', `/api/scenes/${enc(sceneId)}/mak-export`),
+  /** Custom SMSs in the VR-Forces install (stock ones left out). */
+  makSms: () => call<{ sms: string[] }>('GET', '/api/mak/sms'),
+  /** Job result: MakInstallResult. 409 with no passing MAK export; 400 a stock or unknown SMS. */
+  makInstall: (sceneId: string, sms: string) => call<{ job_id: string }>('POST', `/api/scenes/${enc(sceneId)}/mak-install`, { sms, confirm: true }),
 };
 
 export type ExportJobResult = ExportResult;
 export type UnrealJobResult = UnrealReport;
+export type MakJobResult = MakReport;
 
 /** URL of a project version's GLB. */
 export function modelUrl(projectId: string, n: number): string {

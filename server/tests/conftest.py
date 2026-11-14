@@ -106,10 +106,11 @@ def make_client(settings):
     from app.agent import ScriptedAgent
     from app.main import create_app
 
-    def make(agent=None, llm=None, unreal=None, builder=None):
+    def make(agent=None, llm=None, unreal=None, builder=None, mak=None):
         builder = builder or FakeBuilder()
         app = create_app(settings, runner=builder, agent=agent or ScriptedAgent(),
-                         llm=llm or (lambda p, s: "{}"), unreal=unreal or (lambda d, log: {"ok": True, "checks": []}))
+                         llm=llm or (lambda p, s: "{}"), unreal=unreal or (lambda d, log: {"ok": True, "checks": []}),
+                         mak=mak or (lambda d, log: {"ok": True, "checks": []}))
         client = TestClient(app)
         client.builder = builder
         return client

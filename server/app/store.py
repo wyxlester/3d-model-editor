@@ -256,6 +256,7 @@ class ProjectStore:
             "plan_built": bool(p.get("plan_built")),
             "derived_from": p.get("derived_from"), "brief": p.get("brief"),
             "draft": p.get("draft"), "discarded": bool(p.get("discarded")), "category": p.get("category"),
+            "mak": p.get("mak"),
             "can_undo": bool(p["undo_stack"]),
             # The version Undo returns to, so the button can say so (not derivable from `versions`
             # once an undo has been followed by a new change).

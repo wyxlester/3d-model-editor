@@ -14,6 +14,7 @@ he is not an engineer. The approved design is the canvas linked in `docs/CONTRAC
 | `server/` | FastAPI app, project store, job runner, AI agent (Claude Agent SDK), packaging | `server/.venv` (Python 3.11) |
 | `web/` | Vite + React + TypeScript + three.js front end | Node 22 (`~/.nvm/versions/node/v22.23.1/bin`) |
 | `unreal/` | throwaway UE 5.8 harness project and import test (the Review page's "Build and Open in Unreal"); `install_import_hook.py` sets up a project so Import Into Level of a crew GLB keeps equipment on its bones | `python unreal/run_import_test.py <package_dir>`; `install_import_hook.py` from the editor's Output Log (see its docstring) |
+| `mak/` | MAK VR-Forces 5.1.1 export (contract §9b): glb → OpenFlight + definitions + `.entity`, no Blender; `install.py` copies a result into a custom SMS. Standard library only. See `mak/README.md` | `python mak/run_mak_export.py <package_dir>` |
 | `tests/` | cross-part tests (end to end) | |
 | `vendor/` | third-party assets, each with its licence; `vendor/downloads/` is ignored | |
 
@@ -60,6 +61,9 @@ commit a `Harness.uproject` an editor has rewritten.
   not Unreal's exit code; `server/.venv/bin/python -m pytest tests/unreal -q` (slow: builds a fixture
   package with Blender and runs the harness on a good and a broken copy)
 - End to end: `server/.venv/bin/python -m pytest tests/e2e -q`
+- MAK: `server/.venv/bin/python -m pytest mak/tests -q` (fast; cases that need VR-Forces skip without it) and
+  `server/.venv/bin/python -m pytest tests/mak -q` (exports a package and loads the model with VR-Forces' medfTool;
+  skips without VR-Forces)
 
 Read a gate's exit code from the command itself, never through a pipe.
 

@@ -332,10 +332,15 @@ This is what goes to Unreal now and MAK later. One folder:
   manifest.json
   ship/<ship_id>.glb          the ship (sections 1-3)
   ship/<ship_id>.json         strait.ship_model/1 metadata (StraitsSim-compatible)
-  ship/articulation.json      [{"part","parent","axis","min_deg","max_deg","priority","pivot_m":[x,y,z]}]
+  ship/articulation.json      [{"part","parent","axis","min_deg","max_deg","priority","kind","pivot_m":[x,y,z],
+                                "rotation_deg":[x,y,z]}]
+  ship/mak.json               the ship project's MAK settings (§10, `Project.mak`), or absent if none
   crew/<crew_id>.glb          one per distinct crew member
   research/research.json      the research for the ship, or absent if none
 ```
+
+`rotation_deg` is the part's world XYZ Euler rotation from `parts.json`, so a reader can turn the joint's
+local `axis` into the ship frame. Unreal ignores it and `ship/mak.json`; the MAK export (§9b) reads both.
 
 `manifest.json`:
 
@@ -383,6 +388,37 @@ the GLB alone puts it in the rest pose). *(Proposed 29 Oct; awaiting Lester.)*
 **The script's exit code comes from `ok`, never from Unreal's own exit code**, because Unreal
 returns 0 on failure (library: `unreal-automation-runner-exits-zero-on-failed-tests`).
 
+## 9b. MAK VR-Forces export (ship only)
+
+```
+python mak/run_mak_export.py <package_dir> [--vrf <vrforces folder>] [--shared-data <SharedData version folder>]
+```
+
+Turns the package's ship into a VR-Forces 5.1.1 entity, without Blender (`mak/README.md`). Defaults:
+`ME3D_VRF_DIR` else `C:\MAK\vrforces5.1.1`; `ME3D_MAK_SHARED_DATA` else `C:\MAK\SharedData\18\latest`.
+Needs `ship/mak.json` (DIS type and donor entity). Every ship is `surface`, bow +X (§1). Writes:
+
+```
+<package_dir>/mak/
+  SharedData/ModelData/Vehicles/Surface/<name>/<name>.flt   OpenFlight; each moving part with a DIS code is a DOF
+                                                            node carrying "@dis articulated_part <code> ..."
+  sms/gui/visuals/UserData/<name>.ommx                      model definition
+  sms/gui/visuals/Entity/<name>.leaf, <name>.metx           element definition (cloned from the donor's), type map
+  sms/vrfSim/<display name>.entity                          simulation object (cloned from the donor entity)
+  visual-import/                                            the three definition files, for SOE Import Visual Models
+<package_dir>/mak_export_report.json
+```
+
+```json
+{"ok": bool, "vrforces": "5.1.1", "name": str, "dis_type": str,
+ "checks": [{"name": str, "pass": bool, "detail": str}], "pending": [str], "not_exported": [str]}
+```
+
+`<name>` is the ship id (§5). Checks include MAK's own reader loading the model (`medfTool --writeNodeInfo`)
+and seeing every part's comment. Crew are listed in `not_exported` (VR-Forces humans are DI-Guy characters,
+not yet supported). Joints whose part has no DIS code stay static and are listed in `pending`. The exit code
+comes from `ok`. Nothing is written into the VR-Forces install; installing is `mak/install.py` (§10).
+
 ## 10. Server HTTP API (FastAPI, port 8787; the web app proxies `/api`)
 
 Every body is JSON. Long work returns `{"job_id"}`; poll `GET /api/jobs/{id}`, which returns
@@ -404,7 +440,7 @@ it on every page, so work carries on, and is reported, while the user is on anot
 
 | Method and path | Body | Returns |
 |---|---|---|
-| GET `/api/health` | | `{"blender":bool,"mpfb":bool,"ai":bool,"unreal":bool}` |
+| GET `/api/health` | | `{"blender":bool,"mpfb":bool,"ai":bool,"unreal":bool,"mak":bool}` (`mak`: VR-Forces and its medfTool found) |
 | GET `/api/catalog` | | `{"ships":[{"type","name","description","category"}],"crew":[{"id","name","category"}],"clothes":[str],"equipment":[str],"animations":[str],"categories":{"ship":[str],"crew":[str]}}` |
 | POST `/api/route` | `{"message","attachments"?:[file name]}` (names only; the files go with the carried message) | `{"destination":"ship_research|ship_build|ship_variant|crew|crew_variant|animation|assembly|review|clarify","reason","project_id":str|null}` |
 | GET `/api/projects` | | `[ProjectSummary]` |
@@ -443,6 +479,11 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | POST `/api/scenes/{id}/export` | | `{"job_id"}` → result `{"package_dir","zip_url"}` |
 | POST `/api/scenes/{id}/unreal-test` | | `{"job_id"}` → result: the Unreal report. 409 while an editor opened by `/api/unreal/open` is still open (a test rebuilds that level) |
 | POST `/api/unreal/open` | `{"level"}`: a report's `level` (`/Game/ME3D/<id>/L_<id>`) | `{"opened","level","project"}`: the Unreal editor, with its window, on this computer, showing the test project at that level (sun, sky and sea added by the harness; not part of the package). 400 not such a level, 404 no longer on disk, 409 a test is running or the editor is already open, 503 no Unreal 5.8. *(Proposed 29 Oct; awaiting Lester.)* |
+| GET `/api/projects/{id}/mak/draft` | | `{"dis_type_hint","short_name","donors":[{"entity","objectType","size_lwh","military"}],"parts":[{"path","motion","min_deg","max_deg","priority","suggested_code"}]}`: suggestions from the current version's parts (ships only; 400 for crew) |
+| PATCH `/api/projects/{id}/mak` | `Project.mak` | `{"project"}`; no new version. 400 with a sentence: DIS type not 7 integers, donor not in the installed EntityLevel SMS, a part not on the current version, a code not an integer or null |
+| POST `/api/scenes/{id}/mak-export` | | `{"job_id"}` → result: the §9b report plus `{"package_dir","output_dir","zip_url"}`. 409 when the ship has no `mak` settings |
+| GET `/api/mak/sms` | | `{"sms":[str]}`: custom SMSs in the VR-Forces install (stock ones left out) |
+| POST `/api/scenes/{id}/mak-install` | `{"sms","confirm":true}` | `{"job_id"}` → result `{"sms","written":[path],"backups_dir"}`: copies the scene's latest passing MAK export into that SMS and SharedData, backing up every file it replaces under `data/mak_backups/`. 400 a stock or unknown SMS or no `confirm`; 409 no passing MAK export for this scene |
 | GET `/api/files/{path}` | | serves files under the data folder (zips, packages) |
 
 `Project`:
@@ -465,6 +506,13 @@ it on every page, so work carries on, and is reported, while the user is on anot
   "can_undo": true, "undo_to": 2
 }
 ```
+
+`mak` (ships only; absent until saved) holds the MAK VR-Forces choices (§9b), changed by
+`PATCH /api/projects/{id}/mak` without making a version:
+`{"dis_type": "1:3:15:80:1:0:0", "donor_entity": "Super_Tanker", "short_name": str|null,
+"parts": {"Mast__Radar_1": 5376, "Lifesaving__Davit_P1": null}}`. `dis_type` is the 7-field DIS entity
+type; `donor_entity` names a stock `.entity` whose systems and visuals the ship copies; `parts` maps moving
+parts to DIS articulated-part codes (null = stays static).
 
 `undo_to` is the version Undo returns to (null when `can_undo` is false). It is not always the
 version number below: after an undo, the next change is undone back to the version shown before it.

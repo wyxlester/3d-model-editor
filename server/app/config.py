@@ -92,6 +92,11 @@ class Settings:
     unreal_dir: Path = field(default_factory=lambda: _env_path("ME3D_UNREAL_DIR", DEFAULT_UNREAL))
     build_timeout_s: float = float(os.environ.get("ME3D_BUILD_TIMEOUT_S", "900"))
     unreal_timeout_s: float = float(os.environ.get("ME3D_UNREAL_TIMEOUT_S", "3600"))
+    # MAK VR-Forces export (contract §9b). Windows-only product; on a Mac these simply don't exist.
+    vrf_dir: Path = field(default_factory=lambda: _env_path("ME3D_VRF_DIR", Path(r"C:\MAK\vrforces5.1.1")))
+    mak_shared_data: Path = field(default_factory=lambda: _env_path(
+        "ME3D_MAK_SHARED_DATA", Path(r"C:\MAK\SharedData\18\latest")))
+    mak_timeout_s: float = float(os.environ.get("ME3D_MAK_TIMEOUT_S", "900"))
     agent_model: str = os.environ.get("ME3D_AGENT_MODEL", "claude-opus-5-5")
     route_model: str = os.environ.get("ME3D_ROUTE_MODEL", "claude-haiku-5-5")
     # After a research turn with too few photographs, run a photo-finding turn in the same job.
@@ -128,6 +133,19 @@ class Settings:
     @property
     def unreal_editor(self) -> Path:
         return unreal_editor(self.unreal_dir)
+
+    @property
+    def mak_script(self) -> Path:
+        return self.repo_root / "mak" / "run_mak_export.py"
+
+    @property
+    def medf_tool(self) -> Path:
+        """MAK's model tool; the MAK export loads every model with it (contract §9b)."""
+        return self.vrf_dir / "bin64" / "medfTool.exe"
+
+    @property
+    def mak_backups_dir(self) -> Path:
+        return self.data_dir / "mak_backups"
 
     @property
     def harness_project(self) -> Path:

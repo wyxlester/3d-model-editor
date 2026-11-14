@@ -41,7 +41,9 @@ def test_scene_stations_and_export_package(make_client, settings):
     assert (pkg / "ship" / "container_ship.glb").read_bytes()[:4] == b"glTF"
     art = json.loads((pkg / "ship" / "articulation.json").read_text())
     assert art == [{"part": "Roof__Searchlight", "parent": "Hull__Main", "axis": "z", "min_deg": -150,
-                    "max_deg": 150, "priority": "P1", "kind": "revolute", "pivot_m": [2.0, 0.0, 4.5]}]
+                    "max_deg": 150, "priority": "P1", "kind": "revolute", "pivot_m": [2.0, 0.0, 4.5],
+                    "rotation_deg": [0.0, 0.0, 0.0]}]
+    assert not (pkg / "ship" / "mak.json").exists()        # only written when the ship has MAK settings (§8)
     meta = json.loads((pkg / "ship" / "container_ship.json").read_text())
     assert meta["schema"] == "strait.ship_model/1" and meta["id"] == "container_ship"
     assert (meta["type"], meta["length_m"], meta["beam_m"], meta["draught_m"]) == ("container", 200, 32.2, 11.5)

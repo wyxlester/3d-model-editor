@@ -6,8 +6,8 @@ import { httpErrorText } from '../lib/designPlan';
 import { mergePatch } from '../lib/spec';
 import { MODULES, isModuleId, moduleOfItem, placeLabel } from '../lib/modules';
 import type {
-  Attachment, Catalog, CustomItem, CustomMove, Job, JobSummary, Message, ModuleId, Part, Pin, Place, Project, ProjectSummary, Research, RouteResult, Scene,
-  SceneSpec, UnrealReport, VersionInfo,
+  Attachment, Catalog, CustomItem, CustomMove, Job, JobSummary, MakDraft, MakInstallResult, MakReport, MakSettings, Message, ModuleId, Part, Pin, Place,
+  Project, ProjectSummary, Research, RouteResult, Scene, SceneSpec, UnrealReport, VersionInfo,
 } from '../types';
 import shipPartsJson from '../../public/mock/ship_parts.json';
 import { mockResearch } from './research';
@@ -434,10 +434,93 @@ function sceneWithStations(s: Scene): Scene {
   return { ...s, stations: ship ? ship.parts.filter((p) => p.path.startsWith('station__')).map((p) => p.path) : [] };
 }
 
+// MAK VR-Forces (CONTRACT §9b, §10). Canned: three stock donors, two custom SMSs.
+const MAK_DONORS: MakDraft['donors'] = [
+  { entity: 'Patrol_Boat', objectType: '1:1:3:0:0:0:0:0', size_lwh: [16, 4, 3], military: true },
+  { entity: 'Coast_Guard_Cutter', objectType: '1:1:3:0:61:0:0:0', size_lwh: [45, 8, 12], military: false },
+  { entity: 'Super_Tanker', objectType: '1:1:3:15:80:1:0:0', size_lwh: [300, 50, 30], military: false },
+];
+const MAK_SMS = ['PCG_Ships', 'Training_2026'];
+const MAK_MOTION: Record<string, string> = { z: 'azimuth', y: 'elevation', x: 'rotation' };
+const MAK_SUGGEST: Record<string, number> = { Roof__Searchlight: 4096, Mast__Camera: 5376 };
+/** Scenes with a passing MAK export this page load, and the entity name it made. */
+const makExported: Record<string, string> = {};
+
+function makDraftOf(p: Project): MakDraft {
+  if (p.kind !== 'ship') throw new HttpErr(400, 'MAK export is for ships only.');
+  return {
+    dis_type_hint: '1:3:0:0:0:0:0', short_name: String(p.spec.id ?? p.id).replace(/[^A-Za-z0-9]/g, '').slice(0, 12).toUpperCase(),
+    donors: MAK_DONORS,
+    parts: p.parts.filter((x) => x.joint).map((x) => ({
+      path: x.path, motion: MAK_MOTION[x.joint!.axis] ?? 'rotation', min_deg: x.joint!.min_deg, max_deg: x.joint!.max_deg,
+      priority: x.joint!.priority, suggested_code: MAK_SUGGEST[x.path] ?? null,
+    })),
+  };
+}
+
+function patchMak(p: Project, mak: MakSettings): void {
+  const fields = String(mak?.dis_type ?? '').split(':');
+  if (fields.length !== 7 || !fields.every((f) => /^-?\d+$/.test(f))) throw new HttpErr(400, `The DIS type must be 7 whole numbers separated by colons, not "${mak?.dis_type}".`);
+  if (!MAK_DONORS.some((d) => d.entity === mak.donor_entity)) throw new HttpErr(400, `${mak.donor_entity} isn't an entity in the installed EntityLevel SMS.`);
+  const have = new Set(p.parts.map((x) => x.path));
+  for (const [part, code] of Object.entries(mak.parts ?? {})) {
+    if (!have.has(part)) throw new HttpErr(400, `${part} isn't a part of v${p.version}.`);
+    if (code !== null && !Number.isInteger(code)) throw new HttpErr(400, `The code for ${part} must be a whole number or null.`);
+  }
+  p.mak = { dis_type: mak.dis_type, donor_entity: mak.donor_entity, short_name: mak.short_name ?? null, parts: { ...mak.parts } };
+  save();
+}
+
+function makExport(sceneId: string): { job_id: string } {
+  const s = store.scenes[sceneId];
+  if (!s) throw new HttpErr(404, `No scene ${sceneId}`);
+  const ship = proj(s.ship.project);
+  const mak = ship.mak;
+  if (!mak) throw new HttpErr(409, `${ship.name} has no MAK settings yet. Save its DIS type and donor first.`);
+  const name = String(ship.spec.id ?? ship.id);
+  const codes = Object.entries(mak.parts);
+  const moving = codes.filter(([, c]) => c !== null);
+  return startJob(['Exporting the package', 'Reading the ship GLB', 'Writing OpenFlight with DOF nodes', `Cloning ${mak.donor_entity}.entity and its element definition`,
+    'Loading the model with medfTool --writeNodeInfo'], (): MakReport => {
+    makExported[sceneId] = name;
+    return {
+      ok: true, vrforces: '5.1.1', name, dis_type: mak.dis_type,
+      checks: [
+        { name: 'OpenFlight written', pass: true, detail: `(mock) ${name}.flt, ${ship.parts.length} nodes` },
+        { name: 'medfTool loads the model', pass: true, detail: '(mock) MAK’s own reader read it without errors' },
+        { name: 'Articulated part comments', pass: true, detail: `(mock) ${moving.length} of ${moving.length} seen by medfTool` },
+        { name: 'Entity type maps to the element definition', pass: true, detail: `(mock) ${mak.dis_type} → ${name}` },
+        { name: 'Simulation object cloned from donor', pass: true, detail: `(mock) systems from ${mak.donor_entity}` },
+      ],
+      pending: codes.filter(([, c]) => c === null).map(([part]) => `${part}: no DIS part code, stays static`),
+      not_exported: s.crew.map((c) => `${store.projects[c.project]?.name ?? c.project}: crew (VR-Forces humans are DI-Guy characters, not yet supported)`),
+      package_dir: `data/packages/pkg_${sceneId}`, output_dir: `data/packages/pkg_${sceneId}/mak`, zip_url: `/api/files/packages/pkg_${sceneId}_mak.zip`,
+    };
+  });
+}
+
+function makInstall(sceneId: string, b: { sms?: string; confirm?: boolean }): { job_id: string } {
+  if (!b?.confirm) throw new HttpErr(400, 'Installing needs confirm: true.');
+  const sms = String(b.sms ?? '');
+  if (/^EntityLevel/i.test(sms)) throw new HttpErr(400, `${sms} is a stock SMS; install into a custom copy instead.`);
+  if (!MAK_SMS.includes(sms)) throw new HttpErr(400, `There is no custom SMS called ${sms}.`);
+  const name = makExported[sceneId];
+  if (!name) throw new HttpErr(409, 'There is no passing MAK export for this scene yet. Export for VR-Forces first.');
+  const sd = 'C:/MAK/SharedData/18/latest', smsDir = `C:/MAK/vrforces5.1.1/data/simulationModelSets/${sms}`;
+  return startJob(['Backing up files it replaces', 'Copying the model into SharedData', `Copying the definitions into ${sms}`], (): MakInstallResult => ({
+    sms,
+    written: [
+      `${sd}/ModelData/Vehicles/Surface/${name}/${name}.flt`, `${smsDir}/gui/visuals/UserData/${name}.ommx`,
+      `${smsDir}/gui/visuals/Entity/${name}.leaf`, `${smsDir}/gui/visuals/Entity/${name}.metx`, `${smsDir}/vrfSim/${name}.entity`,
+    ],
+    backups_dir: `data/mak_backups/${sceneId}-20261114T120000Z`,
+  }));
+}
+
 async function handle(method: string, path: string, body: any): Promise<unknown> {
   const m = (re: RegExp) => path.match(re);
   let r: RegExpMatchArray | null;
-  if (method === 'GET' && path === '/api/health') return { blender: true, mpfb: true, ai: true, unreal: true };
+  if (method === 'GET' && path === '/api/health') return { blender: true, mpfb: true, ai: true, unreal: true, mak: true };
   if (method === 'GET' && path === '/api/catalog') return catalog;
   if (method === 'POST' && path === '/api/route') return route(String(body?.message ?? ''));
   if (method === 'GET' && path === '/api/projects') {
@@ -658,6 +741,11 @@ async function handle(method: string, path: string, body: any): Promise<unknown>
       ],
     }));
   }
+  if ((r = m(/^\/api\/projects\/([^/]+)\/mak\/draft$/)) && method === 'GET') return makDraftOf(proj(r[1]));
+  if ((r = m(/^\/api\/projects\/([^/]+)\/mak$/)) && method === 'PATCH') { const p = proj(r[1]); patchMak(p, body as MakSettings); return { project: strip(p) }; }
+  if ((r = m(/^\/api\/scenes\/([^/]+)\/mak-export$/)) && method === 'POST') return makExport(r[1]);
+  if (method === 'GET' && path === '/api/mak/sms') return { sms: MAK_SMS };
+  if ((r = m(/^\/api\/scenes\/([^/]+)\/mak-install$/)) && method === 'POST') return makInstall(r[1], body);
   if (path === '/api/unreal/open' && method === 'POST') {
     const level = String((body as { level?: string })?.level ?? '');
     if (!/^\/Game\/ME3D\/([A-Za-z0-9_]+)\/L_\1$/.test(level)) throw new HttpErr(400, `Not a level a Unreal test makes: ${level}`);
@@ -679,6 +767,9 @@ function labelJob(method: string, path: string, body: any, out: any) {
   else if (r?.[2]?.startsWith('pins/')) Object.assign(j, { project: r[1], kind: 'pin', label: 'Reply on a comment' });
   else if (r?.[2] === 'spec') Object.assign(j, { project: r[1], kind: 'build', label: 'Rebuilding with your changes' });
   else if (r?.[2] === 'variants') Object.assign(j, { project: out.project?.id, kind: 'variant', label: `Making the variant ${out.project?.name}` });
+  const mk = path.match(/^\/api\/scenes\/([^/]+)\/mak-(export|install)$/);
+  if (mk) Object.assign(j, { project: store.scenes[mk[1]]?.ship.project, kind: 'export',
+    label: mk[2] === 'export' ? 'Exporting for VR-Forces' : `Installing into VR-Forces SMS ${body?.sms}` });
 }
 
 export async function mockTransport(method: string, path: string, body?: unknown): Promise<unknown> {

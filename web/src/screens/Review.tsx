@@ -1,18 +1,20 @@
 // Review and export: show the version the user picks, pin customer feedback on the model,
-// export the scene's package, and build it in Unreal (checked) and open it there.
+// export the scene's package, and build it in Unreal (checked) and open it there, or export the
+// ship for MAK VR-Forces and install it into a custom SMS (§9b).
 // Recreates Review.dc.html (CONTRACT §8–10).
 import { Suspense, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import type * as THREE from 'three';
 import { useParams } from 'react-router-dom';
 import { api, errorText, fileUrl, modelUrl } from '../api';
 import { ChatPanel, ErrorNote, JobLines, Loading, TopBar } from '../components/common';
-import { remember, useJobs, useLoad, useProject, useProjects } from '../hooks';
+import { remember, useHealth, useJobs, useLoad, useProject, useProjects } from '../hooks';
+import { MakInstallDialog, MakReportView, MakSettingsForm } from '../components/MakPanel';
 import { crewOnVersion, stationWords } from '../lib/sceneCrew';
 import type { ViewName } from '../lib/frames';
 import { PANEL_KEEP, PANEL_MIN, dragHeight } from '../lib/panel';
 import { partLabel } from '../lib/parts';
 import { paths } from '../lib/routing';
-import type { Attachment, ExportResult, Pin, Scene, UnrealReport, Vec3 } from '../types';
+import type { Attachment, ExportResult, MakInstallResult, MakReport, Pin, Scene, UnrealReport, Vec3 } from '../types';
 import { AttachTo, CrewModel, PIN_COLORS, ShipViewer, ViewButtons, stationObjects } from '../viewer/Viewer';
 import { ScenePicker } from './AssemblyScenePicker';
 import { specOf } from './Assembly';
@@ -64,7 +66,10 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
   const [selPin, setSelPin] = useState<string | null>(null);
   const [target, setTarget] = useState<'unreal' | 'mak'>('unreal');
   const [exported, setExported] = useState<ExportResult | null>(null);
-  const [makNote, setMakNote] = useState(false);
+  const [makReport, setMakReport] = useState<MakReport | null>(null);
+  const [makInstalled, setMakInstalled] = useState<MakInstallResult | null>(null);
+  const [installOpen, setInstallOpen] = useState(false);
+  const { health } = useHealth();
   const [report, setReport] = useState<UnrealReport | null>(null);
   const [opening, setOpening] = useState(false);
   const [openedLevel, setOpenedLevel] = useState<string | null>(null);
@@ -144,8 +149,12 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
   const actionLabel = (pin: Pin) => ({ open: 'Send to AI', working: 'Working…', waiting: 'Keep it', resolved: 'View change' } as Record<string, string>)[pin.status] ?? 'Open';
 
   const doExport = () => {
-    setExported(null); setMakNote(false);
-    if (target === 'mak') { setMakNote(true); return; }
+    setExported(null);
+    if (target === 'mak') {
+      setMakReport(null); setMakInstalled(null);
+      void run<MakReport>('Exporting the ship for VR-Forces 5.1.1', () => api.makExport(s.id), (r) => setMakReport(r));
+      return;
+    }
     void run<ExportResult>('Exporting the package', () => api.exportScene(s.id), (r) => setExported(r));
   };
   // One click: build the level (the Unreal test, with its checks), then open it in the editor.
@@ -165,6 +174,10 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
       setOpening(false);
     }
   };
+  const installMak = (sms: string) => {
+    setInstallOpen(false); setMakInstalled(null);
+    void run<MakInstallResult>(`Installing into the VR-Forces SMS ${sms}`, () => api.makInstall(s.id, sms), (r) => setMakInstalled(r));
+  };
   const adoptVersion = async (n: number) => {
     try {
       const r = await api.updateScene(s.id, { ...specOf(s), ship: { ...s.ship, version: n } });
@@ -181,6 +194,10 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
 
   const shipId = p?.spec.id ?? s.ship.project;
   const crewIds = Array.from(new Set(s.crew.map((c) => c.project)));
+  const makLayout = `<package_dir>/mak/ · SharedData/ModelData/Vehicles/Surface/${shipId}/${shipId}.flt · sms/gui/visuals/UserData/${shipId}.ommx · sms/gui/visuals/Entity/${shipId}.leaf, .metx · sms/vrfSim/<display name>.entity · ship only, crew not exported`;
+  // Why Install is off, in one line (null: it can be pressed).
+  const installOff = health && health.mak === false ? 'VR-Forces 5.1.1 wasn’t found on this computer, so there is nothing to install into.'
+    : health === null ? 'Checking for VR-Forces…' : null;
   const layout = `<package_id>/ · manifest.json · ship/${shipId}.glb · ship/${shipId}.json · ship/articulation.json · ${crewIds.map((c) => `crew/${c}.glb`).join(', ') || 'crew/ (none placed)'} · research/research.json`;
 
   const viewer = (
@@ -302,18 +319,33 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
             display: 'flex', flexDirection: 'column', background: 'var(--panel)', fontSize: 13 }}>
             <div style={{ padding: '12px 16px', display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', flexShrink: 0 }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 360px', minWidth: 0 }}>
-                <span style={{ fontWeight: 500 }}>Export package</span>
-                <span className="mono muted" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{layout}</span>
+                <span style={{ fontWeight: 500 }}>{target === 'mak' ? 'Export for MAK VR-Forces 5.1.1' : 'Export package'}</span>
+                <span className="mono muted" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{target === 'mak' ? makLayout : layout}</span>
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
-                <button className={`btn lg ${target === 'unreal' ? 'selected' : 'muted'}`} onClick={() => { setTarget('unreal'); setMakNote(false); }}>Unreal 5.8</button>
-                <button className={`btn lg ${target === 'mak' ? 'selected' : 'muted'}`} onClick={() => { setTarget('mak'); setExported(null); }}>MAK (planned)</button>
+                <button className={`btn lg ${target === 'unreal' ? 'selected' : 'muted'}`} aria-pressed={target === 'unreal'} onClick={() => setTarget('unreal')}>Unreal 5.8</button>
+                <button className={`btn lg ${target === 'mak' ? 'selected' : 'muted'}`} aria-pressed={target === 'mak'} onClick={() => { setTarget('mak'); setExported(null); }}>MAK VR-Forces</button>
               </div>
-              <button className="btn primary lg" onClick={doExport} disabled={busy}>Export v{exportVersion}</button>
-              <button className="btn lg" onClick={buildAndOpen} disabled={busy || opening || target === 'mak'}
-                title="Builds a level with the ship and crew in Unreal 5.8, checks it, and opens it in the Unreal editor on this computer">
-                Build and Open in Unreal
-              </button>
+              {target === 'mak' ? (
+                <>
+                  <button className="btn primary lg" onClick={doExport} disabled={busy || !p?.mak}
+                    title={p?.mak ? 'Writes the OpenFlight model, definitions and simulation object, and checks them with MAK’s own reader' : 'Save the VR-Forces settings below first'}>
+                    Export v{exportVersion} for VR-Forces
+                  </button>
+                  <button className="btn lg" onClick={() => setInstallOpen(true)} disabled={busy || !!installOff}
+                    title={installOff ?? 'Copies the latest passing export into a custom SMS of your choice, after you confirm'}>
+                    Install into VR-Forces…
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button className="btn primary lg" onClick={doExport} disabled={busy}>Export v{exportVersion}</button>
+                  <button className="btn lg" onClick={buildAndOpen} disabled={busy || opening}
+                    title="Builds a level with the ship and crew in Unreal 5.8, checks it, and opens it in the Unreal editor on this computer">
+                    Build and Open in Unreal
+                  </button>
+                </>
+              )}
             </div>
             <div className="scroll" style={{ flex: 1, minHeight: 0, padding: '0 16px 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
               {shown !== null && shown !== exportVersion && (
@@ -322,7 +354,7 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
                   <button className="btn sm" onClick={() => void adoptVersion(shown)}>Use v{shown} in the scene</button>
                 </span>
               )}
-              {makNote && <span className="ok">MAK export isn’t built yet. The same folder will feed it when it is.</span>}
+              {target === 'mak' && installOff && health && <span className="faint">{installOff}</span>}
               {exported && (
                 <span className="ok" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                   Exported v{exportVersion}, with the research inside, to <span className="mono">{exported.package_dir}</span>.
@@ -331,7 +363,11 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
               )}
               <JobLines jobs={jobs} dismiss={dismiss} />
               <ErrorNote error={err ?? ship.error} />
-              {report && (
+              {target === 'mak' && makReport && <MakReportView report={makReport} installed={makInstalled} />}
+              {target === 'mak' && p && (p.kind === 'ship'
+                ? <MakSettingsForm project={p} onSaved={(np) => ship.setData(np)} />
+                : <span className="faint">Only ships export to VR-Forces.</span>)}
+              {target === 'unreal' && report && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   <span style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                     <span className={report.ok ? 'ok' : 'bad'} style={{ fontWeight: 500 }}>
@@ -396,6 +432,7 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
           </div>
         </aside>
       </div>
+      {installOpen && <MakInstallDialog name={makReport?.name ?? shipId} onCancel={() => setInstallOpen(false)} onConfirm={installMak} />}
     </>
   );
 }

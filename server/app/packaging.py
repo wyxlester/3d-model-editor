@@ -64,10 +64,13 @@ def articulation(parts: list) -> list[dict]:
             continue
         pivot = _vec3(p.get("origin_m"), f"Moving part {p.get('path')!r} has no origin_m (its pivot) "
                                           "in parts.json. The ship builder must emit it.")
+        # rotation_deg lets a reader turn the local joint axis into the ship frame (§8; the MAK export uses it)
+        rot = p.get("rotation_deg")
         out.append({"part": p["path"], "parent": p.get("parent"), "axis": j.get("axis"),
                     "min_deg": j.get("min_deg"), "max_deg": j.get("max_deg"),
                     "priority": j.get("priority"), "kind": j.get("kind", "revolute"),
-                    "pivot_m": pivot})
+                    "pivot_m": pivot,
+                    "rotation_deg": _vec3(rot, "") if isinstance(rot, (list, tuple)) and len(rot) == 3 else [0.0, 0.0, 0.0]})
     return out
 
 
@@ -147,6 +150,8 @@ def export_scene(scene: dict, store: ProjectStore, packages_dir: Path, log=print
     shutil.copyfile(ship_dir / "model.glb", pkg / "ship" / f"{ship_id}.glb")
     atomic_write_json(pkg / "ship" / f"{ship_id}.json", ship_meta(spec, ship_report, ship_project["name"]))
     atomic_write_json(pkg / "ship" / "articulation.json", art)
+    if ship_project.get("mak"):
+        atomic_write_json(pkg / "ship" / "mak.json", ship_project["mak"])     # §8, read by the MAK export (§9b)
     if crew_files:
         (pkg / "crew").mkdir()
     for cid, src in crew_files.values():

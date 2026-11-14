@@ -107,7 +107,7 @@ def test_project_json_is_written_atomically(settings, make_client):
 
 def test_health_shape(make_client):
     h = make_client().get("/api/health").json()
-    assert set(h) == {"blender", "mpfb", "ai", "unreal"} and all(isinstance(v, bool) for v in h.values())
+    assert set(h) == {"blender", "mpfb", "ai", "unreal", "mak"} and all(isinstance(v, bool) for v in h.values())
 
 
 def test_the_real_catalog_offers_a_default_male_and_a_default_female():
