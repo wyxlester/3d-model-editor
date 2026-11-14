@@ -7,6 +7,9 @@ Origin: copied from the `vrf-pipeline` project, branch `feat/model-kinds`, commi
 (2026-11-14). That project's MAK manuals and hand-import fixtures are not copied here: they are MAK material and
 this repository is public. `references/` cites manual sections instead.
 
+**Technical document** (architecture, dependencies, usage, features, assumptions, limitations, open work):
+[`TECHNICAL.md`](TECHNICAL.md).
+
 Model kinds (ships, vehicles, aircraft, buildings, munitions, humans, animals): `pipeline/profiles.py` and
 `references/kinds.md`. Only the ship has been checked against a hand import in the Simulation Object Editor.
 
