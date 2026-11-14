@@ -92,4 +92,4 @@ $gun-art-part-type) (attach-point ...)))`). When the systems are cloned from a d
 turret 1-10: 4096 + 32(n-1) · gun 1-10: 4416 + 32(n-1) · launcher: 4736+ · radar: 5376+ · secondary turret
 5696+ / gun 6016+ · landing gear 3072 · hatch 3232 · periscope 2048 · main/tail rotor 1184/1216 ·
 wheels left n = 9120 + 64(n-1), right n = 9152 + 64(n-1) · towed array decoy 16064 (MAK).
-Seen in the install but not in Table 58: car door 7840, boom extension 8192.
+Seen in the install but not in Table 58: car door 7840, and 8192 (a refuelling boom on tankers such as the A400M Tanker; named gun actuator or launcher on 78 stock ships). The full list is in `docs/stock-part-codes.md` in vrf-pipeline.

@@ -92,7 +92,7 @@ for c, n, d, m in [
     (32736, "wind_blades", "Rotates with wind speed", "visual"),
     # Not in Table 58 but used by stock .entity files in the 5.1.1 install:
     (7840, "car_door", "Car door (install)", "elevation"),
-    (8192, "boom_extension", "Refuelling boom extension (install)", "extension"),
+    (8192, "boom_extension", "Boom extension on tankers; gun actuator or launcher on ships (install)", "extension"),
 ]:
     _add(c, n, d, m)
 
