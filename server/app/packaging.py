@@ -151,7 +151,9 @@ def export_scene(scene: dict, store: ProjectStore, packages_dir: Path, log=print
     atomic_write_json(pkg / "ship" / f"{ship_id}.json", ship_meta(spec, ship_report, ship_project["name"]))
     atomic_write_json(pkg / "ship" / "articulation.json", art)
     if ship_project.get("mak"):
-        atomic_write_json(pkg / "ship" / "mak.json", ship_project["mak"])     # §8, read by the MAK export (§9b)
+        # §8, read by the MAK export (§9b). `name` is the project's name: the ship metadata's name is the
+        # spec's, which keeps the catalog template's name when a project is renamed.
+        atomic_write_json(pkg / "ship" / "mak.json", {**ship_project["mak"], "name": ship_project["name"]})
     if crew_files:
         (pkg / "crew").mkdir()
     for cid, src in crew_files.values():

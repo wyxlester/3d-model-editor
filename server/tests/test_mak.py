@@ -130,7 +130,8 @@ def test_export_job_writes_settings_into_package(make_client, vrf, settings):
     res = job["result"]
     assert res["ok"] is True and res["checks"][0]["name"] == "verify_model:mak-loaded"
     pkg = Path(res["package_dir"])
-    assert json.loads((pkg / "ship" / "mak.json").read_text()) == GOOD
+    # the settings plus the ship project's name, which names the VR-Forces entity
+    assert json.loads((pkg / "ship" / "mak.json").read_text()) == {**GOOD, "name": ship["name"]}
     art = json.loads((pkg / "ship" / "articulation.json").read_text())
     assert art[0]["rotation_deg"] == [0, 0, 0]
     assert Path(res["output_dir"]) == pkg / "mak"

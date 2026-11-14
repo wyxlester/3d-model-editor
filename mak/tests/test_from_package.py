@@ -83,6 +83,16 @@ class TestPrepare(Base):
         with self.assertRaisesRegex(from_package.PackageError, "DI-Guy"):
             self.convert(mak=dict(MAK, kind="human"))
 
+    def test_entity_is_named_after_the_ship_project(self):
+        """Harmony of the Seas exported as "Container ship (200 m feeder, gearless).entity": the ship metadata's
+        name is the spec's, which keeps the catalog template's name when the project is renamed."""
+        m = self.convert(name="Container ship (200 m feeder, gearless)",
+                         mak=dict(MAK, name="Harmony of the Seas")).manifest
+        self.assertEqual(m["display_name"], "Harmony of the Seas")
+        self.assertEqual(self.convert(name="Old package").manifest["display_name"], "Old package")   # no name: as before
+        m = self.convert(mak=dict(MAK, name=' MV "Ann": 1/2. ')).manifest
+        self.assertEqual(m["display_name"], "MV Ann 1 2")              # safe as a file name
+
     def test_crew_listed_as_not_exported(self):
         crew = [{"id": "crew_a", "glb": "crew/crew_a.glb", "station": "station__helm", "animation": "idle",
                  "location_m": [0, 0, 0], "rotation_deg": [0, 0, 0]}]

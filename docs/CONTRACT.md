@@ -334,7 +334,8 @@ This is what goes to Unreal now and MAK later. One folder:
   ship/<ship_id>.json         strait.ship_model/1 metadata (StraitsSim-compatible)
   ship/articulation.json      [{"part","parent","axis","min_deg","max_deg","priority","kind","pivot_m":[x,y,z],
                                 "rotation_deg":[x,y,z]}]
-  ship/mak.json               the ship project's MAK settings (§10, `Project.mak`), or absent if none
+  ship/mak.json               the ship project's MAK settings (§10, `Project.mak`) plus "name", the ship
+                              project's name (the VR-Forces entity is named after it); absent if none
   crew/<crew_id>.glb          one per distinct crew member
   research/research.json      the research for the ship, or absent if none
 ```
@@ -416,6 +417,11 @@ write them from a manifest (`kind: human | animal`), but the editor's crew are s
   visual-import/                                            the three definition files, for SOE Import Visual Models
 <package_dir>/mak_export_report.json
 ```
+
+`<name>` is the ship id. `<display name>` is the ship **project's** name (`ship/mak.json` `name`, §8), with
+characters that cannot be in a file name removed; it is also the entity's label in VR-Forces. It is not the
+`name` in `ship/<ship_id>.json`: that is the spec's, which keeps the catalog template's name when a project is
+renamed. A package without `mak.json` `name` (made before this rule) falls back to the metadata's name.
 
 ```json
 {"ok": bool, "vrforces": "5.1.1", "name": str, "dis_type": str,

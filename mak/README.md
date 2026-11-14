@@ -20,7 +20,7 @@ Model kinds (ships, vehicles, aircraft, buildings, munitions, humans, animals): 
 | `sms/gui/visuals/UserData/<name>.ommx` | model definition (schema `Watercraft`, `filename` only) |
 | `sms/gui/visuals/Entity/<name>.leaf` | element definition: the donor's, renamed, 3D and XR models pointed at ours |
 | `sms/gui/visuals/Entity/<name>.metx` | DIS type -> element definition |
-| `sms/vrfSim/<display name>.entity` | simulation object, cloned from the donor entity (systems, signatures), with our type, parts, size and labels |
+| `sms/vrfSim/<display name>.entity` | simulation object, cloned from the donor entity (systems, signatures), with our type, parts, size and labels. `<display name>` is the ship project's name (`ship/mak.json` `name`), not the template name in the ship metadata |
 | `visual-import/` | the three definition files together, for Simulation Object Editor > File > Import Visual Models |
 
 This layout is what the Simulation Object Editor itself wrote in a hand import of the same ship (2026-11-14):

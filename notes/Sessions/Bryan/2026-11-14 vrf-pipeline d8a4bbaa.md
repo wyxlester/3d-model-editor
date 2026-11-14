@@ -90,6 +90,11 @@ Five artefacts, all now generated (layout matches what the Simulation Object Edi
   - Editor: `mak.json` takes an optional `kind`; the installer merges a munition's ammunition entry into the
     custom SMS's table (with a backup). Crew are still listed as not exported.
 
+- **Entity named after the project.** Harmony exported as "Container ship (200 m feeder, gearless).entity":
+  the export took its name from the ship metadata, whose `name` is the spec's and keeps the catalog
+  template's name when a project is renamed. `ship/mak.json` now carries the project's `name`, the export
+  uses it (made safe as a file name), and the ship metadata is unchanged, so Unreal is unaffected.
+
 ## Decisions
 - OpenFlight is the default model format; FBX via Blender stays as an option.
 - Integration (approved plan): the pipeline moves into this repo as `mak/`, alongside `unreal/`; MAK settings

@@ -77,6 +77,16 @@ def motion_of(joint: dict) -> tuple[str, str | None]:
     return ("rotation" if i == 0 else "elevation"), note
 
 
+def _display_name(*candidates) -> str:
+    """The first usable name, made safe as a file name: VR-Forces names the .entity file after it."""
+    for c in candidates:
+        if isinstance(c, str):
+            clean = re.sub(r"\s+", " ", re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", c)).strip(" .")
+            if clean:
+                return clean
+    return "ship"
+
+
 def _model_name(ship_id: str) -> str:
     name = re.sub(r"[^A-Za-z0-9_]", "_", ship_id) or "ship"
     return name if name[0].isalpha() else f"s_{name}"
@@ -139,7 +149,9 @@ def prepare(package_dir: Path, work_dir: Path) -> Prepared:
         raise PackageError(f"MAK settings: kind '{kind}' is a DI-Guy character, not a model; it cannot be the ship")
     out = {
         "name": name,
-        "display_name": meta.get("name") or manifest.get("name") or name,
+        # The ship project's name (mak.json `name`, §8). The metadata's name is the spec's, which keeps the
+        # catalog template's name ("Container ship (200 m feeder, gearless)") when a project is renamed.
+        "display_name": _display_name(mak.get("name"), meta.get("name"), manifest.get("name"), name),
         "kind": kind,
         "domain": profile.domain,
         "forward_axis_in_blender": FORWARD_AXIS,
