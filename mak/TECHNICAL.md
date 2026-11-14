@@ -433,7 +433,14 @@ After the fixes, the bounding volume and both radars (attach points, axes, limit
 - Install into a real custom SMS has been exercised only on a fake install tree in tests.
 - Rotors, propellers and wheels are static: no `@dis animation` sequences (ACM 14.3, 21.6).
 - No damage-state geometry (`@dis switch damage`, ACM 21.5) and no LODs.
-- Sensors stay at the donor's positions (usually the origin).
+- **Sensors stay at the donor's positions** (usually the origin). A sensor system in the `.entity` (`sensor` =
+  visual, `sensor-2` = passive radar) is the simulated detection, and its `sensor-position` is where line-of-sight
+  checks start (UG ch. 51). It is separate from the articulated radar, which is only the visual model turning on
+  the mast. Harmony's sensors therefore look from the waterline amidships, about 56 m below its radar: terrain or
+  a coastline in between can block detection that the mast would see over, and the geometric horizon is near zero
+  instead of about 30 km. With the donor's short ranges (4 km visual, 10 km passive radar) the open-water effect
+  is probably small. Stock ships mostly do the same (275 of 352 sensor systems at down = 0). Not checked in
+  VR-Forces. Details and the fix option: `references/open-questions.md` Q16.
 - Detonation power and weapon ammunition lists for a new munition are set by hand (UG 73, 74.2.2).
 - Humans and animals use a stock DI-Guy character; a custom mesh would need DI-Guy authoring tools (ACM 25.2).
 - Editor: exports ships only; crew are listed in `not_exported`. The Review panel has no kind field, and its
@@ -451,7 +458,9 @@ Planned, not done:
 2. Editor crew as DI-Guy characters: character picker in Review > MAK, contract change for crew settings.
 3. Kind field and per-kind donor/part suggestions in the Review panel.
 4. Animation sequences for rotors, propellers and wheels; damage switch nodes.
-5. Sensor position from the model (`socket_bridge_eye` / `station__helm`).
+5. Sensor position from the model (option, not applied): radar sensor at a radar part's pivot (codes 5376 and up),
+   visual sensor at `socket_bridge_eye` or `station__helm` when present, else the donor's; a report finding says
+   where each sensor went (Q16).
 6. Install test against a real custom SMS.
 7. Review and merge `feat/mak-export` and `feat/mak-kinds`.
 

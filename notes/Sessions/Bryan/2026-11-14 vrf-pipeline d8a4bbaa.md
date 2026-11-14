@@ -108,6 +108,16 @@ Five artefacts, all now generated (layout matches what the Simulation Object Edi
 - **Team updates** posted to the team Slack channel twice: after the editor integration, and after the work
   above. Both lead with "not tested & verified in VR-Forces" and list the open questions for DTS.
 
+- **Sensor position explained** (no code change). The articulated radar is the visual model only; the
+  simulated sensors (`sensor` visual, `sensor-2` passive radar) are separate `.entity` systems whose
+  `sensor-position` is where line-of-sight checks start (UG ch. 51). Cloned from the donor, Harmony's sit at the
+  origin (waterline amidships), about 56 m below the radar. Impact (not checked in VR-Forces): terrain or a
+  coastline can block detection the mast would see over; horizon near zero instead of about 30 km; small over open
+  water with the donor's 4 km / 10 km ranges; 275 of 352 stock ship sensor systems also sit at down = 0. Recorded
+  as Q16 in `mak/references/open-questions.md`, with the option of placing the sensors from the model.
+- **Open-question IDs relabelled** (`Q0`, `Q3b`, `Q16` ...): the file used Markdown list numbers, which a renderer
+  renumbers, so "16" showed as 13.
+
 - **Commits** (2026-11-14): `feat/mak-export` ends at `7158725` (waterline supports); `feat/mak-kinds` ends at
   `7a098b4` (model kinds `185d3b9`, README `1484eac`, entity name `e81e766`, technical document `7a098b4`).
   Both pushed to origin; nothing merged, no pull request.
@@ -134,7 +144,9 @@ Five artefacts, all now generated (layout matches what the Simulation Object Edi
 - [ ] **DTS:** can a custom human or animal mesh be used without DI-Guy authoring tools?
 - [ ] **Claude:** export the editor's crew as DI-Guy characters (character picker in Review > MAK); rotors,
   propellers and wheels as animation sequences; destroyed-state geometry.
-- [ ] **Claude:** sensor position (donor sensors sit at the waterline origin; `socket_bridge_eye` could set it).
+- [ ] **Claude (option, not applied):** place the sensors from the model: radar sensor at a radar part's pivot,
+  visual sensor at `socket_bridge_eye` or `station__helm`, else the donor's (Q16). Decide with DTS whether it is
+  worth it, then check in VR-Forces with the line-of-sight display.
 - [ ] **DTS:** munitions: is a cloned stock detonation entry acceptable, and who adds new munitions to launchers?
 - [ ] **DTS:** aircraft: supports at the landing gear? How is the centre of gravity judged?
 - [ ] **Bryan:** re-export Harmony so its `.entity` carries the project name.
