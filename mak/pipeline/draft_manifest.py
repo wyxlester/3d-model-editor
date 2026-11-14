@@ -17,6 +17,7 @@ The rest go to "unmapped_joints", which the pipeline reports but treats as stati
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 import math
 import re
@@ -24,25 +25,69 @@ import sys
 from pathlib import Path
 
 from . import artparts, inspect_glb, profiles
-from .common import load_config
+from .common import load_config, safe_name
 
 # platform .ope and ModelData category per legacy domain, from the kind profiles (profiles.py)
 DOMAIN_DEFAULTS = {d: (profiles.PROFILES[k].platform_ope, profiles.PROFILES[k].category)
                    for d, k in profiles.KIND_FOR_DOMAIN.items()}
 
-# node-name keyword -> (first code, step between instances). Only unambiguous names.
+
+@dataclass(frozen=True)
+class CodeRule:
+    """Node words -> a Table 58 part (manual 21.7). `count` is how many numbered instances the table has
+    (`base`, `base + 32`, ...). `motions` / `domains` limit the rule to joints that move that way / to those
+    domains. Only names that make the part obvious."""
+    pattern: str
+    base: int
+    count: int = 1
+    motions: frozenset | None = None
+    domains: frozenset | None = None
+
+    def matches(self, words: str, motion: str | None, domain: str | None) -> bool:
+        return (re.search(self.pattern, words) is not None
+                and (self.motions is None or motion is None or motion in self.motions)
+                and (self.domains is None or domain is None or domain in self.domains))
+
+    @property
+    def codes(self) -> list[int]:
+        return [self.base + 32 * i for i in range(self.count)]
+
+
+AZ, EL = frozenset({"azimuth"}), frozenset({"elevation", "rotation"})
+# Weapon mounts that train in azimuth are turrets, with the gun or launcher that elevates under them: the stock
+# carriers do this (Nimitz-class_Carrier.entity: turrets 4096/4192 with guns 4416/4448, launchers 4736/4768).
+WEAPON = r"\b(weapons?|ciws|phalanx|goalkeeper|ram|sea ?sparrow|essm|vls|mounts?|missiles?|torpedo(es)?)\b"
+MISSILE = r"\b(ram|sea ?sparrow|essm|vls|missiles?|torpedo(es)?)\b"
 NAME_CODES = [
-    (re.compile(r"(?i)radar"), 5376, 32),
-    (re.compile(r"(?i)turret"), 4096, 32),
-    (re.compile(r"(?i)(gun|cannon|barrel)"), 4416, 32),
-    (re.compile(r"(?i)launcher"), 4736, 32),
-    (re.compile(r"(?i)periscope"), 2048, 0),
-    (re.compile(r"(?i)snorkel"), 2112, 0),
-    (re.compile(r"(?i)antenna"), 2080, 0),
-    (re.compile(r"(?i)hatch"), 3232, 0),
-    (re.compile(r"(?i)landing_?gear"), 3072, 0),
-    (re.compile(r"(?i)main_?rotor"), 1184, 0),
-    (re.compile(r"(?i)tail_?rotor"), 1216, 0),
+    CodeRule(r"\bradars?\b", 5376, 10),
+    CodeRule(r"\brudders?\b", 1025),
+    CodeRule(r"\b(deck )?elevators?\b", 7296, 2, domains=frozenset({"surface"})),        # carrier deck lifts
+    CodeRule(r"\belevators?\b", 1248, domains=frozenset({"air"})),       # aircraft: other control surfaces
+    CodeRule(r"\bcatapults?\b", 7360, 2),
+    CodeRule(r"\b(blast )?deflectors?\b", 7424, 2),
+    CodeRule(r"\barrest(o|e)r( wires?)?\b", 7488, 3),
+    CodeRule(r"\bturrets?\b", 4096, 10),
+    CodeRule(r"\b(guns?|cannons?|barrels?)\b", 4416, 10),
+    CodeRule(r"\blaunchers?\b", 4736, 10),
+    CodeRule(r"\bperiscopes?\b", 2048),
+    CodeRule(r"\bsnorkels?\b", 2112),
+    CodeRule(r"\bantennas?\b", 2080),
+    CodeRule(r"\bhatch(es)?\b", 3232),
+    CodeRule(r"\blanding ?gears?\b", 3072),
+    CodeRule(r"\bmain ?rotors?\b", 1184),
+    CodeRule(r"\btail ?rotors?\b", 1216),
+    CodeRule(r"\btail ?hooks?\b", 3104),
+    CodeRule(r"\bspeed ?brakes?\b", 3136),
+    CodeRule(r"\bwing ?sweep\b", 3264),
+    CodeRule(r"\b(wing|rotor) ?folds?\b", 7584),
+    CodeRule(r"\b(left|port)\b.*\bflaps?\b|\bflaps?\b.*\b(left|port)\b", 1056),
+    CodeRule(r"\b(right|stbd|starboard)\b.*\bflaps?\b|\bflaps?\b.*\b(right|stbd|starboard)\b", 1088),
+    CodeRule(r"\b(left|port)\b.*\bailerons?\b|\bailerons?\b.*\b(left|port)\b", 1120),
+    CodeRule(r"\b(right|stbd|starboard)\b.*\bailerons?\b|\bailerons?\b.*\b(right|stbd|starboard)\b", 1152),
+    CodeRule(r"\bbooms?\b", 3488),
+    CodeRule(WEAPON, 4096, 10, motions=AZ),
+    CodeRule(MISSILE, 4736, 10, motions=EL),
+    CodeRule(WEAPON, 4416, 10, motions=EL),
 ]
 
 TODO = "TODO: "
@@ -126,20 +171,38 @@ def joint_motion(joint: dict, forward: str) -> str:
     return "rotation" if axis == fwd else "elevation"
 
 
-def suggest_code(node: str, used: set[int], counters: dict) -> int | None:
+def _words(text: str) -> str:
+    """'Weapons__SeaSparrow_1' -> 'weapons sea sparrow 1': split on separators and camel case."""
+    return " ".join(re.sub(r"(?<=[a-z])(?=[A-Z])", " ", re.sub(r"[^A-Za-z0-9]+", " ", text)).lower().split())
+
+
+def code_rule(node: str, motion: str | None = None, domain: str | None = None) -> CodeRule | None:
+    """The Table 58 rule for a node: its own name (after the last '__') first, then its whole path."""
     leaf = node.split("__")[-1] if "__" in node else node
-    for rx, base, step in NAME_CODES:
-        if rx.search(leaf) or rx.search(node):
-            if step == 0:
-                return None if base in used else base
-            n = counters.get(base, 0)
-            while base + step * n in used and n < 10:
-                n += 1
-            if n >= 10:
-                return None
-            counters[base] = n + 1
-            return base + step * n
+    for text in (_words(leaf), _words(node)):
+        for rule in NAME_CODES:
+            if rule.matches(text, motion, domain):
+                return rule
     return None
+
+
+def suggest_code(node: str, used: set[int], counters: dict | None = None, motion: str | None = None,
+                 domain: str | None = None) -> int | None:
+    """The first free Table 58 code for this node, or None (no counterpart, or all its codes are taken).
+    `counters` is unused (kept for callers)."""
+    rule = code_rule(node, motion, domain)
+    return next((c for c in rule.codes if c not in used), None) if rule else None
+
+
+def no_code_reason(node: str, motion: str, domain: str | None) -> str:
+    rule = code_rule(node, motion, domain)
+    if rule:
+        what = re.sub(r" \d+$", "", artparts.CODES.get(rule.base, ("", f"part {rule.base}"))[1]).lower()
+        return (f"Table 58 has {rule.count} {what} code{'s' if rule.count > 1 else ''} "
+                f"({', '.join(map(str, rule.codes))}), taken by this model's other {what} parts: static")
+    if motion == "visual":
+        return "continuous spin (propeller/wheel): visual-only, and needs an FBX_NodeNameMap code to animate"
+    return "no obvious DIS part code: add it to articulated_parts with a dis_part (manual Table 58) to articulate it"
 
 
 ARMED_PENALTY = 2.0   # a donor's systems are copied into the new entity (users guide 65.3.1)
@@ -228,7 +291,11 @@ def draft(model_dir: Path, cfg: dict | None = None, node_map: artparts.NodeNameM
     notes.append(f"forward_axis_in_blender = {forward} (from {why_fwd})")
     notes.append(f"kind = {kind}, domain = {domain} (from {why_dom})")
 
-    display = (spec or {}).get("name") or glb_path.stem
+    # The model is named after its folder (models/<name>): spec.json's name can be the template's ("Custom ship").
+    display = safe_name(model_dir.resolve().name) or safe_name((spec or {}).get("name") or "") \
+        or safe_name(glb_path.stem) or "Model"
+    if (spec or {}).get("name") and (spec or {})["name"] != display:
+        notes.append(f"name = '{display}' (from the model folder; spec.json says '{spec['name']}')")
 
     # spec.meta can be stale template data: say so when it contradicts the geometry
     meta = (spec or {}).get("meta") or {}
@@ -247,11 +314,9 @@ def draft(model_dir: Path, cfg: dict | None = None, node_map: artparts.NodeNameM
         motion = joint_motion(j, forward)
         entry = {"node": p["path"], "motion": motion,
                  "min": j.get("min_deg"), "max": j.get("max_deg"), "priority": j.get("priority")}
-        code = node_map.parts.get(p["path"]) or suggest_code(p["path"], used, counters)
+        code = node_map.parts.get(p["path"]) or suggest_code(p["path"], used, counters, motion, domain)
         if code is None:
-            entry["reason"] = "no obvious DIS part code: add it to articulated_parts with a dis_part (manual Table 58) to articulate it"
-            if motion == "visual":
-                entry["reason"] = "continuous spin (propeller/wheel): visual-only, and needs an FBX_NodeNameMap code to animate"
+            entry["reason"] = no_code_reason(p["path"], motion, domain)
             unmapped.append(entry)
             continue
         used.add(code)
@@ -286,7 +351,7 @@ def draft(model_dir: Path, cfg: dict | None = None, node_map: artparts.NodeNameM
     manifest = {
         "_draft": "Drafted by pipeline.draft_manifest from the Blender exports. Fill every TODO, check the rest, "
                   "then run: python -m pipeline.run " + model_dir.as_posix(),
-        "name": identifier(display),
+        "name": display,
         "display_name": display,
         "kind": kind,
         **({"munition_class": munition_class} if munition_class else {}),

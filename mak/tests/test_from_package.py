@@ -103,6 +103,14 @@ class TestPrepare(Base):
         m = self.convert(mak=dict(MAK, short_name="TB")).manifest
         self.assertEqual(m["short_name"], "TB")
 
+    def test_model_is_named_after_the_ship_project(self):
+        """USS Abraham Lincoln's ship id is the custom builder's ("custom_vessel"); the files take the project's name."""
+        p = self.convert(ship_id="custom_vessel", mak=dict(MAK, name="USS Abraham Lincoln"))
+        self.assertEqual((p.manifest["name"], p.manifest["display_name"]), ("USS Abraham Lincoln", "USS Abraham Lincoln"))
+        self.assertEqual(p.model_dir.name, "USS Abraham Lincoln")
+        self.assertEqual(load_manifest(p.model_dir)["name"], "USS Abraham Lincoln")      # passes the name rule
+        self.assertEqual(self.convert(mak=dict(MAK, name="MV Ann: 1/2")).manifest["name"], "MV Ann 1 2")
+
     def test_ship_id_starting_with_digit(self):
         m = self.convert(ship_id="3_series", name="3-Series").manifest
         self.assertEqual(m["name"], "s_3_series")

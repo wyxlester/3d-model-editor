@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from make_fixture import make_glb  # noqa: E402
 from pipeline import artparts, draft_manifest, inspect_glb, run  # noqa: E402
-from pipeline.common import InputError, check_model_dir, load_config, load_manifest  # noqa: E402
+from pipeline.common import InputError, check_model_dir, load_config, load_manifest, safe_name  # noqa: E402
 
 CFG = load_config()
 HARMONY = ROOT / "models" / "HarmonyOfTheSeas"
@@ -63,8 +63,8 @@ class DraftBase(unittest.TestCase):
 class TestDraft(DraftBase):
     def test_parts_from_joints(self):
         m, notes = self.draft()
-        self.assertEqual(m["name"], "TestBoxVehicle")
-        self.assertEqual(m["display_name"], "Test Box Vehicle")
+        self.assertEqual(m["name"], "TestBox")                 # the model folder's name, not spec.json's
+        self.assertEqual(m["display_name"], "TestBox")
         self.assertEqual(m["domain"], "land")
         self.assertEqual(m["forward_axis_in_blender"], "+Y")
         self.assertEqual(m["articulated_parts"], [
@@ -76,6 +76,20 @@ class TestDraft(DraftBase):
         self.assertIn("socket_bow", m["export_info"]["sockets_blender"])
         self.assertNotIn("source_glb", m["export_info"])          # the manifest does not name the glb file
         self.assertFalse(any("meta ignored" in n for n in notes))  # this spec has no loa_m to contradict
+
+    def test_named_after_the_model_folder(self):
+        """USS Abraham Lincoln drafted as "CustomShip": spec.json's name was the custom builder's ("Custom ship")."""
+        lincoln = self.tmp / "models" / "USS Abraham Lincoln"
+        self.dir.rename(lincoln)
+        self.dir, self.glb = lincoln, lincoln / self.glb.name
+        m, notes = self.draft(spec={"schema": "me3d.vehicle_spec/1", "name": "Custom ship"})
+        self.assertEqual((m["name"], m["display_name"]), ("USS Abraham Lincoln", "USS Abraham Lincoln"))
+        self.assertIn("name = 'USS Abraham Lincoln' (from the model folder; spec.json says 'Custom ship')", notes)
+
+    def test_safe_name(self):
+        self.assertEqual(safe_name(' MV "Ann": 1/2. '), "MV Ann 1 2")
+        self.assertEqual(safe_name("Ålesund (B) "), "Alesund (B)")
+        self.assertEqual(safe_name("..."), "")
 
     def test_custom_ops_never_executed(self):
         # op_1 is `raise SystemExit`; drafting must not run it
@@ -154,6 +168,16 @@ class TestInputErrors(DraftBase):
         with self.assertRaisesRegex(InputError, "still has TODO values: dis_type"):
             load_manifest(self.dir)
 
+    def test_name_may_have_spaces_but_not_file_name_characters(self):
+        m, _ = self.draft()
+        m.update(dis_type="1:1:225:99:99:99:99", donor_entity="2S1 Gvozdika", name="USS Abraham Lincoln")
+        (self.dir / "manifest.json").write_text(json.dumps(m))
+        self.assertEqual(load_manifest(self.dir)["name"], "USS Abraham Lincoln")
+        for bad in ("A/B", "Ship.", " Ship", "Ship <1>"):
+            (self.dir / "manifest.json").write_text(json.dumps(dict(m, name=bad)))
+            with self.assertRaisesRegex(InputError, "name must be letters, digits, spaces"):
+                load_manifest(self.dir)
+
     def test_part_without_code_rejected(self):
         m, _ = self.draft()
         m["dis_type"] = "1:1:225:99:99:99:99"
@@ -162,6 +186,43 @@ class TestInputErrors(DraftBase):
         (self.dir / "manifest.json").write_text(json.dumps(m))
         with self.assertRaisesRegex(InputError, "needs 'node' and a 'dis_part'"):
             load_manifest(self.dir)
+
+
+class TestPartCodes(unittest.TestCase):
+    """Every joint with a Table 58 counterpart gets a code (USS Abraham Lincoln: 2 of 16 were mapped)."""
+
+    def code(self, node, motion="azimuth", domain="surface", used=()):
+        return draft_manifest.suggest_code(node, set(used), {}, motion, domain)
+
+    def test_carrier_parts(self):
+        self.assertEqual(self.code("Elevator__1", "translate_z"), 7296)
+        self.assertEqual(self.code("Elevator__2", "translate_z", used={7296}), 7328)
+        self.assertIsNone(self.code("Elevator__3", "translate_z", used={7296, 7328}))      # Table 58 has two
+        self.assertEqual(self.code("Hull__Rudder_1"), 1025)
+        self.assertEqual(self.code("Deck__Catapult_1", "visual"), 7360)
+        self.assertEqual(self.code("Deck__BlastDeflector_2", "elevation", used={7424}), 7456)
+
+    def test_weapon_mounts_follow_the_stock_carriers(self):
+        # azimuth mount = turret, elevating part = gun, or launcher for missiles (Nimitz-class_Carrier.entity)
+        self.assertEqual(self.code("Weapons__Phalanx_1"), 4096)
+        self.assertEqual(self.code("Weapons__SeaSparrow_2", used={4096}), 4128)
+        self.assertEqual(self.code("Weapons__RAM_1__Box", "elevation"), 4736)
+        self.assertEqual(self.code("Weapons__Phalanx_1__Mount", "elevation"), 4416)
+        self.assertEqual(self.code("Turret__Gun", "elevation"), 4416)          # its own name before its group's
+
+    def test_names_need_the_word_and_the_domain(self):
+        self.assertIsNone(self.code("Hull__Gunwale"))                          # not a gun
+        self.assertIsNone(self.code("Hull__Frame_2"))                          # not RAM
+        self.assertIsNone(self.code("Propulsion__AzipodPort"))
+        self.assertEqual(self.code("Tail__Elevator", "elevation", "air"), 1248)   # an aircraft's is a control surface
+        self.assertIsNone(self.code("Weapons__Phalanx_1", "visual"))            # a spinning part is not a mount
+        self.assertEqual(self.code("Wing__Port_Flap", "elevation", "air"), 1056)
+        self.assertEqual(self.code("Wing__FlapRight", "elevation", "air"), 1088)
+
+    def test_reason_when_all_codes_are_taken(self):
+        self.assertIn("Table 58 has 1 rudder code (1025), taken by this model's other rudder parts",
+                      draft_manifest.no_code_reason("Hull__Rudder_2", "azimuth", "surface"))
+        self.assertIn("no obvious DIS part code", draft_manifest.no_code_reason("Hull__Davit", "rotation", "surface"))
 
 
 @unittest.skipUnless((HARMONY / "parts.json").exists() and list(HARMONY.glob("*.glb")), "Harmony exports not present")
@@ -203,3 +264,29 @@ class TestHarmonyExports(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+LINCOLN = ROOT / "models" / "USS Abraham Lincoln"
+
+
+@unittest.skipUnless((LINCOLN / "parts.json").exists() and list(LINCOLN.glob("*.glb")), "Lincoln exports not present")
+class TestLincolnExports(unittest.TestCase):
+    """The carrier's Blender exports (read-only): spec.json names it "Custom ship"; 16 joints."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m, cls.notes = draft_manifest.draft(LINCOLN, CFG, artparts.NodeNameMap())
+
+    def test_named_after_the_folder(self):
+        self.assertEqual((self.m["name"], self.m["display_name"]), ("USS Abraham Lincoln", "USS Abraham Lincoln"))
+
+    def test_every_joint_with_a_table_58_part_is_mapped(self):
+        self.assertEqual({p["node"]: p["dis_part"] for p in self.m["articulated_parts"]}, {
+            "Elevator__1": 7296, "Elevator__2": 7328, "Hull__Rudder_1": 1025,
+            "Radar__Scanner": 5376, "Radar__Search_2": 5408,
+            "Weapons__Phalanx_1": 4096, "Weapons__Phalanx_2": 4128, "Weapons__RAM_1": 4160,
+            "Weapons__RAM_2": 4192, "Weapons__SeaSparrow_1": 4224, "Weapons__SeaSparrow_2": 4256})
+        # Table 58 has two deck elevator codes and one rudder code: the rest stay static, with the reason
+        self.assertEqual(sorted(j["node"] for j in self.m["unmapped_joints"]),
+                         ["Elevator__3", "Elevator__4", "Hull__Rudder_2", "Hull__Rudder_3", "Hull__Rudder_4"])
+        self.assertTrue(all("Table 58 has" in j["reason"] for j in self.m["unmapped_joints"]))

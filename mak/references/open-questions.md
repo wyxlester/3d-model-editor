@@ -51,6 +51,11 @@ Resolve each against the install, or with a real import in the GUI, then update 
   sensor was placed. Then check in VR-Forces with the line-of-sight display (UG ch. 51).
 - **Q17 DtRwVisualMetaData.** On save, the SOE adds a `visual-meta-data` block (here `Watercraft.meta`, marking
   variance). We don't. Needed?
+- **Q18 More parts than Table 58 codes.** Table 58 has one rudder code (1025) and two deck elevator codes
+  (7296, 7328). USS Abraham Lincoln has 4 rudders and 4 deck elevators, so the draft maps rudder 1 and elevators
+  1-2 and leaves the rest static (`unmapped_joints` says why). Open: can several DOF nodes carry the same
+  `@dis articulated_part` code, so one `.entity` part turns all four rudders together? Check in VR-Forces by
+  giving rudders 2-4 code 1025 in the model only (one `.entity` descriptor) and moving the rudder.
 
 ## Resolved
 - **Q2 8-field vs 7-field type.** `.entity` objectType = VR-Forces object super-type + 7-field DIS type (UG D.3.1).

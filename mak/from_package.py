@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pipeline import inspect_glb, profiles
+from pipeline.common import safe_name
 
 DEFAULT_KIND = "surface_ship"            # what the editor builds today
 FORWARD_AXIS = "+X"                      # contract §1: +X is the bow, for every model the editor exports
@@ -114,7 +115,9 @@ def prepare(package_dir: Path, work_dir: Path) -> Prepared:
     if unknown:
         raise PackageError(f"MAK settings name parts that are not moving parts of this version: {', '.join(unknown)}")
 
-    name = _model_name(ship.get("id") or manifest.get("id") or "ship")
+    # Model files are named after the ship project (mak.json `name`, §8), like the .entity: the ship id is the
+    # spec's, which can be the template's ("custom_vessel" for USS Abraham Lincoln). Older packages: the id.
+    name = safe_name(mak.get("name") if isinstance(mak.get("name"), str) else "")         or _model_name(ship.get("id") or manifest.get("id") or "ship")
     model_dir = work_dir / name
     if model_dir.exists():
         shutil.rmtree(model_dir)

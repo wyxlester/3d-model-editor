@@ -193,7 +193,11 @@ The `.ommx`, `.leaf` and `.metx` are Boost-serialisation XML; the `.entity` is p
 copied from real files in the install, never invented (`references/file-formats.md`).
 
 ### 4.2 Names
-- `<name>`: the model name, an identifier. CLI: manifest `name`. Editor: the ship id.
+- `<name>`: the model name. It names the model file, its folder and the `.ommx`/`.leaf`/`.metx`, so it must be
+  safe as a file name and as XML text: letters, digits, spaces and `_ - . ( ) +`, starting with a letter or digit,
+  not ending in a space or dot (`common.NAME_RE`). Spaces are normal in the install (1143 of 1213 stock element
+  definitions have them). CLI: the model folder's name (`draft_manifest`; `spec.json`'s name can be the
+  template's, e.g. "Custom ship"). Editor: the ship project's name (`ship/mak.json` `name`), else the ship id.
 - `<display name>`: the GUI label and the `.entity` file name. CLI: manifest `display_name`. Editor: the **ship
   project's name** (`ship/mak.json` `name`), cleaned for use as a file name. It is not the `name` in
   `ship/<id>.json`, which is the spec's and keeps the catalog template's name after a rename.
@@ -238,7 +242,7 @@ python -m pipeline.run models/MyShip
 
 | Key | Required | Meaning |
 |---|---|---|
-| `name` | yes | identifier (`[A-Za-z][A-Za-z0-9_]*`); names the model, definitions and folders |
+| `name` | yes | model name (4.2 rule; spaces allowed); names the model, definitions and folders. Drafted from the model folder |
 | `display_name` | yes | GUI label and `.entity` file name |
 | `kind` | yes, or `domain` | one of the kinds in 6.7; older manifests with only `domain` map to a kind |
 | `domain` | no | legacy: `land`, `air`, `surface`, `subsurface`, `space`, `lifeform`; filled from the kind |
@@ -336,9 +340,20 @@ geometry and navigation data are dropped (they describe the donor's shape).
 
 ### 6.6 Donor and manifest suggestions
 `draft_manifest` infers forward axis, kind/domain (from `spec.json` schema/params or the geometry), maps Blender
-joints to motions and part codes (only unambiguous names, e.g. "radar"), uses `socket_bow` for the bow, and ranks
+joints to motions and part codes, uses `socket_bow` for the bow, and ranks
 stock donors on the kind's platform by bounding-volume similarity, preferring civilian or military donors to match
 the model's weapon parts. `spec.json` `meta` is not trusted; `custom_ops` code is never executed.
+
+Part codes (`draft_manifest.NAME_CODES`): every joint whose name has a Table 58 counterpart gets the first free
+code of that part. The node's own name (after the last `__`) is tried first, then its whole path, split into
+words (`Weapons__SeaSparrow_1` -> "weapons sea sparrow 1"). Rules: radar (10 codes), rudder (1), deck elevator on a
+ship (2; on an aircraft an elevator is "other control surfaces"), catapult (2), blast deflector (2), arresting wires
+(3), turret, gun, launcher (10 each), periscope, snorkel, antenna, hatch, landing gear, rotors, tail hook, speed
+brake, wing sweep, wing/rotor fold, left/right flap and aileron, boom. A weapon mount (`Weapons__...`, Phalanx,
+CIWS, RAM, Sea Sparrow ...) that trains in azimuth is a turret, and an elevating part under it a gun, or a launcher
+for missiles, as on the stock carriers (Nimitz-class: turrets 4096/4192, guns 4416/4448, launchers 4736/4768).
+When the model has more of a part than Table 58 has codes, the rest stay static and `unmapped_joints` says why
+(USS Abraham Lincoln: 11 of 16 joints mapped; elevators 3-4 and rudders 2-4 static).
 
 ### 6.7 Model kinds (`profiles.py`)
 
@@ -404,8 +419,8 @@ Errors: `dis-type-collision`, `model-def-collision`, `model-file-missing`, `ommx
 
 | Suite | Command | Count (2026-11-14) | Covers |
 |---|---|---|---|
-| vrf-pipeline | `python -m unittest discover -s tests` | 109 | artparts, inspect rules, OpenFlight write/read, colours, entity building, hand-import comparisons, drafts, profiles, one full run per kind |
-| editor `mak/tests` | `server/.venv/Scripts/python -m pytest mak/tests -q` | 127 (+5 skipped without the Harmony files) | the pipeline tests, package conversion, install, draft, export script, editor rules (no MAK-derived files) |
+| vrf-pipeline | `python -m unittest discover -s tests` | 118 | artparts, inspect rules, OpenFlight write/read, colours, entity building, hand-import comparisons, drafts, profiles, one full run per kind |
+| editor `mak/tests` | `server/.venv/Scripts/python -m pytest mak/tests -q` | 135 (+7 skipped without the Harmony and Lincoln files) | the pipeline tests, package conversion, install, draft, export script, editor rules (no MAK-derived files) |
 | editor `tests/mak` | `server/.venv/Scripts/python -m pytest tests/mak -q` | 1 (slow) | export of a built package with the real `medfTool` |
 | editor server | `server/.venv/Scripts/python -m pytest server/tests -q` | 320 | endpoints, settings validation, export job with a fake runner, install refusals and backups |
 | editor web | `cd web && npm run typecheck && npm test` | 133 | panel logic, DIS type checks |
@@ -448,6 +463,9 @@ After the fixes, the bounding volume and both radars (attach points, axes, limit
 - FBX route (Blender) exists but is not offered in the editor UI.
 - No `.medf` encryption of the output (ACM 19.19).
 - Short name is cut at a word boundary within 11 characters ("Harmony of").
+- Table 58 has one rudder code and two deck elevator codes, so further rudders and elevators stay static. Whether
+  several DOF nodes may share one code (all rudders turning together) is untested
+  (`references/open-questions.md` Q18).
 - One SharedData version at a time; VR-Forces 5.1.1 only.
 
 ## 10. Outstanding work

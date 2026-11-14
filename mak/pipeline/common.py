@@ -14,6 +14,20 @@ DIS_TYPE_RE = re.compile(r"^-?\d+(:-?\d+){6}$")  # 7 fields, as used in .metx fi
 DOMAINS = {"land", "air", "surface", "subsurface", "space", "lifeform"}
 FORWARD_AXES = {"+Y", "-Y", "+X", "-X"}
 
+# Model name: it names the model file, its folder and the .ommx/.leaf/.metx, so it must be safe as a file name
+# and as XML text. Spaces are fine: 1143 of 1213 stock element definitions have them ("SBU-64 AASM HAMMER.leaf").
+NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9 _.()+-]*[A-Za-z0-9_)+-])?$")
+NAME_RULE = "letters, digits, spaces and _ - . ( ) +, starting with a letter or digit, not ending in a space or dot"
+
+
+def safe_name(text: str) -> str:
+    """`text` made into a valid model name (NAME_RE), or "" when nothing usable is left."""
+    import unicodedata
+    text = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode()
+    text = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9 _.()+-]", " ", text))
+    text = re.sub(r"^[^A-Za-z0-9]+", "", text)
+    return re.sub(r"[ .]+$", "", text)
+
 DEFAULT_VRF_DIR = r"C:\MAK\vrforces5.1.1"
 DEFAULT_SHARED_DATA = r"C:\MAK\SharedData\18\latest"
 DEFAULT_BLENDER = r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
@@ -117,8 +131,8 @@ def load_manifest(model_dir: Path) -> dict:
         problems.append("dis_type must be 7 colon-separated integers, e.g. 1:1:225:6:99:1:0")
     if m.get("forward_axis_in_blender") and m["forward_axis_in_blender"] not in FORWARD_AXES:
         problems.append(f"forward_axis_in_blender must be one of {sorted(FORWARD_AXES)}")
-    if m.get("name") and not re.match(r"^[A-Za-z][A-Za-z0-9_]*$", m["name"]):
-        problems.append("name must be an identifier (letters, digits, underscore)")
+    if m.get("name") and not NAME_RE.match(m["name"]):
+        problems.append(f"name must be {NAME_RULE}")
     for i, p in enumerate(m.get("articulated_parts") or []):
         if not isinstance(p, dict) or not p.get("node") or p.get("dis_part") in (None, ""):
             problems.append(f"articulated_parts[{i}] needs 'node' and a 'dis_part' code (remove it to leave the part static)")

@@ -418,7 +418,8 @@ write them from a manifest (`kind: human | animal`), but the editor's crew are s
 <package_dir>/mak_export_report.json
 ```
 
-`<name>` is the ship id. `<display name>` is the ship **project's** name (`ship/mak.json` `name`, §8), with
+`<name>` is the ship **project's** name (`ship/mak.json` `name`) made safe as a file name (letters, digits,
+spaces and `_ - . ( ) +`); a package without it falls back to the ship id. `<display name>` is the ship **project's** name (`ship/mak.json` `name`, §8), with
 characters that cannot be in a file name removed; it is also the entity's label in VR-Forces. It is not the
 `name` in `ship/<ship_id>.json`: that is the spec's, which keeps the catalog template's name when a project is
 renamed. A package without `mak.json` `name` (made before this rule) falls back to the metadata's name.
@@ -428,7 +429,7 @@ renamed. A package without `mak.json` `name` (made before this rule) falls back 
  "checks": [{"name": str, "pass": bool, "detail": str}], "pending": [str], "not_exported": [str]}
 ```
 
-`<name>` is the ship id (§5). Checks include MAK's own reader loading the model (`medfTool --writeNodeInfo`)
+`<name>` is the model name above. Checks include MAK's own reader loading the model (`medfTool --writeNodeInfo`)
 and seeing every part's comment. Crew are listed in `not_exported` (VR-Forces humans are DI-Guy characters,
 not yet supported). Joints whose part has no DIS code stay static and are listed in `pending`. The exit code
 comes from `ok`. Nothing is written into the VR-Forces install; installing is `mak/install.py` (§10).

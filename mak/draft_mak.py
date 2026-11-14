@@ -1,7 +1,7 @@
 """MAK settings suggestions for a ship version (contract §10, GET /api/projects/{id}/mak/draft).
 
 Pure: takes the version's parts.json, build report and name. Part codes come from unambiguous node names
-(radar, turret, gun ...; pipeline/draft_manifest.py), motions from the joint axis in the ship frame
+(radar, rudder, deck elevator, weapon mount ...; pipeline/draft_manifest.py), motions from the joint axis in the ship frame
 (from_package.motion_of), donors from stock entities of similar size on the Surface_Ship platform,
 civilian first (pipeline/draft_manifest.suggest_donors). The user confirms everything; nothing here is final.
 """
@@ -29,7 +29,7 @@ def draft(parts: list, report: dict, name: str, cfg: dict) -> dict:
     for p in jointed:
         j = dict(p["joint"], rotation_deg=p.get("rotation_deg") or [0, 0, 0])
         motion, _ = motion_of(j)
-        code = draft_manifest.suggest_code(p["path"], used, counters)
+        code = draft_manifest.suggest_code(p["path"], used, counters, motion, "surface")
         if code is not None:
             used.add(code)
         out_parts.append({"path": p["path"], "motion": motion, "min_deg": j.get("min_deg"), "max_deg": j.get("max_deg"),
