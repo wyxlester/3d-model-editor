@@ -210,3 +210,42 @@ def load(path: Path, forward_axis: str = "+Y") -> Model:
     for r in scene.get("nodes", []):
         walk(r, _mat_identity(), None)
     return Model(nodes, roots, materials, images, warnings)
+
+
+def waterline_supports(model: Model, front: float = 0.3, rear: float = 0.35, inset: float = 0.9) -> dict | None:
+    """Ship support points on the waterline (z = 0, the surface-domain origin plane; manual 21.2.1).
+
+    Stock surface ships keep their supports at the waterline (144 of 159 in EntityLevel have down = 0), in the
+    stock pattern: a front pair (left/right) and a rear centre point. The Simulation Object Editor's
+    "Calculate Support Points" button puts them on the keel instead (9.3 m down on Harmony of the Seas), which
+    is not what MAK's own ships do. Positions come from where the hull crosses z = 0: the front pair sits
+    `front` x waterline length ahead of its middle, `inset` x the hull's half-beam at that station; the rear
+    point `rear` x length behind. Returns body-frame (forward, right, down) points, or None when nothing
+    crosses the waterline (e.g. a submarine model)."""
+    pts = []
+    for node in model.nodes.values():
+        for t in node.triangles:
+            for a, b in ((0, 1), (1, 2), (2, 0)):
+                p, q = t.p[a], t.p[b]
+                if p[2] != q[2] and min(p[2], q[2]) <= 0.0 <= max(p[2], q[2]):
+                    s = -p[2] / (q[2] - p[2])
+                    pts.append((p[0] + s * (q[0] - p[0]), p[1] + s * (q[1] - p[1])))
+    if not pts:
+        return None
+    y0, y1 = min(p[1] for p in pts), max(p[1] for p in pts)
+    length = y1 - y0
+    mid = (y0 + y1) / 2
+    yf, yr = mid + front * length, mid - rear * length
+
+    def half_beam(y: float) -> float:
+        for w in (0.03, 0.06, 0.12, 0.5):          # widen the station until the hull is hit
+            near = [abs(p[0]) for p in pts if abs(p[1] - y) <= w * length]
+            if near:
+                return max(near)
+        return max(abs(p[0]) for p in pts)
+
+    side = inset * half_beam(yf)
+    cx = (min(p[0] for p in pts) + max(p[0] for p in pts)) / 2
+    r = lambda v: round(v, 3) + 0.0   # noqa: E731
+    return {"left": [r(yf), r(cx - side), 0.0], "right": [r(yf), r(cx + side), 0.0], "other": [r(yr), r(cx), 0.0],
+            "waterline_length": r(length), "waterline_beam": r(2 * max(abs(p[0] - cx) for p in pts))}

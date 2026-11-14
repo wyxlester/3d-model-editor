@@ -62,6 +62,8 @@ def run(model_dir: Path, skip_convert: bool = False, output_root: Path | None = 
 
     glb = model_dir / "model.glb"
     report = inspect_glb.analyse(glb, manifest["forward_axis_in_blender"])
+    if manifest["domain"] == "surface":     # support points on the waterline (glb.waterline_supports)
+        report["waterline_supports"] = glbmod.waterline_supports(glbmod.load(glb, manifest["forward_axis_in_blender"]))
     stages["inspect"] = inspect_glb.check(report, manifest, cfg["limits"], node_map)
     if fmt == "fbx" and not node_map.parts:
         stages["inspect"].append(Finding("warning", "no-node-map", f"FBX_NodeNameMap.csv not found at {node_map.source}; part names unchecked"))

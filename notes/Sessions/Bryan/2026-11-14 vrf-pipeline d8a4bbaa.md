@@ -27,7 +27,7 @@ Five artefacts, all now generated (layout matches what the Simulation Object Edi
 | `<name>.entity` | simulation object, cloned from a donor entity | `<sms>/vrfSim/` |
 
 ## Done
-- **Pipeline** (separate repo `vrf-pipeline`, branch `feat/openflight-writer`, commit `269398c`): inspect glb ->
+- **Pipeline** (separate repo `vrf-pipeline`, branch `feat/openflight-writer`, commit `f710b01`): inspect glb ->
   convert -> verify model -> generate -> validate, with a report. Standard-library Python; ~86 tests.
 - **Findings from the MAK manuals** (Adding Content reference, VR-Forces 5.1.1 Users Guide; cited by section):
   - FBX parts articulate only if their node names are listed in the install's `FBX_NodeNameMap.csv` (21.1.2).
@@ -48,6 +48,11 @@ Five artefacts, all now generated (layout matches what the Simulation Object Edi
     reproduces the SOE's file line for line.
   - The ship rendered *white*: MAK ignored OpenFlight material-palette colours. Fixed: colour now rides on each face.
   - Articulation worked: both radars animate.
+  - Second hand import (radars added by hand, "Calculate Support Points and Bounding Volume from Displayed
+    Model"): bounding volume and both radars match the pipeline's. The pipeline had kept the donor's support
+    points; it now calculates them from the hull at the waterline (down 0, as on 144 of 159 stock ships). The
+    editor's button put them on the keel, 9.3 m down. The donor's nav data is now cleared along with its
+    object geometry.
 - **Harmony of the Seas** (project `p_e4257421`): DIS type `1:3:15:80:1:0:0` (platform, surface, Bahamas,
   passenger vessel, generic cruise ship; unused in the install); radars 5376 and 5408 (azimuth); 28 joints left
   static (davits, azipods, propellers and thruster props have no fitting DIS code); donor `Super_Tanker`
@@ -80,6 +85,8 @@ Five artefacts, all now generated (layout matches what the Simulation Object Edi
 - [ ] **Bryan / Lester:** review and merge `feat/mak-export`.
 - [ ] **Bryan:** find out whether copying files into an SMS is enough, or whether "Import Visual Models" is required.
 - [ ] **Bryan:** confirm the donor for passenger ships (`Super_Tanker` vs `Cruise_Ship`).
+- [ ] **Bryan / DTS:** do ship support points belong at the waterline (stock ships) or on the keel (the editor's
+  button)? Check in VR-Forces that Harmony floats at the right height.
 - [ ] **Claude:** sensor position (donor sensors sit at the waterline origin; `socket_bridge_eye` could set it).
 - [ ] **Later:** crew in VR-Forces needs DI-Guy characters (separate research); `.medf` encryption.
 

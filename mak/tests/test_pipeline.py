@@ -267,6 +267,61 @@ class TestGenerateValidate(TmpDir):
         self.assertIn("entity-system-artpart", codes)   # 2S1 cannon wants 4096/4416/4128
 
 
+# ---------------------------------------------------------------- ship support points
+def box_hull(lo, hi):
+    """Four vertical walls of a box (x right, y forward, z up), enough for a waterline section."""
+    from pipeline import glb as glbmod
+    (x0, y0, z0), (x1, y1, z1) = lo, hi
+    walls = [((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))]
+    tris = []
+    for (ax, ay), (bx, by) in walls:
+        a, b, c, d = (ax, ay, z0), (bx, by, z0), (bx, by, z1), (ax, ay, z1)
+        n = ((0, 0, 1),) * 3
+        tris += [glbmod.Triangle((a, b, c), n, ((0, 0),) * 3, None), glbmod.Triangle((a, c, d), n, ((0, 0),) * 3, None)]
+    return glbmod.Model({"Hull": glbmod.Node("Hull", None, triangles=tris)}, ["Hull"], [], [], [])
+
+
+class TestShipSupports(TmpDir):
+    def test_waterline_supports_on_box_hull(self):
+        from pipeline import glb as glbmod
+        ws = glbmod.waterline_supports(box_hull((-5, -20, -2), (5, 20, 3)))
+        self.assertEqual(ws["waterline_length"], 40) and self.assertEqual(ws["waterline_beam"], 10)
+        self.assertEqual(ws["left"], [12.0, -4.5, 0.0])      # front pair 0.3 L ahead, 0.9 x half-beam, on the waterline
+        self.assertEqual(ws["right"], [12.0, 4.5, 0.0])
+        self.assertEqual(ws["other"], [-14.0, 0.0, 0.0])    # rear centre 0.35 L behind
+
+    def test_no_waterline_crossing_gives_none(self):
+        from pipeline import glb as glbmod
+        self.assertIsNone(glbmod.waterline_supports(box_hull((-1, -5, -9), (1, 5, -4))))   # fully submerged
+
+    @unittest.skipUnless(generate.donor_path(CFG, "Super_Tanker").exists(), "Super_Tanker donor not present")
+    def test_ship_entity_takes_waterline_supports_not_the_donors(self):
+        """A hand import in the Simulation Object Editor showed the pipeline keeping the donor's supports and
+        its nav data (which belongs to the donor's object geometry)."""
+        m = manifest(name="TestShip", display_name="Test Ship", domain="surface", donor_entity="Super_Tanker",
+                     dis_type="1:3:225:99:99:99:99", platform_ope="Surface_Ship.ope",
+                     model_category_dir="Vehicles/Surface", articulated_parts=[])
+        lay = layout_for(m, self.tmp / "out")
+        g = inspect_glb.analyse(make_glb(self.tmp / "a.glb"), "+Y")
+        g["waterline_supports"] = {"left": [12.0, -4.5, 0.0], "right": [12.0, 4.5, 0.0], "other": [-14.0, 0.0, 0.0],
+                                   "waterline_length": 40, "waterline_beam": 10}
+        f = generate.generate(m, lay, g, CFG, self.node_map)
+        self.assertIn("supports-waterline", {x.code for x in f})
+        so = ET.parse(lay.entity("Test Ship")).getroot().find("simObject")
+
+        def pos(name):
+            e = so.find(f"bodyPosition[@paramName='{name}']")
+            return tuple(float(e.get(k)) for k in ("forward", "right", "down"))
+        self.assertEqual(pos("left-support"), (12.0, -4.5, 0.0))
+        self.assertEqual(pos("right-support"), (12.0, 4.5, 0.0))
+        self.assertEqual(pos("other-support"), (-14.0, 0.0, 0.0))
+        self.assertFalse(so.find("string[@paramName='nav-data-path']").text)
+        self.assertEqual(so.find("bool[@paramName='use-object-geometry']").text, "False")
+
+        del g["waterline_supports"]                          # nothing crosses the waterline: say so
+        self.assertIn("supports-donor", {x.code for x in generate.generate(m, lay, g, CFG, self.node_map)})
+
+
 # ---------------------------------------------------------------- end to end
 @unittest.skipUnless(HAVE_BLENDER and HAVE_DONOR, "Blender or VR-Forces install not present")
 class TestEndToEndFbx(TmpDir):

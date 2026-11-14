@@ -21,6 +21,7 @@ from pathlib import Path
 from string import Template
 
 from . import artparts, inspect_glb, leaf
+from . import glb as glbmod
 from .artparts import Part
 from .common import (TEMPLATES, Finding, InputError, Layout, check_model_dir, layout_for, load_config, load_manifest,
                      print_findings)
@@ -204,6 +205,19 @@ def build_entity(donor_xml: str, manifest: dict, parts: list[Part], glb: dict, m
                     el.set(k, _fmt(v))
         f.append(Finding("info", "supports-estimated", "support points estimated from bounds; refine with "
                          "'Calculate Support Points' in the Simulation Object Editor (users guide 66.1.3)"))
+    elif manifest["domain"] == "surface" and glb.get("waterline_supports"):
+        ws = glb["waterline_supports"]   # already body frame (forward, right, down), down = 0 at the waterline
+        for name, key in (("left-support", "left"), ("right-support", "right"), ("other-support", "other")):
+            el = so.find(f"bodyPosition[@paramName='{name}']")
+            if el is not None:
+                for k, v in zip(("forward", "right", "down"), ws[key]):
+                    el.set(k, _fmt(v))
+        f.append(Finding("info", "supports-waterline",
+                         f"support points on the waterline from the hull ({ws['waterline_length']} m x "
+                         f"{ws['waterline_beam']} m), as on stock ships; not the donor's"))
+    else:
+        f.append(Finding("warning", "supports-donor", "support points kept from the donor entity; "
+                         "set them in the Simulation Object Editor (users guide 66.1.3)"))
 
     # labels and references back to the donor
     def set_str(name, value):
@@ -213,13 +227,16 @@ def build_entity(donor_xml: str, manifest: dict, parts: list[Part], glb: dict, m
     set_str("gui-label", manifest["display_name"])
     set_str("gui-unique-id", f"ModelSet-vrfpipeline-{manifest['name']}")
     set_str("short-name", short_name(manifest))
-    set_str("gui-description", f"Exported by the 3D model editor from {model_path}")
+    set_str("gui-description", f"Imported by vrf-pipeline from {model_path}")
     geo = so.find("string[@paramName='object-geometry-filename']")
     if geo is not None and geo.text:
         geo.text = None   # object geometry must be OpenFlight/MEDF/GDB (users guide 66.1.6); don't inherit the donor's
         use = so.find("bool[@paramName='use-object-geometry']")
         if use is not None:
             use.text = "False"   # the donor's flag would point at geometry we just removed
+        nav = so.find("string[@paramName='nav-data-path']")
+        if nav is not None and nav.text:
+            nav.text = None      # navigation data is generated from the donor's object geometry (users guide 62.4)
 
     ET.indent(root, space="   ")
     return ET.ElementTree(root), f
@@ -317,6 +334,9 @@ def main(argv=None) -> int:
         return 2
     cfg = load_config()
     glb = inspect_glb.analyse(args.model_dir / "model.glb", manifest["forward_axis_in_blender"])
+    if manifest["domain"] == "surface":
+        glb["waterline_supports"] = glbmod.waterline_supports(
+            glbmod.load(args.model_dir / "model.glb", manifest["forward_axis_in_blender"]))
     findings = generate(manifest, layout_for(manifest, fmt=cfg.get("model_format", "flt")), glb, cfg)
     print_findings("generate", findings)
     return 1 if any(x.level == "error" for x in findings) else 0
