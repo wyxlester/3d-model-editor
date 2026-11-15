@@ -125,6 +125,31 @@ The exit code is 0 only when `ok` is true. Nevertheless, **callers read `build_r
 the exit code**: Blender returns 0 even when a script raises an error, unless the script calls
 `sys.exit(1)` itself.
 
+### 4b. Texture bake (ships, on demand)
+
+```
+Blender -b --factory-startup --python blender/bake_textures.py -- --blend <v>/model.blend --out <v>
+        [--config <bake.json>] [--samples 4] [--page-scale 1.0] [--keep-decals] [--keep-images] [--no-verify]
+```
+
+A separate step after a build: builds stay flat-coloured and fast. It reads `model.blend` and never
+writes `model.glb` or `model.blend`. Each face gets a procedural finish (`blender/texturing/finishes.py`)
+and an atlas page (`blender/texturing/atlas.py`); Cycles bakes the pages on the CPU. Lincoln (330 m,
+6 pages) takes about 10 minutes.
+
+**Writes, into `<v>`:**
+
+| File | What |
+|---|---|
+| `model_textured.glb` | the model with one material per atlas page (`Deck_0`, `Hull_0`, `Superstructure_0`, `Details_0` ...; `<page>_double_sided` where a source material was double-sided). Each material has embedded PNGs on `TEXCOORD_0`: `baseColorTexture` (sRGB), `normalTexture` (tangent space, OpenGL +Y), and **one ORM image** used as both `metallicRoughnessTexture` and `occlusionTexture` (R = AO, G = roughness, B = metallic). Factors are 1. Pages: Deck and Hull 4096², Superstructure and Details 2048², as many pages as the area needs at the target texel size (6 / 8 / 5 / 3 cm) |
+| `bake_report.json` | `{"ok", "errors", "warnings", "settings", "decals": [{"name","target","max_gap_m","reason"}], "finishes": {"<material> -> <finish>": {...}}, "pages": [{"atlas","index","px","faces","area_m2","texel_m","target_texel_m","fill","uv_min","uv_max","images"}], "decal_bakes", "bake_proxies", "materials_out", "glb_bytes", "reimport", "timings_s", "seconds"}` |
+
+The geometry differs from `model.glb` in two ways. **Decals are dropped**: thin parts lying within 5 cm of
+another part's surface (or marking-named parts up to 25 cm proud), baked into that part's colour instead.
+A decal never has a joint or children, and rides on the same moving part as its target. `--keep-decals`
+keeps them, flat-coloured. Large meshes are also cut along a 48 m world grid so the UVs pack. Every other
+node, name, parent, origin and `me3d_*` extra is unchanged. Exit code 0 only when `ok`, but read the report.
+
 ## 5. Ship spec — `me3d.ship_spec/1`
 
 ```json
@@ -722,6 +747,7 @@ happened; `part` is the clicked mesh's node name.
 ```
 data/projects/<id>/project.json
 data/projects/<id>/v<n>/{spec.json, model.glb, model.blend, parts.json, build_report.json}
+data/projects/<id>/v<n>/{model_textured.glb, bake_report.json}   after a texture bake (4b)
 data/projects/<id>/research/versions/r<n>.json  every saved version of the research
 data/projects/<id>/materials/m<n>.json          each web search and page the research AI read, with its text
 data/projects/<id>/logs/<job id>.json           each finished job's log

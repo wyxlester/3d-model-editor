@@ -9,7 +9,7 @@ he is not an engineer. The approved design is the canvas linked in `docs/CONTRAC
 
 | Path | What | Run with |
 |---|---|---|
-| `blender/` | scripts that run **inside** Blender: ship builders, crew builder, shared helpers | Blender 5.2 headless |
+| `blender/` | scripts that run **inside** Blender: ship builders, crew builder, shared helpers, and the texture bake (`bake_textures.py`, `texturing/`; contract §4b) | Blender 5.2 headless |
 | `catalog/` | default specs: `ships/*.json`, `crew/*.json` | |
 | `server/` | FastAPI app, project store, job runner, AI agent (Claude Agent SDK), packaging | `server/.venv` (Python 3.11) |
 | `web/` | Vite + React + TypeScript + three.js front end | Node 22 (`~/.nvm/versions/node/v22.23.1/bin`) |

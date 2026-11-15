@@ -594,7 +594,17 @@ From each glTF material with a normal, metallic-roughness or occlusion texture, 
   - the normal's +Y points to the top of the image;
   - textures and face colours share one colour space.
 - `medfTool` recognises the names: it compresses `_NML` maps to two-channel BC5 (ATI2N), as on stock ships.
-- The editor's generator makes the textures themselves (UVs, procedural finishes, bake), as a separate step.
+- The editor's generator makes the textures themselves, in a separate on-demand step
+  (`blender/bake_textures.py`, CONTRACT §4b):
+  - each face gets a procedural finish in world metres (non-skid deck, hull plating, antifouling, boot top,
+    superstructure paint, bare metal, glass, rubber, teak, canvas): the spec colour stays the tint, with
+    grime where the AO is dark, rust streaks, edge wear from the Bevel node, plate seams and a bump;
+  - faces go into Deck, Hull, Superstructure and Details atlases; the page count follows the area and a target
+    texel size (Deck and Hull 4096², the others 2048²), on one shared UV map;
+  - Cycles bakes base colour, ORM (R AO, G roughness, B metal) and an OpenGL tangent normal. Markings and
+    other decals within 5 cm of a surface are baked into the colour and dropped;
+  - it writes `model_textured.glb` beside `model.glb`, which it leaves alone. Lincoln: 6 pages, 35 decals,
+    118 MB, about 10 minutes on a 16-thread CPU at 4 samples.
 
 ## 7. Assumptions
 
@@ -629,6 +639,7 @@ From each glTF material with a normal, metallic-roughness or occlusion texture, 
 | editor `tests/mak` | `server/.venv/Scripts/python -m pytest tests/mak -q` | 1 (slow) | export of a built package with the real `medfTool` |
 | editor server | `server/.venv/Scripts/python -m pytest server/tests -q` | 339 | endpoints, settings validation (`systems_off` included), export job with a fake runner, install refusals and backups, articulation roles (research, plan gate, post-build check on Lincoln's parts), stale-server check, `parts_suggested` |
 | editor Blender | `server/.venv/Scripts/python -m pytest tests/blender/test_add_chain.py -q` | 4 (slow) | `me3d.add_chain` builds nested joints that survive into the glb and pass the post-build check; `joint_limits` reach joints a custom op made |
+| editor bake | `server/.venv/Scripts/python -m pytest tests/blender/test_bake.py -q` | 44 (1 slow) | finish and atlas mapping, page counts, island grouping, bake proxies; a custom ship with a deck marking baked at 1/16 size (pages, ORM packing, UVs, the marking dropped, joints kept, `model.glb` untouched) |
 | editor web | `cd web && npm run typecheck && npm test` | 140 | panel logic, DIS type checks, system change text, build-report warning split, codes following suggestions, stale-server text |
 
 Tests that need VR-Forces skip without it. The MAK manuals and SOE-written files are not in the editor repository
@@ -657,6 +668,10 @@ After the fixes, the bounding volume and both radars (attach points, axes, limit
 - **Effect maps** are confirmed on a test model only (Q23), not yet on a baked ship. Emissive (`_EMM`) and
   SensorFX (`_SNR`) maps are not written, and the FBX route writes no effect maps. Large maps are slow to repack
   (pure-Python PNG decoding).
+- **The texture bake** runs from the command line only (no button or job in the editor yet). It is CPU-only
+  (about 10 minutes for Lincoln) and makes a large glb (118 MB). Finishes are chosen from material and part
+  names, so an odd name falls back on a generic paint. A twisted source face can bake an inverted patch into
+  the normal map.
 - **Systems follow the stock class, not the real ship.** The draft adds what most stock entities of the kind
   have, the weapons its mounts are named after, and the systems that drive its parts (6.11). Ranges, rounds and
   other values are the donor's or the stock median, not the real ship's.
@@ -695,8 +710,10 @@ Planned, not done:
    Give Lincoln's six weapon mounts their elevation joints, so their weapons pitch in 3D and need no sim-only
    parts (Q20): redraft its research and plan with the articulation roles (six weapon chains), approve, rebuild.
 6. Install test against a real custom SMS.
-   Bake textures for Lincoln in the editor and compare the reimport with the stock Nimitz (the effect-map format
-   itself is confirmed, Q23).
+   Lincoln's textures are baked (`model_textured.glb`, v13): export it, import it into VR-Forces and compare it
+   with the stock Nimitz from the same angle (the effect-map format itself is confirmed, Q23). Then wire the bake
+   into the editor: a "Bake textures" job, a Flat / Textured viewer toggle, and MAK export and packaging using
+   the baked glb.
 7. Review and merge `feat/mak-export` and `feat/mak-kinds`.
 8. Live check of the articulation roles with the real AI: a research turn names the roles, the plan lists every
    chain, and the build turn uses `add_chain` and clears its own `articulation` warnings.
