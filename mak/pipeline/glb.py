@@ -5,7 +5,9 @@ load(path, forward_axis) returns the node tree with every triangle in the MAK mo
 inspect_glb. Positions are absolute (world) coordinates, as OpenFlight expects under DOF nodes.
 
 Supported: triangle primitives (mode 4, indexed or not), POSITION, NORMAL, TEXCOORD_0, materials
-(pbrMetallicRoughness base colour/texture, emissive, alpha mode, double-sided), embedded images.
+(pbrMetallicRoughness base colour/texture, metallic-roughness texture, normal and occlusion textures, emissive,
+alpha mode, double-sided), embedded images. Textures on another UV set or with KHR_texture_transform are
+reported: only TEXCOORD_0 is written.
 Not supported (reported as warnings): sparse accessors, non-triangle modes, external buffers, skins, morph targets.
 """
 from __future__ import annotations
@@ -33,6 +35,16 @@ class Material:
     image: int | None = None          # index into Model.images
     double_sided: bool = False
     blend: bool = False
+    normal_image: int | None = None   # normalTexture (tangent space, +Y up as glTF defines it)
+    normal_scale: float = 1.0
+    mr_image: int | None = None       # metallicRoughnessTexture: G roughness, B metal
+    occlusion_image: int | None = None
+    occlusion_strength: float = 1.0
+    emissive_image: int | None = None
+
+    @property
+    def has_effect_maps(self) -> bool:
+        return any(i is not None for i in (self.normal_image, self.mr_image, self.occlusion_image))
 
 
 @dataclass
@@ -134,15 +146,32 @@ def load(path: Path, forward_axis: str = "+Y") -> Model:
     for i, m in enumerate(gltf.get("materials", [])):
         pbr = m.get("pbrMetallicRoughness", {})
         base = pbr.get("baseColorFactor", [1, 1, 1, 1])
-        tex = pbr.get("baseColorTexture")
-        image = textures[tex["index"]].get("source") if tex and tex["index"] < len(textures) else None
-        if image is not None and images[image].data is None and not images[image].uri:
-            image = None
+        mname = m.get("name") or f"mat{i}"
+
+        def source(info: dict | None, slot: str) -> int | None:
+            if not info or info.get("index", len(textures)) >= len(textures):
+                return None
+            if info.get("texCoord", 0) != 0:
+                warnings.append(f"material '{mname}' {slot} uses TEXCOORD_{info['texCoord']}; only TEXCOORD_0 is written")
+            if "KHR_texture_transform" in info.get("extensions", {}):
+                warnings.append(f"material '{mname}' {slot} has KHR_texture_transform, which is ignored")
+            src = textures[info["index"]].get("source")
+            if src is None or src >= len(images) or (images[src].data is None and not images[src].uri):
+                return None
+            return src
+
+        image = source(pbr.get("baseColorTexture"), "base colour")
+        normal, occlusion = m.get("normalTexture") or {}, m.get("occlusionTexture") or {}
         materials.append(Material(
-            name=m.get("name") or f"mat{i}", diffuse=tuple(base[:3]), alpha=float(base[3]),
+            name=mname, diffuse=tuple(base[:3]), alpha=float(base[3]),
             emissive=tuple(m.get("emissiveFactor", [0, 0, 0])),
             metallic=float(pbr.get("metallicFactor", 1.0)), roughness=float(pbr.get("roughnessFactor", 1.0)),
-            image=image, double_sided=bool(m.get("doubleSided")), blend=m.get("alphaMode") == "BLEND"))
+            image=image, double_sided=bool(m.get("doubleSided")), blend=m.get("alphaMode") == "BLEND",
+            normal_image=source(normal, "normal map"), normal_scale=float(normal.get("scale", 1.0)),
+            mr_image=source(pbr.get("metallicRoughnessTexture"), "metallic-roughness map"),
+            occlusion_image=source(occlusion, "occlusion map"),
+            occlusion_strength=float(occlusion.get("strength", 1.0)),
+            emissive_image=source(m.get("emissiveTexture"), "emissive map")))
 
     gnodes, meshes = gltf.get("nodes", []), gltf.get("meshes", [])
     nodes: dict[str, Node] = {}

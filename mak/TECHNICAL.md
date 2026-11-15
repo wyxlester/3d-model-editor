@@ -65,7 +65,7 @@ model.glb + manifest.json
    v
    |  supports     glb.add_supports: waterline or ground-contact support points from the geometry
    v
-   |  convert      glb.load -> openflight.write: geometry, face colours, textures, DOF nodes + @dis comments
+   |  convert      glb.load -> openflight.write: geometry, face colours, textures + effect maps, DOF nodes + @dis comments
    v               (fbx route: headless Blender instead)
    |  verify       openflight.read_flt + check_flt (re-read), openflight.check_mak (medfTool loads it)
    v
@@ -90,6 +90,8 @@ Pipeline (`vrf-pipeline/pipeline/`, copied to `mak/pipeline/`):
 | `inspect_glb.py` | glb JSON/bounds analysis without reading vertices; origin, scale, forward-axis and articulation rules |
 | `glb.py` | full glb geometry reader (positions, normals, UVs, materials, images) into the MAK frame; `waterline_supports`, `ground_supports` |
 | `openflight.py` | OpenFlight 16.1 writer and reader; DOF nodes, `@dis` comments, face colours, textures; `medfTool` check |
+| `effectmaps.py` | glTF PBR maps -> MAK effect maps beside each diffuse: `_NML` (normal) and `_MTL_GLS_AO` (metal, gloss, AO) (6.12) |
+| `png.py` | PNG reader and writer (standard library), for repacking texture maps |
 | `artparts.py` | DIS articulated-part codes (ACM Table 58), default motions and limits, FBX node-name map |
 | `systems.py` | **systems**: sysdef reader and catalog of the install (categories, platforms allowed, part parameters, ammunition, stock usage), applying the manifest's `systems` to the cloned `.entity`, drafting them from the model, system checks |
 | `convert.py` | model conversion entry (OpenFlight, or FBX via Blender) |
@@ -154,6 +156,7 @@ Standalone (`vrf-pipeline/pipeline.config.json`):
 | `model_format` | `flt` (default) or `fbx` | `flt` |
 | `blender` | Blender executable | FBX route only |
 | `limits` | `max_triangles` 100000, `max_texture_px` 4096, `max_extent_m` 400, `min_extent_m` 0.05 | inspect warnings/errors |
+| `effect_maps` (optional) | `{"enabled": true, "normal_green": "up"}` | writing MAK effect maps from the glb's PBR maps (6.12); `"down"` flips the normal map's Y |
 
 Editor (environment variables; contract §9b):
 
@@ -177,7 +180,7 @@ a copy.
 
 | # | File | Role | Deploys to |
 |---|---|---|---|
-| 1 | `SharedData/ModelData/<category>/<name>/<name>.flt` (+ textures) | the model | `<SharedData>/ModelData/...` |
+| 1 | `SharedData/ModelData/<category>/<name>/<name>.flt` (+ textures and their `_NML` / `_MTL_GLS_AO` effect maps) | the model | `<SharedData>/ModelData/...` |
 | 2 | `sms/gui/visuals/UserData/<name>.ommx` | model definition: schema + `filename` | `<sms>/gui/visuals/UserData/` |
 | 3 | `sms/gui/visuals/Entity/<name>.leaf` | element definition: the donor's, renamed, 3D and XR main model pointed at ours | `<sms>/gui/visuals/Entity/` |
 | 4 | `sms/gui/visuals/Entity/<name>.metx` | DIS type -> element definition | `<sms>/gui/visuals/Entity/` |
@@ -405,7 +408,8 @@ bug (fix the generator, not the output) or an SOE convention to adopt; record wh
 ### 6.1 OpenFlight writer
 - Geometry from every triangle primitive (indexed or not), normals (flat when absent), UVs, double-sided flags.
 - Materials: base colour **on each face** (VR-Forces ignored palette colours: the first hand import showed a
-  white ship; confirmed rendering in the SOE on the 2026-11-15 reimport, Q0), textures extracted from the glb.
+  white ship; confirmed rendering in the SOE on the 2026-11-15 reimport, Q0), textures extracted from the glb,
+  and PBR maps written as MAK effect maps beside them (6.12).
 - One DOF node per moving part: origin at the pivot, limits on its motion axis, and a comment in MAK's own
   format (`@dis articulated_part <code> rotate_min p,r,y ...`); the root carries `@dis entity_type`.
 - Verified by re-reading the file and by `medfTool --writeNodeInfo` (MAK's reader lists every part).
@@ -561,6 +565,37 @@ The `.entity`'s sensors, weapons and other systems are the donor's (UG 65.3.1), 
     shown as Undamageable); Phalanx ×2, RAM ×2 and Sea Sparrow ×2 (RAM stand-in) are added with 10 sim-only
     parts, because its mounts are azimuth-only (Q20).
 
+### 6.12 PBR maps as MAK effect maps (`effectmaps.py`)
+VR-Forces lights models with a GGX shader and reads PBR inputs from **effect maps**: image files beside the
+diffuse texture, found by name (ACM 12.4). The stock PBR ships (Gerald Ford, Arleigh Burke) use three per
+material, all 4096²: `X.png` (diffuse), `X_NML.png` (normal) and the composite `X_MTL_GLS_AO.png` (R metal,
+G gloss, B AO; a composite lists its codes in R, G, B order, ACM 12.4.1). The model references only `X.png`.
+
+From each glTF material with a normal, metallic-roughness or occlusion texture, the writer makes:
+
+| glTF | MAK file | Content |
+|---|---|---|
+| `baseColorTexture` | `<name>_tex<n>.png` | as before; a white 4x4 when the material has maps but no base texture (the face colour tints it) |
+| `normalTexture` | `<name>_tex<n>_NML.png` | RGBA: R = X, G = Y (+Y up, as glTF), B = Z, A = Y; `normalTexture.scale` applied. The shader reads `.ra` (`normal_map.frag.glsl`), so Y also goes in alpha; the probe showed MAK reads green from plain RGB too (Q23) |
+| `metallicRoughnessTexture` (B metal, G roughness) + `occlusionTexture` (R) | `<name>_tex<n>_MTL_GLS_AO.png` | R = metal x `metallicFactor`, G = 255 - roughness x `roughnessFactor`, B = AO with `strength`. Constant from the factors where a map is missing |
+
+- A diffuse shared by materials with different maps is written once per set, so each set has its own name.
+- Images used only as effect maps are not written as plain textures.
+- `png.py` decodes PNGs in pure Python: about 4-24 s per 4096² map, depending on the PNG filter.
+- Findings:
+  - `texture-jpeg-effect` (warning, inspect): an effect map is JPEG; skipped, since only PNGs can be read.
+  - `flt-texture-missing` (error, verify): a palette texture is not beside the model.
+  - `flt-effect-maps` (info, verify): lists the effect maps written.
+  - `effect-maps-flt-only` (warning): the FBX route doesn't write them.
+- `scripts/make_pbr_probe.py` builds `PBRProbe`, a barge with eight test panels. Imported into the SOE on
+  2026-11-15, it confirmed (Q23):
+  - effect maps beside a `.flt` load by name;
+  - metal and AO show;
+  - the normal's +Y points to the top of the image;
+  - textures and face colours share one colour space.
+- `medfTool` recognises the names: it compresses `_NML` maps to two-channel BC5 (ATI2N), as on stock ships.
+- The editor's generator makes the textures themselves (UVs, procedural finishes, bake), as a separate step.
+
 ## 7. Assumptions
 
 | Assumption | Basis |
@@ -580,6 +615,7 @@ The `.entity`'s sensors, weapons and other systems are the donor's (UG 65.3.1), 
 | Ship supports belong on the waterline, not the keel | install (144 of 159 stock ships); the SOE's calculate button put them on the keel. Open question |
 | Copying the files into a custom SMS is enough (no Import Visual Models step needed) | worked in the hand imports; open question |
 | `spec.json` `meta` may be stale; `custom_ops` is untrusted code | observed in the Blender exports |
+| Effect maps beside a `.flt` diffuse are found by name, as for stock `.medf` models; `_MTL_GLS_AO` is read as R metal, G gloss, B AO; normal maps are +Y up | ACM 12.4, 12.4.1; install (stock PBR ships, `effects.frag.glsl`, `normal_map.frag.glsl`, `medfTool` compresses `_NML` to BC5); confirmed in the SOE with `PBRProbe` (Q23) |
 | When manual and install disagree, the install is right | project rule |
 
 ## 8. Verification and tests
@@ -588,8 +624,8 @@ The `.entity`'s sensors, weapons and other systems are the donor's (UG 65.3.1), 
 
 | Suite | Command | Count (2026-11-15) | Covers |
 |---|---|---|---|
-| vrf-pipeline | `python -m unittest discover -s tests` | 150 | artparts, inspect rules, OpenFlight write/read, colours, entity building, hand-import comparisons, drafts, profiles, one full run per kind, systems (sysdef reader, catalog, apply, checks, drafts) |
-| editor `mak/tests` | `server/.venv/Scripts/python -m pytest mak/tests -q` | 190 (+8 skipped without the Harmony and Lincoln files) | the pipeline tests, package conversion, systems draft and `systems_off`, install, draft, export script, editor rules (no MAK-derived files), articulation roles against the install (`test_roles.py`), codes following suggestions and the export's own warnings |
+| vrf-pipeline | `python -m unittest discover -s tests` | 174 | artparts, inspect rules, OpenFlight write/read, colours, entity building, hand-import comparisons, drafts, profiles, one full run per kind, systems (sysdef reader, catalog, apply, checks, drafts), PNG codec and effect maps |
+| editor `mak/tests` | `server/.venv/Scripts/python -m pytest mak/tests -q` | 205 (+8 skipped without the Harmony and Lincoln files) | the pipeline tests, package conversion, systems draft and `systems_off`, install, draft, export script, editor rules (no MAK-derived files), articulation roles against the install (`test_roles.py`), codes following suggestions and the export's own warnings |
 | editor `tests/mak` | `server/.venv/Scripts/python -m pytest tests/mak -q` | 1 (slow) | export of a built package with the real `medfTool` |
 | editor server | `server/.venv/Scripts/python -m pytest server/tests -q` | 339 | endpoints, settings validation (`systems_off` included), export job with a fake runner, install refusals and backups, articulation roles (research, plan gate, post-build check on Lincoln's parts), stale-server check, `parts_suggested` |
 | editor Blender | `server/.venv/Scripts/python -m pytest tests/blender/test_add_chain.py -q` | 4 (slow) | `me3d.add_chain` builds nested joints that survive into the glb and pass the post-build check; `joint_limits` reach joints a custom op made |
@@ -618,6 +654,9 @@ After the fixes, the bounding volume and both radars (attach points, axes, limit
 - Install into a real custom SMS has been exercised only on a fake install tree in tests.
 - Rotors, propellers and wheels are static: no `@dis animation` sequences (ACM 14.3, 21.6).
 - No damage-state geometry (`@dis switch damage`, ACM 21.5) and no LODs.
+- **Effect maps** are confirmed on a test model only (Q23), not yet on a baked ship. Emissive (`_EMM`) and
+  SensorFX (`_SNR`) maps are not written, and the FBX route writes no effect maps. Large maps are slow to repack
+  (pure-Python PNG decoding).
 - **Systems follow the stock class, not the real ship.** The draft adds what most stock entities of the kind
   have, the weapons its mounts are named after, and the systems that drive its parts (6.11). Ranges, rounds and
   other values are the donor's or the stock median, not the real ship's.
@@ -656,6 +695,8 @@ Planned, not done:
    Give Lincoln's six weapon mounts their elevation joints, so their weapons pitch in 3D and need no sim-only
    parts (Q20): redraft its research and plan with the articulation roles (six weapon chains), approve, rebuild.
 6. Install test against a real custom SMS.
+   Bake textures for Lincoln in the editor and compare the reimport with the stock Nimitz (the effect-map format
+   itself is confirmed, Q23).
 7. Review and merge `feat/mak-export` and `feat/mak-kinds`.
 8. Live check of the articulation roles with the real AI: a research turn names the roles, the plan lists every
    chain, and the build turn uses `add_chain` and clears its own `articulation` warnings.
@@ -688,7 +729,7 @@ Open questions for the follow-up with the DTS team:
 ### Manual sections used
 ACM 14.1-14.3 (model formats), 15.1 (schemas), 16-18 (model/element definitions, mapping), 19.19 (MEDF),
 21.1.2 (FBX node names), 21.2-21.2.1 (frames, origins), 21.4 (articulated parts), 21.5 (appearances),
-21.6 (animation), Table 58 (part codes), 25.1-25.2 (DI-Guy). UG 62.4 (navigation data), 64.4 (SMS visuals),
+21.6 (animation), Table 58 (part codes), 25.1-25.2 (DI-Guy), 12.4-12.4.1 (effect maps). UG 62.4 (navigation data), 64.4 (SMS visuals),
 65.2.10 (Import Visual Models), 65.3.1 (copy a model), 66.1.1-66.1.10 (size, supports, object geometry,
 cultural features, lifeform visuals), 66.5 (munitions), 73 (weapon ammunition), 74.2.2 (detonation power),
 D.3.1 (object super-types).

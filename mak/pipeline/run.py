@@ -27,7 +27,7 @@ def _verify_flt(lay, report, parts, manifest, cfg, mak_check: bool, model_dir: P
     flt = openflight.read_flt(lay.model_file)
     f = verify_fbx.compare(openflight.as_dump(flt), report, parts, fmt="flt")
     colours = openflight.expected_colours(glbmod.load(model_dir / "model.glb", manifest["forward_axis_in_blender"]))
-    f += openflight.check_flt(flt, parts, manifest.get("dis_type"), colours)
+    f += openflight.check_flt(flt, parts, manifest.get("dis_type"), colours, lay.model_file.parent)
     tool = cfg.get("medf_tool")
     if not mak_check:
         f.append(Finding("info", "mak-check-skipped", "--no-mak-check given"))
@@ -95,14 +95,20 @@ def run(model_dir: Path, skip_convert: bool = False, output_root: Path | None = 
                     stale.unlink()
             try:
                 if fmt == "flt":
-                    res = convert.convert_flt(glb, lay.model_file, manifest, parts)
+                    res = convert.convert_flt(glb, lay.model_file, manifest, parts, cfg=cfg)
                     stages["convert"] = [Finding("info", "wrote-flt", f"{lay.model_file} ({res.faces} faces, "
-                                                 f"{len(res.textures)} texture(s))")]
+                                                 f"{len(res.textures)} texture(s), "
+                                                 f"{len(res.effect_maps)} effect map(s))")]
                     stages["convert"] += [Finding("warning", "convert-warning", w) for w in res.warnings]
                 else:
                     convert.convert(glb, lay.model_file, manifest["forward_axis_in_blender"], cfg["blender"],
                                     artparts.rename_map(parts))
                     stages["convert"] = [Finding("info", "wrote-fbx", str(lay.model_file))]
+                    if any(set(t.get("used_as", ())) & {"normal", "metallic-roughness", "occlusion"}
+                           for t in report["textures"]):
+                        stages["convert"].append(Finding(
+                            "warning", "effect-maps-flt-only", "the glb has normal/metallic-roughness/occlusion maps; "
+                            "only the OpenFlight route writes them as MAK effect maps (use --format flt)"))
             except Exception as e:  # noqa: BLE001 - report, don't crash
                 stages["convert"] = [Finding("error", "convert-failed", str(e))]
             if lay.model_file.exists() and not has_errors(stages["convert"]):

@@ -100,6 +100,35 @@ Resolve each against the install, or with a real import in the GUI, then update 
   `ammunitionParams.mtl` entry and a weapon sysdef.
 
 ## Resolved
+- **Q23 Effect maps on an OpenFlight model.** The importer writes the glb's PBR maps beside each diffuse as
+  `<diffuse>_NML.png` and `<diffuse>_MTL_GLS_AO.png` (ACM 12.4, 12.4.1), the names the stock PBR ships use
+  (Gerald Ford, Arleigh Burke; their `.medf` references only the diffuse).
+  - **Evidence from the install:**
+    - `vrvOsg.dll` has a "name based effect texture" path;
+    - `normal_map.frag.glsl` reads `.ra` ("RGB and RG (BC5) normal maps");
+    - `effects.frag.glsl` reads MTL as metalness and switches to GGX lighting;
+    - `medfTool` compresses our `_NML` files to BC5 as it does stock ones.
+  - **Confirmed in the SOE** on 2026-11-15 with `PBRProbe` (`scripts/make_pbr_probe.py`, test DIS type
+    `1:3:225:1:1:98:0`), by sampling the Left Side View (mean grey):
+    - (a) **a plain `.flt` gets the maps by name**: D (metal 255) renders at 84 against A's 118, dark and
+      reflective;
+    - AO works: E's rows alternate about 112 and 117 in step with its 32 px AO bands, while A stays at about 116.
+      The effect is small because AO only scales the ambient light;
+    - (b) **channels:** B (RGBA, Y also in alpha) and C (plain RGB) render the same: left half 124, right 117.
+      MAK reads Y from green for an uncompressed map; the copy in alpha does no harm and is kept;
+    - (c) **direction:** the half tilted toward the top of the image is the brighter one under the high light,
+      so glTF's +Y (OpenGL) convention is right, with no flip;
+    - (d) **colour space:** F's texture bands and G's face colours of the same bytes render identically, band
+      for band (51 ... 203). Textures and face colours share one colour space;
+    - H, the full stock-style set (normal, metal 200, gloss 180): left half 103-109 against the right half's
+      100-103, darker overall than A from the metal. The same direction as B, damped by the metal;
+    - in that light, byte 0 renders at about 51 and byte 255 at about 203 (haze and ambient lift the blacks).
+      This is in line with Q0's brightening of mid greys;
+    - in the Perspective View, D reflects the sea and sky (bluish), and every letter is upright, so the UVs are
+      the right way up.
+  - Screenshots: vrf-pipeline `working/probe_left.png` (Left Side View, measured) and
+    `working/probe_perspective.png`. Panel means were sampled from the PNGs: lower 60% of each face, each half,
+    and each AO band.
 - **Q0 Colours in the GUI.** The first hand import showed the ship all white: MAK's renderer ignored OpenFlight
   material-palette colours. Fixed by carrying each material's colour in the face colour (palette materials are
   white). **Confirmed in the SOE** on the 2026-11-15 reimport of USS Abraham Lincoln (3D Models view):

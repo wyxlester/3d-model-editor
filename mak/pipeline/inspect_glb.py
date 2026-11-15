@@ -88,8 +88,19 @@ def _apply(m, p):
 
 
 def _png_size(blob: bytes):
+    """(width, height) of a PNG or JPEG, else None."""
     if blob[:8] == b"\x89PNG\r\n\x1a\n":
         return struct.unpack(">II", blob[16:24])
+    if blob[:2] == b"\xff\xd8":                      # JPEG: walk the markers to the first start-of-frame
+        pos = 2
+        while pos + 9 < len(blob):
+            if blob[pos] != 0xFF:
+                return None
+            marker, length = blob[pos + 1], struct.unpack(">H", blob[pos + 2:pos + 4])[0]
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                h, w = struct.unpack(">HH", blob[pos + 5:pos + 9])
+                return w, h
+            pos += 2 + length
     return None
 
 
@@ -191,6 +202,15 @@ def analyse(path: Path, forward_axis: str = "+Y") -> dict:
     for root in scene.get("nodes", []):
         total = union(total, walk(root, _mat_identity(), None))
 
+    slots: dict[int, set[str]] = {}         # image -> how materials use it
+    texs = gltf.get("textures", [])
+    for m in gltf.get("materials", []):
+        pbr = m.get("pbrMetallicRoughness", {})
+        for slot, info in (("base", pbr.get("baseColorTexture")), ("metallic-roughness", pbr.get("metallicRoughnessTexture")),
+                           ("normal", m.get("normalTexture")), ("occlusion", m.get("occlusionTexture")),
+                           ("emissive", m.get("emissiveTexture"))):
+            if info and info.get("index", len(texs)) < len(texs) and texs[info["index"]].get("source") is not None:
+                slots.setdefault(texs[info["index"]]["source"], set()).add(slot)
     textures = []
     for i, img in enumerate(gltf.get("images", [])):
         size = None
@@ -199,7 +219,8 @@ def analyse(path: Path, forward_axis: str = "+Y") -> dict:
             blob = binchunk[bv.get("byteOffset", 0): bv.get("byteOffset", 0) + bv["byteLength"]]
             size = _png_size(blob)
         textures.append({"name": img.get("name", f"image{i}"), "mime": img.get("mimeType"),
-                         "uri": img.get("uri"), "size": list(size) if size else None})
+                         "uri": img.get("uri"), "size": list(size) if size else None,
+                         "used_as": sorted(slots.get(i, ()))})
 
     return {
         "file": str(path),
@@ -324,6 +345,10 @@ def check(report: dict, manifest: dict | None, limits: dict, node_map: artparts.
             f.append(Finding("warning", "texture-size", f"{t['name']} is {t['size']} px"))
         if t["size"] and any(s & (s - 1) for s in t["size"]):
             f.append(Finding("warning", "texture-npot", f"{t['name']} is not power-of-two {t['size']}"))
+        effect = set(t.get("used_as", ())) & {"normal", "metallic-roughness", "occlusion"}
+        if effect and t["mime"] != "image/png" and not (t["uri"] or "").lower().endswith(".png"):
+            f.append(Finding("warning", "texture-jpeg-effect", f"{t['name']} ({t['mime']}) is a {'/'.join(sorted(effect))} "
+                             "map but not a PNG; MAK effect maps are written from PNGs only, so it is skipped"))
     if report["extensions_required"]:
         f.append(Finding("warning", "gltf-extensions", f"required extensions {report['extensions_required']} may not survive FBX export"))
     if report["animations"]:

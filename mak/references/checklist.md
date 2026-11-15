@@ -10,7 +10,10 @@ Each check has a tier and the code that implements it, or TODO. Articulation rul
 | Origin per domain (manual 21.2.1) | origin-z / origin-x / origin-y / origin-cg | done (heuristic) |
 | Faces +Y after forward-axis rotation | forward-axis | done (heuristic) |
 | Triangle budget | poly-budget | done |
-| Texture size and power-of-two | texture-size / texture-npot | done (PNG only) |
+| Texture size and power-of-two | texture-size / texture-npot | done (PNG and JPEG) |
+| Effect maps are PNG | texture-jpeg-effect | done |
+| Every palette texture is beside the model; effect maps written | flt-texture-missing / flt-effect-maps | done |
+| Effect maps render in VR-Forces | (PBRProbe, Q23) | confirmed 2026-11-15 on the probe |
 | glTF animations will be dropped | gltf-animations | done |
 | **Articulation (manual 21.4, 21.1.2)** | | |
 | Part node exists, name unique | artpart-node-missing / duplicate-node-name | done |

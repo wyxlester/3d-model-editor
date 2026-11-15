@@ -85,3 +85,16 @@ Plain XML (not Boost): `<simObjects entityVersion="1.0"><simObject objectType=".
 - `class_id`/`tracking_level`/`version` attributes appear only on the **first** occurrence of each class in a
   file. When moving an item to a new file, the first item must carry them.
 - `<count>` must equal the number of items.
+
+## Effect maps (PBR, ACM 12.4)
+- MAK finds them **by file name** beside the diffuse: `X.png` + `X_NML.png`, `X_AO`, `X_GLS`, `X_SPC`, `X_EMM` ...
+  The map code is uppercase. Up to seven maps per texture.
+- A composite holds several maps, one per channel, named in R, G, B order (12.4.1); one composite per texture.
+  The stock PBR ships use `X_MTL_GLS_AO` (R metal, G gloss = 1 - roughness, B AO) with a BC5 `X_NML`, at 4096².
+- Shaders: `data/shaders/components/` (`lighting.frag.glsl` GGX, `effects.frag.glsl`, `normal_map.frag.glsl`
+  reads `.ra`; tangents come from screen-space derivatives, so meshes need none).
+- The importer writes `_NML` and `_MTL_GLS_AO` from the glb's PBR maps (`pipeline/effectmaps.py`).
+  Confirmed on a `.flt` with `PBRProbe` (Q23):
+  - found by name;
+  - plain RGB normal maps read from green, +Y toward the top of the image;
+  - textures and face colours in one colour space.

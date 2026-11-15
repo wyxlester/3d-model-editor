@@ -39,6 +39,21 @@ def _gbox(lo, hi):
     return _box(tuple(min(a[i], b[i]) for i in range(3)), tuple(max(a[i], b[i]) for i in range(3)))
 
 
+def rgb_png(w: int, h: int, pixel: tuple) -> bytes:
+    """A w x h PNG of one colour; pixel has 1, 3 or 4 values (grey, RGB, RGBA)."""
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    ctype = {1: 0, 3: 2, 4: 6}[len(pixel)]
+    rows = b"".join(b"\0" + bytes(pixel) * w for _ in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, ctype, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+# PBR fixture maps (glTF layout): normal tilted up, ORM = AO 200, roughness 64, metal 255
+PBR_NORMAL = (100, 180, 230)
+PBR_ORM = (200, 64, 255)
+
+
 def tiny_png(w: int = 2, h: int = 2) -> bytes:
     """A valid w x h RGB PNG (red/white checker), standard library only."""
     def chunk(kind, data):
@@ -50,9 +65,16 @@ def tiny_png(w: int = 2, h: int = 2) -> bytes:
 
 def make_glb(path: Path, scale: float = 1.0, lift: float = 0.0, variant: str = "ok",
              names: tuple[str, str, str] = ("hull", "turret", "gun"),
-             sockets: dict[str, tuple[float, float, float]] | None = None, textured: bool = False) -> Path:
+             sockets: dict[str, tuple[float, float, float]] | None = None, textured: bool = False,
+             pbr: bool = False) -> Path:
     """sockets: extra empty root nodes {name: (x, y, z)} in the Blender/MAK frame, e.g. socket_bow.
-    textured: add UVs (u = vertex index / 8, v = 0.25) and one material with an embedded 2x2 PNG."""
+    textured: add UVs (u = vertex index / 8, v = 0.25) and one material with an embedded 2x2 PNG.
+    pbr (implies textured): images 0 checker, 1 normal map (PBR_NORMAL), 2 ORM (PBR_ORM), all 2x2. Materials:
+      0 "Paint"    hull: checker + normal + metallic-roughness/occlusion from the ORM, factors 1
+      1 "Plain"    gun: the same checker, no maps
+      2 "MapsOnly" turret: no base texture, normal map only, metallic 0.25, roughness 0.5"""
+    textured = textured or pbr
+    prim_material = (0, 2, 1) if pbr else (0, 0, 0)
     s = scale
     hull = _gbox((-1 * s, -2.5 * s, lift * s), (1 * s, 2.5 * s, (1.5 + lift) * s))
     turret_pivot = (0, 0, (1.5 + lift) * s)
@@ -91,22 +113,39 @@ def make_glb(path: Path, scale: float = 1.0, lift: float = 0.0, variant: str = "
             views.append({"buffer": 0, "byteOffset": off, "byteLength": len(buf) - off, "target": 34962})
             accessors.append({"bufferView": len(views) - 1, "componentType": 5126, "count": len(verts), "type": "VEC2"})
             prim["attributes"]["TEXCOORD_0"] = len(accessors) - 1
-            prim["material"] = 0
+            prim["material"] = prim_material[len(meshes)]
         meshes.append({"primitives": [prim]})
     extra = {}
     if textured:
-        png = tiny_png()
-        off = len(buf)
-        buf += png
-        while len(buf) % 4:
-            buf += b"\0"
-        views.append({"buffer": 0, "byteOffset": off, "byteLength": len(png)})
-        extra = {"images": [{"name": "checker", "mimeType": "image/png", "bufferView": len(views) - 1}],
-                 "textures": [{"source": 0}],
+        pngs = [("checker", tiny_png())]
+        if pbr:
+            pngs += [("normal", rgb_png(2, 2, PBR_NORMAL)), ("orm", rgb_png(2, 2, PBR_ORM))]
+        images = []
+        for iname, png in pngs:
+            off = len(buf)
+            buf += png
+            while len(buf) % 4:
+                buf += b"\0"
+            views.append({"buffer": 0, "byteOffset": off, "byteLength": len(png)})
+            images.append({"name": iname, "mimeType": "image/png", "bufferView": len(views) - 1})
+        extra = {"images": images,
+                 "textures": [{"source": i} for i in range(len(images))],
                  "materials": [{"name": "Paint", "doubleSided": True,
                                 "pbrMetallicRoughness": {"baseColorFactor": [0.2, 0.4, 0.6, 1.0],
                                                          "baseColorTexture": {"index": 0},
                                                          "metallicFactor": 0.0, "roughnessFactor": 0.5}}]}
+        if pbr:
+            paint = extra["materials"][0]
+            paint["pbrMetallicRoughness"].update(metallicFactor=1.0, roughnessFactor=1.0,
+                                                 metallicRoughnessTexture={"index": 2})
+            paint["normalTexture"] = {"index": 1}
+            paint["occlusionTexture"] = {"index": 2}
+            extra["materials"] += [
+                {"name": "Plain", "pbrMetallicRoughness": {"baseColorFactor": [0.2, 0.4, 0.6, 1.0],
+                                                           "baseColorTexture": {"index": 0}}},
+                {"name": "MapsOnly", "normalTexture": {"index": 1},
+                 "pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1.0], "metallicFactor": 0.25,
+                                          "roughnessFactor": 0.5}}]
 
     hull_n, turret_n, gun_n = names
     turret_node = {"name": turret_n, "mesh": 1, "translation": list(_g(*turret_pivot))}

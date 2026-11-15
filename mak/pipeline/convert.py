@@ -17,7 +17,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import artparts, glb as glbmod, openflight
+from . import artparts, effectmaps, glb as glbmod, openflight
 from .common import InputError, check_model_dir, load_config, load_manifest, layout_for
 
 SCRIPT = Path(__file__).resolve().parent / "blender_glb_to_fbx.py"
@@ -39,10 +39,11 @@ def convert(glb: Path, fbx: Path, forward_axis: str, blender: str, renames: dict
 
 
 def convert_flt(glb: Path, flt: Path, manifest: dict, parts: list[artparts.Part],
-                lod_names: dict | None = None) -> openflight.WriteResult:
-    """OpenFlight route (no Blender)."""
+                lod_names: dict | None = None, cfg: dict | None = None) -> openflight.WriteResult:
+    """OpenFlight route (no Blender). cfg: pipeline.config.json, for its optional "effect_maps" options."""
     model = glbmod.load(glb, manifest["forward_axis_in_blender"])
-    return openflight.write_flt(model, flt, parts, manifest["name"], manifest.get("dis_type"), lod_names)
+    return openflight.write_flt(model, flt, parts, manifest["name"], manifest.get("dis_type"), lod_names,
+                                effectmaps.options(cfg))
 
 
 def main(argv=None) -> int:
@@ -58,7 +59,7 @@ def main(argv=None) -> int:
     lay = layout_for(manifest, fmt=fmt)
     if fmt == "flt":
         parts = artparts.resolve_parts(manifest, artparts.NodeNameMap())
-        res = convert_flt(args.model_dir / "model.glb", lay.model_file, manifest, parts)
+        res = convert_flt(args.model_dir / "model.glb", lay.model_file, manifest, parts, cfg=cfg)
         for w in res.warnings:
             print(f"warning: {w}")
     else:

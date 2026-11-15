@@ -36,6 +36,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import effectmaps
 from . import glb as glbmod
 from .artparts import Part
 from .common import Finding
@@ -176,36 +177,79 @@ def _face(tex: int, mat: int, double_sided: bool, blend: bool, colour: int = WHI
 class WriteResult:
     path: Path
     textures: list[Path] = field(default_factory=list)
+    effect_maps: list[Path] = field(default_factory=list)
     faces: int = 0
     vertices: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
+def _write_textures(model: glbmod.Model, folder: Path, name: str, res: WriteResult, opts: dict) -> dict[int, int]:
+    """Write the diffuse textures (and their effect maps) beside the model; return {material index: texture
+    palette index}. Manual: textures in the same directory as the model files; effect maps by name (12.4)."""
+    def add(data: bytes, ext: str) -> int:
+        fname = folder / f"{name}_tex{len(res.textures)}{ext}"
+        fname.write_bytes(data)
+        res.textures.append(fname)
+        return len(res.textures) - 1
+
+    mats = model.materials
+    with_maps = {i for i, m in enumerate(mats) if opts["enabled"] and m.has_effect_maps}
+    base_use = {m.image for m in mats if m.image is not None}
+    effect_only = {i for m in mats for i in (m.normal_image, m.mr_image, m.occlusion_image, m.emissive_image)
+                   if i is not None and i not in base_use}
+    plain_users = {m.image for i, m in enumerate(mats) if i not in with_maps and m.image is not None}
+
+    image_slot: dict[int, int] = {}
+    for i, img in enumerate(model.images):
+        if i in effect_only:
+            continue
+        if img.data is None:
+            res.warnings.append(f"image '{img.name}' is external ({img.uri}); not copied")
+            continue
+        image_slot[i] = add(img.data, img.ext)
+
+    mat_slot: dict[int, int] = {}
+    set_slot: dict[tuple, int] = {}
+    claimed: set[int] = set()
+    for i, m in enumerate(mats):
+        if m.emissive_image is not None:
+            res.warnings.append(f"material '{m.name}': emissive maps are not written yet; emissive map dropped")
+        base = model.images[m.image] if m.image is not None else None
+        if i not in with_maps or (base is not None and base.data is None):
+            if m.image in image_slot:
+                mat_slot[i] = image_slot[m.image]
+            continue
+        key = (m.image, m.normal_image, m.mr_image, m.occlusion_image, m.metallic, m.roughness,
+               m.normal_scale, m.occlusion_strength)
+        if key not in set_slot:
+            slot = image_slot.get(m.image)
+            if slot is None or m.image in plain_users or slot in claimed:   # don't hand its maps to others
+                slot = add(base.data, base.ext) if base is not None else add(effectmaps.white_png(), ".png")
+            claimed.add(slot)
+            maps = effectmaps.write_effect_maps(m, model.images, res.textures[slot], opts)
+            res.effect_maps += maps.files
+            res.warnings += maps.warnings
+            set_slot[key] = slot
+        mat_slot[i] = set_slot[key]
+    return mat_slot
+
+
 def write_flt(model: glbmod.Model, out: Path, parts: list[Part], name: str, dis_type: str | None = None,
-              lod_names: dict[str, tuple] | None = None) -> WriteResult:
+              lod_names: dict[str, tuple] | None = None, effect_maps: dict | None = None) -> WriteResult:
+    """effect_maps: options (effectmaps.DEFAULTS); None = the defaults."""
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     res = WriteResult(out, warnings=list(model.warnings))
     by_node = {p.node: p for p in parts}
     lods = lod_names if lod_names is not None else LOD_DEFAULTS
-
-    # textures beside the model (manual: textures in the same directory as the model files)
-    tex_index: dict[int, int] = {}
-    for i, img in enumerate(model.images):
-        if img.data is None:
-            res.warnings.append(f"image '{img.name}' is external ({img.uri}); not copied")
-            continue
-        fname = f"{name}_tex{len(tex_index)}{img.ext}"
-        (out.parent / fname).write_bytes(img.data)
-        res.textures.append(out.parent / fname)
-        tex_index[i] = len(tex_index)
+    mat_slot = _write_textures(model, out.parent, name, res, effect_maps or effectmaps.options(None))
 
     w = _Out()
     w.rec(OP["header"], _header(name))
     for i, m in enumerate(model.materials):
         w.rec(OP["material"], _material(i, m))
-    for img_i, pat in tex_index.items():
-        w.rec(OP["texture"], struct.pack(">200siii", res.textures[pat].name.encode()[:199].ljust(200, b"\0"), pat, 0, 0))
+    for pat, path in enumerate(res.textures):
+        w.rec(OP["texture"], struct.pack(">200siii", path.name.encode()[:199].ljust(200, b"\0"), pat, 0, 0))
 
     # vertex palette: one 64-byte vertex record per triangle corner
     vbytes = bytearray()
@@ -232,7 +276,7 @@ def write_flt(model: glbmod.Model, out: Path, parts: list[Part], name: str, dis_
         w.rec(OP["push"])
         for t, offs in zip(node.triangles, offsets[node.name]):
             mat = model.materials[t.material] if t.material is not None and t.material < len(model.materials) else None
-            tex = tex_index.get(mat.image, -1) if mat and mat.image is not None else -1
+            tex = mat_slot.get(t.material, -1) if mat else -1
             blend = bool(mat and (mat.blend or mat.alpha < 1.0))
             # the material colour rides on the face; with a texture it tints it, as glTF baseColorFactor does
             colour = WHITE if mat is None else packed_colour(mat.diffuse, mat.alpha)
@@ -430,9 +474,20 @@ def expected_colours(model: glbmod.Model) -> dict[int, int]:
 
 
 def check_flt(flt: FltFile, parts: list[Part], dis_type: str | None,
-              colours: dict[int, int] | None = None) -> list[Finding]:
-    """OpenFlight-specific checks on top of verify_fbx.compare: comments, DOF limits, header, face colours."""
+              colours: dict[int, int] | None = None, folder: Path | None = None) -> list[Finding]:
+    """OpenFlight-specific checks on top of verify_fbx.compare: comments, DOF limits, header, face colours,
+    and (with folder) that every texture palette file is beside the model."""
     f: list[Finding] = []
+    if folder is not None:
+        missing = [t for t in flt.textures if not (Path(folder) / t).exists()]
+        if missing:
+            f.append(Finding("error", "flt-texture-missing", f"{len(missing)} texture(s) in the palette are not beside "
+                             f"the model, e.g. {missing[0]}"))
+        effect = sorted(p.name for p in Path(folder).glob("*_NML.png")) + \
+            sorted(p.name for p in Path(folder).glob("*_MTL_GLS_AO.png"))
+        if effect:
+            f.append(Finding("info", "flt-effect-maps", f"{len(effect)} effect map(s) beside the model "
+                             f"(AddContentToMAK 12.4): {', '.join(effect[:4])}{' ...' if len(effect) > 4 else ''}"))
     if colours:
         wrong = {(m, c): n for (m, c), n in flt.face_colours.items() if m >= 0 and colours.get(m) != c}
         if wrong:
