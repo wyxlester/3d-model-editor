@@ -68,6 +68,7 @@ On the test machine, do the import in the SOE: copy the donor via "New Model fro
 into a new SMS that includes EntityLevel, and point it at the pipeline's model file. Then run
 `powershell -ExecutionPolicy Bypass -File mak/scripts/export_hand_import.ps1 -SmsName <sms> -Since "<start time>"`
 and bring the zip back. Compare its `sms/<sms>/vrfSim/*.entity` and `sms/<sms>/gui/visuals/*` with `output/<name>`.
+Step by step (parameters, the zip's contents, what to compare and what to keep): `mak/TECHNICAL.md` 5.5.
 This is the spec for the `.leaf` generator and for attach-point and support conventions (open questions 4, 9, 13, 14).
 
 ## Tier 4: runtime smoke test (TODO, needs licence and headless setup)

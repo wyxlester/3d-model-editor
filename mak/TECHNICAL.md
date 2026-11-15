@@ -137,7 +137,7 @@ A change to the pipeline is made in `vrf-pipeline`, tested there, then copied fi
 | Blender 5.2 | FBX route only | headless; not used by default |
 | Editor server venv (FastAPI) | editor integration | `server/.venv` |
 | Node.js | editor web app | `web/` |
-| Windows PowerShell 5.1 | `scripts/export_hand_import.ps1` | read-only collection of a hand import |
+| Windows PowerShell 5.1 | `scripts/export_hand_import.ps1` | read-only collection of a hand import, on the VR-Forces machine (5.5) |
 
 ### 3.2 Configuration
 
@@ -303,11 +303,89 @@ python mak/install.py <package_dir>/mak <sms> [--vrf <dir>] [--shared-data <dir>
 - Alternative: copy the model by hand and use SOE File > Import Visual Models on `visual-import/` (UG 65.2.10).
 - Then open the SMS in the SOE and check the entity.
 
-### 5.5 Comparing with a hand import
-`scripts/export_hand_import.ps1` runs on the machine where an import was done by hand in the SOE. It collects the
-test SMS(s), the model files, files changed since a start time, SOE logs and `medfTool` node info into one zip;
-it only reads the install. `export_info.json` is UTF-8 with a BOM. The zip is diffed against the pipeline's
-output; this is how every visual and behavioural fix so far was found (8.2).
+### 5.5 Verifying against a hand import
+
+The pipeline's output is checked by importing the same model **by hand** in the Simulation Object Editor (SOE) and
+comparing the two. `scripts/export_hand_import.ps1` (in the editor: `mak/scripts/export_hand_import.ps1`) collects
+what the SOE wrote into one zip on the VR-Forces machine, so it can be compared anywhere. Every visual and
+behavioural fix so far came from such a comparison (8.2). Do one after any change to what the importer writes, and
+one per new model kind before its profile is marked `verified` (6.7).
+
+**1. Before the hand import**
+- Generate the model: `python -m pipeline.run models/<name>` (output in `output/<name>/`) or, in the editor,
+  Review > MAK > Export for VR-Forces (output in `<package_dir>/mak/`). It must pass.
+- On the VR-Forces machine, copy the model folder `SharedData/ModelData/<category>/<name>/` into
+  `C:\MAK\SharedData\18\latest\ModelData\<category>\<name>\`. The SOE will point at this file.
+- **Write down the time** you start. The script collects everything changed after it.
+
+**2. The hand import, in the SOE**
+1. Create a custom SMS that includes `EntityLevel` (e.g. `PipelineTest`). Never use a stock SMS.
+2. Copy the manifest's `donor_entity` with "New Model from Existing (Copy)" (UG 65.3.1) and rename it to the
+   manifest's `display_name`.
+3. Set the DIS type to the manifest's `dis_type`, and point the 3D model at the `.flt` from step 1.
+4. Do by hand what the pipeline should have done, so the two can be compared: add the articulated parts
+   (UG 66.3), "Calculate Support Points and Bounding Volume from Displayed Model" (UG 66.1.1, 66.1.3), and for
+   systems use Edit Properties (UG 66.4.4) to place sensors and bind weapons where the model has them.
+5. Save, and close the SOE so every file is written.
+
+**3. Run the script** (on the VR-Forces machine; Windows PowerShell 5.1, no Python needed)
+
+```
+powershell -ExecutionPolicy Bypass -File export_hand_import.ps1 -SmsName PipelineTest `
+    -ModelName "USS Abraham Lincoln" -EntityName "USS Abraham Lincoln" -ModelCategory Vehicles/Surface `
+    -Since "2026-11-15 09:30"
+```
+
+| Parameter | Default | Set it to |
+|---|---|---|
+| `-SmsName` | (required) | the test SMS; several as `A,B` |
+| `-ModelName` | `HarmonyOfTheSeas` | the manifest's `name`: the model folder and file name |
+| `-EntityName` | `Harmony of the Seas` | the manifest's `display_name`: the `.entity` file name or its GUI label |
+| `-ModelCategory` | `Vehicles/Surface` | the manifest's `model_category_dir` (e.g. `Vehicles/Wheeled`) |
+| `-Since` | 24 hours ago | the start time from step 1 |
+| `-VrfRoot`, `-SharedData`, `-MakRoot` | the standard `C:\MAK` install | another install |
+| `-OutDir` | the Desktop | where the zip goes |
+| `-MaxSmsMB` | 500 | above this, only the SMS's `.entity`, `gui/` and index files are copied |
+
+The defaults are Harmony's: **set `-ModelName`, `-EntityName` and `-ModelCategory` for any other model**, or the
+entity and model are not found. The script only reads the install: it copies into a temporary folder, zips it,
+and deletes the folder. It ends by printing the zip's path, each entity found (file and `objectType`) and
+warnings. A warning such as "no .entity named or labelled ..." or "model folder not found" means a parameter is
+wrong: fix it and run it again.
+
+**4. What the zip holds** (`vrf-hand-import-<ModelName>-<time>.zip`)
+
+| Path | Contents |
+|---|---|
+| `sms/<sms>/...`, `sms/<sms>.sms` | the test SMS in full: `vrfSim/*.entity`, `gui/visuals/Entity/*.leaf`, `*.metx`, `gui/visuals/UserData/*.ommx` |
+| `model/<category>/<ModelName>/` | the model files the SOE used |
+| `mak/node_info_<file>.txt` | the model as MAK's own reader sees it (`medfTool --writeNodeInfo`) |
+| `changed/...` | any other file the SOE changed after `-Since` (definitions, `importConfig`, settings, other SMSs), path relative to `C:\MAK` |
+| `logs/`, `version/` | SOE and VR-Forces logs since `-Since`; the VR-Forces build |
+| `export_info.json` | parameters, entities found, notes, and every file with its SHA-256. UTF-8 **with a BOM**: read it with `encoding="utf-8-sig"` |
+
+**5. Compare** (unzip into a scratch folder, outside `output/`)
+
+| Hand import (zip) | Pipeline output | Look at |
+|---|---|---|
+| `sms/<sms>/vrfSim/<entity>.entity` | `sms/vrfSim/<display name>.entity` | `objectType`; `DtSimArtPartDescriptorList` (codes, attach points, limits); `boundingVolume`; supports; each `componentSystem` (`sensor-position`, `*-art-part-type`) |
+| `sms/<sms>/gui/visuals/Entity/*.leaf`, `*.metx` | `sms/gui/visuals/Entity/` | model definition references, DIS type |
+| `sms/<sms>/gui/visuals/UserData/*.ommx` | `sms/gui/visuals/UserData/` | schema, `filename` |
+| `mak/node_info_*.txt` | `report.json` `verify_model` (`mak-loaded`) | the same parts and `@dis` comments |
+| `changed/` | (nothing) | files the SOE touched that the pipeline never writes: a step the pipeline misses |
+
+Diff a pair with `git diff --no-index --word-diff <hand file> <pipeline file>`. Differences that are expected:
+the SOE adds a `visual-meta-data` block (open question Q17) and an empty `additional-detection-types` list on
+sensors, and its `.leaf` points at its own copy of the `.ommx` (`<name>_1`). Anything else is either a pipeline
+bug (fix the generator, not the output) or an SOE convention to adopt; record which in
+`references/open-questions.md`.
+
+**6. Keep the result**
+- vrf-pipeline: copy the SOE's files into `tests/fixtures/hand_import/`, say where each came from in its
+  `README.md`, and extend `tests/test_hand_import.py` so the generator must keep matching them.
+- 3d-model-editor: the repository is public and these files are MAK material, so **commit none of them**. Turn
+  what was learnt into rules in `mak/tests/test_editor_rules.py`, which check against the installed donor instead.
+- Mark a kind's profile `status="verified"` in `profiles.py` only after a clean comparison.
 
 ## 6. Supported features
 
