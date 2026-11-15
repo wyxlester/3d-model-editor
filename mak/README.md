@@ -3,7 +3,7 @@
 Turns an export package's ship (contract §8) into a VR-Forces entity, **without Blender**. This is the "MAK
 adapter" of `docs/PLAN.md`. Contract: §9b (script and report) and §10 (`Project.mak`, endpoints).
 
-Origin: copied from the `vrf-pipeline` project, branch `feat/model-kinds`, commit `9c9e697`
+Origin: copied from the `vrf-pipeline` project, branch `feat/model-kinds`, commit `6ec7747`
 (2026-11-15). That project's MAK manuals and hand-import fixtures are not copied here: they are MAK material and
 this repository is public. `references/` cites manual sections instead.
 
