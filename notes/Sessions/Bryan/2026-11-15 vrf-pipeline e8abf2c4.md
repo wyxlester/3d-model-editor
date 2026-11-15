@@ -4,7 +4,7 @@ project: vrf-pipeline (MAK VR-Forces importer for 3d_model_editor)
 branch: feat/mak-kinds (here), feat/model-kinds (vrf-pipeline)
 session: e8abf2c4 (continues d8a4bbaa)
 status: in progress
-summary: The importer now gives an imported entity the systems it should have (sensors placed on the model, missing damage and baseline systems, weapons for the model's mounts) and ties each part to the system component that drives it. A reimport of USS Abraham Lincoln in the Simulation Object Editor confirmed the systems, the part associations and the model's colours.
+summary: The importer now gives an imported entity the systems it should have (sensors placed on the model, missing damage and baseline systems, weapons for the model's mounts) and ties each part to the system component that drives it. A reimport of USS Abraham Lincoln in the Simulation Object Editor confirmed the systems, the part associations and the model's colours. The team Slack updates now carry before/after and feature screenshots, the earlier ones included.
 written_by: Claude Code (Bryan's session)
 ---
 
@@ -14,7 +14,8 @@ written_by: Claude Code (Bryan's session)
 VR-Forces entities use; plan and build how sensors, weapons and other systems are added from the visual model,
 grounded in the manuals; include the systems a model should have, with parameters, and set each articulated part's
 associated component; document how to verify an import against a hand import; record the reimport results; keep
-the docs up to date before every commit.
+the docs up to date before every commit; post team updates with before/after and feature images, make that the
+default for future updates, and add images to the earlier updates.
 
 ## Done
 - **Names and part codes** (14 Nov evening, after the last note): the export is named after the model folder
@@ -59,7 +60,24 @@ the docs up to date before every commit.
 - **Docs:** a step-by-step guide to `export_hand_import.ps1` for checking an import against a hand import
   (`mak/TECHNICAL.md` 5.5); the technical document, references and open questions brought up to date; and a
   rule in vrf-pipeline's `CLAUDE.md` to check the docs before every commit.
-- **Team update** posted to the team Slack channel.
+- **Team updates** posted to the team Slack channel: the systems update (midday), and an evening update covering
+  the work of the forked sessions (joint planning, the stale-server guards, texture bake, effect maps, `.medf`
+  packaging, the open-question sweep), with three before/after images in its thread.
+- **Images on the earlier updates** (evening): nine images added as thread replies to four earlier updates, not
+  re-sent to the channel:
+  - before/after, from SOE screenshots recovered from vrf-pipeline's git history (`working/` had been cleaned):
+    generic warship and all-white Harmony → Lincoln with its own model and colours; support points; systems tab;
+    Associated Component; colours. Where no corrected Harmony shot exists, the "after" is Lincoln and the caption
+    says so.
+  - feature screenshots from the running editor: the Review > MAK export panel and Install dialog, the drafted
+    systems list, the articulation roles and the plan's moving parts, and the stale-server banner with the marked
+    part codes.
+  - The 14 Nov sensor-position note has no image: nothing visual to show.
+- **`slack-update` skill** (user-level, in Bryan's `~/.claude/skills/`, not in a repo): drafting a team update now
+  includes images by default, before/after for visible changes and single labelled screenshots for features with
+  no "before". It searches git history for screenshots, captures sharp shots of the editor with headless Chrome
+  (`scripts/cdp_shot.mjs`), labels panels (red before, green after, blue feature), shows the draft before posting,
+  and posts images as captioned thread replies.
 - **Gates:** vrf-pipeline 159 tests; `mak/tests` 179 (+8 skipped without the Harmony and Lincoln files); server
   321; web typecheck and 135 tests; MAK's own reader loads Lincoln with all 11 parts.
 - **Commits** (all pushed, nothing merged): here `2fae944`, `d4bb320`, `0d76019`, `060cdee`, `756baf5`,
@@ -72,6 +90,9 @@ the docs up to date before every commit.
 - Systems a model should have follow what most stock entities of the same kind and class have (at least half),
   not the real ship's fit.
 - Docs are checked and updated before every commit (vrf-pipeline `CLAUDE.md`).
+- Team updates show what changed: images wherever they help, captioned honestly (a paler baked texture, a
+  different ship or date is said in the caption). Kept as a user-level skill rather than in `CLAUDE.md`, because
+  the updates cover both repos.
 
 ## Open
 - [ ] **Bryan:** run a scenario with the reimported Lincoln. Does a CIWS turn to a target and fire, with the
@@ -80,6 +101,10 @@ the docs up to date before every commit.
 - [ ] **Bryan:** add elevation joints to Lincoln's six weapon mounts in Blender, then draft again; the sim-only
   parts go away. *Now done through the editor instead: the plan's articulation roles give each mount its
   elevation joint (session 7b16c568); Lincoln has been rebuilt that way, its export still to redo.*
+- [ ] **Bryan:** restart the editor (`start.ps1`). On the evening of 15 Nov its server was running code older than
+  the page (the top bar's "Restart the editor" banner), so MAK settings drafted now still use the old rules.
+- [ ] Baked textures render paler than stock, and the editor's normal and AO debug views of the baked Lincoln look
+  flat: check that the effect maps reach the render (Q25).
 - [ ] **Bryan / Lester:** review and merge `feat/mak-export` and `feat/mak-kinds`.
 - [ ] **DTS:** a real Sea Sparrow needs its own munition, ammunition entry and launcher (Q22).
 - [ ] **DTS:** can several model parts share one part code, so rudders 2-4 turn with rudder 1 (Q18)?
