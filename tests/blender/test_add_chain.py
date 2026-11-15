@@ -32,6 +32,7 @@ me3d.box("Weapons__RAM_1_Muzzle", center=(-2.38, 0.0, 2.5), size=(0.04, 0.4, 0.3
 def built(tmp_path_factory):
     spec = catalog("custom")
     spec["custom_ops"] = [{"id": "op_weapons", "description": "add a CIWS and a RAM launcher", "code": WEAPONS}]
+    spec["joint_limits"] = {"Weapons__Phalanx_1__Gun": {"min_deg": -10, "max_deg": 80}}   # a joint the op makes
     out = tmp_path_factory.mktemp("chains")
     proc, report, parts = run_build(spec, out)
     assert report["ok"], (report["errors"], proc.stdout[-2000:], proc.stderr[-2000:])
@@ -47,9 +48,16 @@ def test_chain_joints_are_nested_with_the_role_axes(built):
         j = p[name]["joint"]
         assert (j["axis"], p[name]["parent"], j["chain"], j["role"] in ("gun_mount", "trainable_launcher")) == \
             (axis, parent, i, True), (name, p[name])
-    assert p["Weapons__Phalanx_1__Gun"]["joint"]["min_deg"] == -20 and p["Weapons__Phalanx_1"]["joint"]["priority"] == "P0"
+    assert p["Weapons__RAM_1__Elevation"]["joint"]["min_deg"] == -20 and p["Weapons__Phalanx_1"]["joint"]["priority"] == "P0"
     assert p["Weapons__Phalanx_1__Gun"]["origin_m"] == pytest.approx([3.0, 0.0, 2.6], abs=1e-3)
     assert p["Weapons__Phalanx_1_Barrel"]["parent"] == "Weapons__Phalanx_1__Gun"
+
+
+def test_joint_limits_reach_joints_a_custom_op_made(built):
+    """joint_limits apply after the custom ops: before, every planned weapon joint was 'unknown part ... ignored'."""
+    j = built["parts"]["Weapons__Phalanx_1__Gun"]["joint"]
+    assert (j["min_deg"], j["max_deg"]) == (-10, 80)
+    assert not [w for w in built["report"]["warnings"] if "joint_limits" in w]
 
 
 def test_the_glb_keeps_the_hierarchy(built):

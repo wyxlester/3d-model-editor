@@ -268,7 +268,8 @@ def instances_from_parts(parts: list[dict], path: Path | None = None) -> list[di
 
 def check(parts: list[dict], planned: list[dict] | None, path: Path | None = None) -> list[dict]:
     """Findings for a build's parts.json against the planned instances (plus any role-tagged ones).
-    Each finding: {level: warning|info, code, part, message}."""
+    Each finding: {level: warning|info, code, part, message}, plus `component` (the instance's top joint),
+    `role` and `joint` (the joint's suffix, "" for the top one) when it belongs to a planned or tagged instance."""
     by = {p.get("path"): p for p in parts if p.get("path")}
     kids: dict[str, list[str]] = {}
     for p in parts:
@@ -280,12 +281,15 @@ def check(parts: list[dict], planned: list[dict] | None, path: Path | None = Non
     findings: list[dict] = []
     covered: set[str] = set()
 
+    where: dict = {}                     # the instance and joint being checked, stamped on each finding
+
     def add(level, code, part, msg):
-        findings.append({"level": level, "code": code, "part": part, "message": msg})
+        findings.append({"level": level, "code": code, "part": part, "message": msg, **where})
 
     for inst in instances:
         r = role(inst["role"], path) or {"label": inst["role"]}
         for want in inst["joints"]:
+            where.update(component=inst["top"], role=inst["role"], joint=want["suffix"])
             name = want["name"]
             covered.add(name)
             p = by.get(name)
@@ -327,13 +331,39 @@ def check(parts: list[dict], planned: list[dict] | None, path: Path | None = Non
                     and (abs(lo - want["min"]) > 0.5 or abs(hi - want["max"]) > 0.5)):
                 add("info", "articulation-limits", name,
                     f"{name} moves {lo:g}..{hi:g}; its role's limits are {want['min']:g}..{want['max']:g}.")
+    where.clear()
     for p in parts:
         if p.get("joint") and p.get("path") not in covered:
-            add("info", "articulation-unplanned", p["path"],
-                f"{p['path']} moves but no planned component covers it.")
+            add("info", "articulation-unplanned", p["path"], f"{p['path']} moves but no planned component covers it.")
     return findings
 
 
+SHORT = {"articulation-missing-joint": "missing", "articulation-no-geometry": "empty",
+         "articulation-not-nested": "not nested", "articulation-wrong-motion": "wrong axis"}
+
+
 def report_lines(findings: list[dict]) -> list[str]:
-    """Build-report warnings ("articulation: ...") for the warning-level findings."""
-    return [f"articulation: {f['message']}" for f in findings if f["level"] == "warning"]
+    """Build-report warnings: one short line per moving component, e.g. "articulation: Weapons__Phalanx_1
+    (gun mount): Gun missing". The full per-joint messages stay in report["articulation"] (and in the rebuild
+    result the AI reads); a report's warnings are shown whole on the Build screen, so they stay short."""
+    by: dict[str, dict[str, list[str]]] = {}
+    for f in findings:
+        if f["level"] != "warning":
+            continue
+        comp = f.get("component") or f["part"]
+        what = SHORT.get(f["code"], f["code"])
+        by.setdefault(comp, {}).setdefault(what, []).append(f.get("joint", ""))
+    lines = []
+    for comp, problems in by.items():
+        rid = next((f.get("role") for f in findings if f.get("component") == comp and f.get("role")), None)
+        r = role(rid) if rid else None
+        n = len(r["joints"]) if r else 0
+        label = f" ({rid.replace('_', ' ')})" if rid else ""
+        parts = []
+        for what, joints in problems.items():
+            if what == "missing" and n and len(joints) == n:
+                parts.append("not built")
+            else:
+                parts.append(f"{', '.join(j or 'mount' for j in joints)} {what}")
+        lines.append(f"articulation: {comp}{label}: {'; '.join(parts)}")
+    return lines

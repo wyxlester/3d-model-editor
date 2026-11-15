@@ -89,8 +89,15 @@ It flows through three stages:
    plan does not list. The findings go to `build_report.articulation` as
    `[{level: warning|info, code, part, message}]`. Codes:
    - `articulation-missing-joint`, `articulation-no-geometry`, `articulation-not-nested`,
-     `articulation-wrong-motion` (warnings, also added to `warnings` as `articulation: ...`);
+     `articulation-wrong-motion` (warnings);
    - `articulation-limits`, `articulation-unplanned` (info).
+
+   Each finding of a planned or tagged component also carries `component` (its top joint), `role` and
+   `joint` (the suffix, `""` for the top joint). `warnings` gets one short line per component, not one per
+   joint, e.g. `articulation: Weapons__Phalanx_1 (gun mount): Gun missing` or `...: not built`. The Build
+   screen folds these into one "N moving parts missing joints" line that opens to the list, and its status
+   bar is capped in height and scrolls. Right after a plan's first (hull-only) build every planned part is
+   listed, and before this change the list pushed the viewport to nothing.
 
    The rebuild tool's result lists the warnings, so the AI fixes them in the same turn. A build is
    never failed, and exports are never blocked, for these.
@@ -176,7 +183,8 @@ the exit code**: Blender returns 0 even when a script raises an error, unless th
   It is never copied into a spec. `catalog/categories.json` lists the default categories:
   `{"ship": [label], "crew": [label]}`.
 - `overrides` are applied after the build, to parts by path.
-- `custom_ops` run last, inside Blender, with the helper module `me3d` (from `blender/common.py`)
+- `joint_limits` are applied after the custom ops, so they reach joints a custom op made.
+- `custom_ops` run after the overrides, inside Blender, with the helper module `me3d` (from `blender/common.py`)
   in scope. This is how the AI adds geometry no builder knob covers. Every object a custom op
   creates must follow section 2.
 - `id` names the exported files (section 8) and StraitsSim's ship id, so it never changes on an

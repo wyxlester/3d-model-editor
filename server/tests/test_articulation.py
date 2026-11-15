@@ -124,7 +124,22 @@ def test_lincoln_as_built_is_missing_every_elevation_joint():
         f"Weapons__{w}__{s}" for w in ("RAM_1", "RAM_2", "SeaSparrow_1", "SeaSparrow_2")
         for s in ("Elevation", "Launcher")])                     # the 10 sim-only parts the MAK export added
     assert {f["code"] for f in found if f["level"] == "info"} == {"articulation-limits"}   # -170..170 vs -180..180
-    assert all(line.startswith("articulation: ") for line in art.report_lines(found))
+    # The Build screen shows every report warning: one short line per component, not a paragraph per joint.
+    assert art.report_lines(found) == [
+        "articulation: Weapons__Phalanx_1 (gun mount): Gun missing",
+        "articulation: Weapons__Phalanx_2 (gun mount): Gun missing"] + [
+        f"articulation: Weapons__{w} (trainable launcher): Elevation, Launcher missing"
+        for w in ("RAM_1", "RAM_2", "SeaSparrow_1", "SeaSparrow_2")]
+    assert {"component", "role", "joint"} <= set(found[0])
+
+
+def test_a_plan_built_before_its_details_stays_short():
+    """Right after a plan's first build (hull only) every planned joint is missing: Lincoln's 26-part plan gave
+    36 paragraphs (12,000 characters) that pushed the Build viewport to nothing. One line per component now."""
+    plan = chains()
+    lines = art.report_lines(art.check([part("Hull__Main", None)], plan))
+    assert len(lines) == len(plan) and all(line.endswith(": not built") for line in lines)
+    assert sum(map(len, lines)) < 80 * len(lines)
 
 
 def test_lincoln_with_the_chains_built_passes():
@@ -192,7 +207,8 @@ def test_plan_tool_refuses_then_stores_the_chains_and_the_build_reports_them(mak
     report = job["result"]["build_report"]
     assert [f["part"] for f in report["articulation"] if f["level"] == "warning"] == [
         "Weapons__Phalanx_1", "Weapons__Phalanx_1__Gun"]            # the fake builder makes no weapons
-    assert any(w.startswith("articulation: Weapons__Phalanx_1__Gun") for w in report["warnings"])
+    assert [w for w in report["warnings"] if w.startswith("articulation: ")] == [
+        "articulation: Weapons__Phalanx_1 (gun mount): not built"]       # one short line per component
     rebuilt = json.loads(next(t for n, t, err in agent.results if n == "rebuild"))
     assert "Articulation: 2 joint(s)" in rebuilt["note"] and len(rebuilt["articulation"]) == 2
     assert "Weapons__Phalanx_1__Gun" in agent.prompts[-1]           # the build turn is told the chain

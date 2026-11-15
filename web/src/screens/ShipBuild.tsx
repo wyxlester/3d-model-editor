@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, errorText, modelUrl } from '../api';
 import { undoHint } from '../lib/undo';
+import { splitWarnings } from '../lib/report';
 import { AiWorking, ChatPanel, ErrorNote, JobLines, PRIORITY, TopBar, useCarried } from '../components/common';
 import { DerivedFromLink, useVariantDialog } from '../components/VariantDialog';
 import { OtherWork, useProjectWork } from '../components/JobCenter';
@@ -298,7 +299,8 @@ export function ShipBuild() {
             {report.ok === true && <span className="ok">✓ Build passed its checks</span>}
             {report.ok === false && <span className="bad">✗ Build failed</span>}
             {(report.errors ?? []).map((e, i) => <span key={`e${i}`} className="bad">✗ {e}</span>)}
-            {(report.warnings ?? []).map((w, i) => <span key={`w${i}`} className="warn">! {w}</span>)}
+            {splitWarnings(report.warnings).other.map((w, i) => <span key={`w${i}`} className="warn">! {w}</span>)}
+            <ArticulationNote warnings={report.warnings} />
             {report.triangles !== undefined && <span className="muted">{report.triangles.toLocaleString()} triangles</span>}
             <span style={{ marginLeft: 'auto' }} className="muted">{openCount} open comments</span>
           </div>
@@ -312,6 +314,23 @@ export function ShipBuild() {
       </div>
       {variant.dialog}
     </>
+  );
+}
+
+/** CONTRACT §3b: the plan's moving parts this version is missing joints for, as one line that opens to the
+ *  list (one line per part). Right after a plan's first build there can be dozens, until the details are added. */
+function ArticulationNote({ warnings }: { warnings: string[] | undefined }) {
+  const [open, setOpen] = useState(false);
+  const lines = splitWarnings(warnings).articulation;
+  if (!lines.length) return null;
+  return (
+    <span style={{ display: 'flex', flexDirection: 'column', gap: 4, flexBasis: open ? '100%' : undefined }}>
+      <button className="warn" style={{ textAlign: 'left', padding: 0, background: 'none', border: 'none', font: 'inherit', cursor: 'pointer' }} aria-expanded={open} onClick={() => setOpen(!open)}
+        title="Moving parts the design plan lists whose joints this version does not have yet">
+        ! {lines.length} moving part{lines.length > 1 ? 's' : ''} missing joints {open ? '▴' : '▾'}
+      </button>
+      {open && lines.map((l, i) => <span key={i} className="warn" style={{ paddingLeft: 12 }}>{l}</span>)}
+    </span>
   );
 }
 

@@ -6,6 +6,7 @@ import { blenderToGltf, cameraFor, gltfToBlender, jointAxisGltf } from './frames
 import { assetLabel, clothesSlot, mergePatch, toggleIn } from './spec';
 import { keyLine, moveRows, refineMessage, removeMovePatch } from './moves';
 import { startsNewResearch, targetFor } from './routing';
+import { splitWarnings } from './report';
 import { fileType, refuse, sizeText } from './attachments';
 import {
   boxText, boxToPercent, clampPan, countLine, coverageSummary, filterPhotos, fitSize, hostOf, photoIdsIn, photoStatus, provenanceRows,
@@ -16,6 +17,16 @@ import type { ResearchPhoto } from '../types';
 const part = (path: string, parent: string | null, extra: Partial<Part> = {}): Part => ({
   path, label: '', parent, joint: null, station: null,
   bounds_min: [0, 0, 0], bounds_max: [1, 1, 1], triangles: 10, ...extra,
+});
+
+describe('build report warnings', () => {
+  it('pulls articulation lines out for the one-line summary', () => {
+    const w = ['socket socket_bow missing', 'articulation: Weapons__Phalanx_1 (gun mount): not built',
+      'articulation: Hull__Rudder_1 (rudder): mount wrong axis'];
+    expect(splitWarnings(w)).toEqual({ other: ['socket socket_bow missing'],
+      articulation: ['Weapons__Phalanx_1 (gun mount): not built', 'Hull__Rudder_1 (rudder): mount wrong axis'] });
+    expect(splitWarnings(undefined)).toEqual({ other: [], articulation: [] });
+  });
 });
 
 describe('part labels', () => {

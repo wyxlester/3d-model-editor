@@ -71,8 +71,10 @@ def main():
         sys.exit(1)
 
     me3d.apply_overrides(spec, report)
-    me3d.apply_joint_limits(spec, report)
     me3d.run_custom_ops(spec, report)
+    # Joint limits last: they may name joints a custom op made (a plan's weapon chains, CONTRACT §3b). Applied
+    # before the custom ops, those were "unknown" and the limits silently dropped.
+    me3d.apply_joint_limits(spec, report)
     try:
         me3d.update_sockets()
         me3d.check_scene(report, need_aft_masthead=float(params.get("loa_m", 0)) >= 50)

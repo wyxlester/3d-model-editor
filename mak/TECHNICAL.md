@@ -578,9 +578,9 @@ The `.entity`'s sensors, weapons and other systems are the donor's (UG 65.3.1), 
 | vrf-pipeline | `python -m unittest discover -s tests` | 150 | artparts, inspect rules, OpenFlight write/read, colours, entity building, hand-import comparisons, drafts, profiles, one full run per kind, systems (sysdef reader, catalog, apply, checks, drafts) |
 | editor `mak/tests` | `server/.venv/Scripts/python -m pytest mak/tests -q` | 184 (+8 skipped without the Harmony and Lincoln files) | the pipeline tests, package conversion, systems draft and `systems_off`, install, draft, export script, editor rules (no MAK-derived files), articulation roles against the install (`test_roles.py`) |
 | editor `tests/mak` | `server/.venv/Scripts/python -m pytest tests/mak -q` | 1 (slow) | export of a built package with the real `medfTool` |
-| editor server | `server/.venv/Scripts/python -m pytest server/tests -q` | 335 | endpoints, settings validation (`systems_off` included), export job with a fake runner, install refusals and backups, articulation roles (research, plan gate, post-build check on Lincoln's parts) |
-| editor Blender | `server/.venv/Scripts/python -m pytest tests/blender/test_add_chain.py -q` | 3 (slow) | `me3d.add_chain` builds nested joints that survive into the glb and pass the post-build check |
-| editor web | `cd web && npm run typecheck && npm test` | 135 | panel logic, DIS type checks, system change text |
+| editor server | `server/.venv/Scripts/python -m pytest server/tests -q` | 336 | endpoints, settings validation (`systems_off` included), export job with a fake runner, install refusals and backups, articulation roles (research, plan gate, post-build check on Lincoln's parts) |
+| editor Blender | `server/.venv/Scripts/python -m pytest tests/blender/test_add_chain.py -q` | 4 (slow) | `me3d.add_chain` builds nested joints that survive into the glb and pass the post-build check; `joint_limits` reach joints a custom op made |
+| editor web | `cd web && npm run typecheck && npm test` | 136 | panel logic, DIS type checks, system change text, build-report warning split |
 
 Tests that need VR-Forces skip without it. The MAK manuals and SOE-written files are not in the editor repository
 (licence), so the editor's tests rebuild expectations from the installed donor instead.
