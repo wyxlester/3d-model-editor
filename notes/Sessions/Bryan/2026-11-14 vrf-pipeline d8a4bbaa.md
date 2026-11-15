@@ -133,7 +133,9 @@ Five artefacts, all now generated (layout matches what the Simulation Object Edi
 
 ## Open
 - [ ] **Bryan:** create a custom SMS (including EntityLevel) in the SOE, then use Review > MAK > Install, and check
-  in the SOE that Harmony shows its colours, its radars animate and 3D Colorized shows Harmony.
+  in the SOE that Harmony shows its colours, its radars animate and 3D Colorized shows Harmony. *15 Nov: colours
+  confirmed in the SOE on the USS Abraham Lincoln reimport (Q0 resolved); the install through Review > MAK is
+  still untried.*
 - [ ] **Bryan / Lester:** review and merge `feat/mak-export` and `feat/mak-kinds` (or open a pull request).
 - [ ] **Bryan:** find out whether copying files into an SMS is enough, or whether "Import Visual Models" is required.
 - [ ] **Bryan:** confirm the donor for passenger ships (`Super_Tanker` vs `Cruise_Ship`).
@@ -144,9 +146,10 @@ Five artefacts, all now generated (layout matches what the Simulation Object Edi
 - [ ] **DTS:** can a custom human or animal mesh be used without DI-Guy authoring tools?
 - [ ] **Claude:** export the editor's crew as DI-Guy characters (character picker in Review > MAK); rotors,
   propellers and wheels as animation sequences; destroyed-state geometry.
-- [ ] **Claude (option, not applied):** place the sensors from the model: radar sensor at a radar part's pivot,
+- [x] **Claude (option, not applied):** place the sensors from the model: radar sensor at a radar part's pivot,
   visual sensor at `socket_bridge_eye` or `station__helm`, else the donor's (Q16). Decide with DTS whether it is
-  worth it, then check in VR-Forces with the line-of-sight display.
+  worth it, then check in VR-Forces with the line-of-sight display. *Done 15 Nov (applied by default); the
+  VR-Forces check is still open, see `2026-11-15 vrf-pipeline e8abf2c4.md`.*
 - [ ] **DTS:** munitions: is a cloned stock detonation entry acceptable, and who adds new munitions to launchers?
 - [ ] **DTS:** aircraft: supports at the landing gear? How is the centre of gravity judged?
 - [ ] **Bryan:** re-export Harmony so its `.entity` carries the project name.
