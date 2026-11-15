@@ -402,6 +402,29 @@ Part codes from ACM Table 58 (`artparts.py`); default motion and limits per code
 parent part; `.entity` descriptors in the stock shapes (parameter pairs, attach points relative to the parent's,
 weapon end points at the muzzle); visual-only parts (rotors etc.) are in the model but not in the `.entity`.
 
+**Planned upstream, in the editor (CONTRACT §3b).** The hierarchy these rules need is planned before Blender
+builds the model, not discovered at export:
+- `catalog/articulation/roles.json` lists the moving components ("roles"). Each gives its chain of joints with
+  motion, axis, pivot, neutral pose and what geometry each joint holds: `gun_mount` (mount az -> Gun el),
+  `naval_gun`, `trainable_launcher` (mount az -> Elevation el -> Launcher, fixed), `vertical_launcher`,
+  `rotating_radar`, `director`, `rudder`, `mast_extension`, `crane`, `davit`, `deck_elevator`, `hatch`,
+  `landing_gear`, `control_surface`, `rotor`, `propeller`, `wheel`.
+- Roles are tagged with MAK profile kinds, and a project kind maps onto them (`ship` -> `surface_ship`), so a new
+  kind needs data, not code.
+- The flow:
+  - research names each moving component's role and count;
+  - the design plan lists each instance by name and cannot be saved or approved if a P0/P1 component is missing;
+  - the build AI makes each one with `me3d.add_chain`;
+  - every build is checked against the plan (`articulation-missing-joint`, `-no-geometry`, `-not-nested`,
+    `-wrong-motion`), and the build AI fixes the warnings in the same turn.
+- `mak/tests/test_roles.py` keeps the roles honest against the install:
+  - example names get the role's Table 58 codes;
+  - motions match `motion_of`;
+  - each weapon role's chain binds its stock sysdef whole, with no sim-only part (Phalanx, Mk 45, RAM, VLS);
+  - limits match the sysdef within a degree.
+- End to end, a custom ship built with `add_chain` for a Phalanx and a RAM launcher exports with both weapons
+  fully bound, no `part-sim-only` warning, and medfTool loading all 7 parts.
+
 ### 6.3 Element definition from the donor
 The donor's element definition is found through the install's `.metx` mappings, **exact type first, else best
 match** (stock mappings use -1 as a wildcard, e.g. a hangar's `5:1:0:2:1:1:0` is mapped by `5:1:-1:2:1:1:-1`).
@@ -533,6 +556,7 @@ The `.entity`'s sensors, weapons and other systems are the donor's (UG 65.3.1), 
 | Origin: land = ground-contact plane at the yaw axis; air/space = centre of gravity; surface/subsurface = waterline at the centre of buoyancy | ACM 21.2.1, Table 43 |
 | Editor ships: +X bow, +Y port, +Z up, origin at the waterline amidships; parts named `Group__Part`; joint pivot = node origin; joint axis local, turned by `rotation_deg` | CONTRACT §1-§3 |
 | A moving part is one node with its geometry beneath it, no rotation or scale in the neutral pose, child parts under the parent | ACM 21.4 |
+| What a moving component needs (its chain of joints) is the same for every simulator that drives parts by DIS articulation, so it is planned once, in the editor, as simulator-neutral roles | ACM 21.4, 21.5.1; UG 73.3.1; `mak/tests/test_roles.py` (each weapon role binds its stock sysdef whole) |
 | The donor is the same kind, and its systems suit the new object once fitted and completed from the stock class (6.11) | UG 65.3.1 (a copy keeps the donor's behaviour) |
 | A system most stock entities of the same kind and class (military or civilian) have is one the new object should have | UG 66.4; install counts (e.g. 70% of military ships have surface-default damage) |
 | A part named `<entry>-<code>` after the component that drives it is tied to that component; a part the model lacks can live in the `.entity` only | UG 66.3, 66.3.1; install (1709 stock descriptors use the name); confirmed in the SOE (Q21); the in-scenario behaviour of sim-only parts is still open (Q20) |
@@ -552,9 +576,10 @@ The `.entity`'s sensors, weapons and other systems are the donor's (UG 65.3.1), 
 | Suite | Command | Count (2026-11-15) | Covers |
 |---|---|---|---|
 | vrf-pipeline | `python -m unittest discover -s tests` | 150 | artparts, inspect rules, OpenFlight write/read, colours, entity building, hand-import comparisons, drafts, profiles, one full run per kind, systems (sysdef reader, catalog, apply, checks, drafts) |
-| editor `mak/tests` | `server/.venv/Scripts/python -m pytest mak/tests -q` | 170 (+8 skipped without the Harmony and Lincoln files) | the pipeline tests, package conversion, systems draft and `systems_off`, install, draft, export script, editor rules (no MAK-derived files) |
+| editor `mak/tests` | `server/.venv/Scripts/python -m pytest mak/tests -q` | 184 (+8 skipped without the Harmony and Lincoln files) | the pipeline tests, package conversion, systems draft and `systems_off`, install, draft, export script, editor rules (no MAK-derived files), articulation roles against the install (`test_roles.py`) |
 | editor `tests/mak` | `server/.venv/Scripts/python -m pytest tests/mak -q` | 1 (slow) | export of a built package with the real `medfTool` |
-| editor server | `server/.venv/Scripts/python -m pytest server/tests -q` | 321 | endpoints, settings validation (`systems_off` included), export job with a fake runner, install refusals and backups |
+| editor server | `server/.venv/Scripts/python -m pytest server/tests -q` | 335 | endpoints, settings validation (`systems_off` included), export job with a fake runner, install refusals and backups, articulation roles (research, plan gate, post-build check on Lincoln's parts) |
+| editor Blender | `server/.venv/Scripts/python -m pytest tests/blender/test_add_chain.py -q` | 3 (slow) | `me3d.add_chain` builds nested joints that survive into the glb and pass the post-build check |
 | editor web | `cd web && npm run typecheck && npm test` | 135 | panel logic, DIS type checks, system change text |
 
 Tests that need VR-Forces skip without it. The MAK manuals and SOE-written files are not in the editor repository
@@ -590,7 +615,8 @@ After the fixes, the bounding volume and both radars (attach points, axes, limit
   launcher part as well as its mount. Where the model has only the azimuth joint (all six Lincoln mounts), the
   missing parts are sim-only: the weapon aims and fires in the simulation, but the 3D mount only turns. Each
   import reports it (`part-sim-only` warnings) and open question Q20 keeps an observation log. Fix: add the
-  elevating joints in Blender. Sea Sparrow has no stock weapon; the RAM launcher stands in (Q22). Guns without
+  elevating joints in Blender. Ships the editor builds from a plan now get them at the source (6.2, CONTRACT §3b);
+  Lincoln was built before that and needs its plan redrafted and rebuilt. Sea Sparrow has no stock weapon; the RAM launcher stands in (Q22). Guns without
   parts (`muzzle-offset`, as on the F-16) are not drafted.
 - Detonation power and weapon ammunition lists for a new munition are set by hand (UG 73, 74.2.2).
 - Humans and animals use a stock DI-Guy character; a custom mesh would need DI-Guy authoring tools (ACM 25.2).
@@ -614,8 +640,10 @@ Planned, not done:
 4. Animation sequences for rotors, propellers and wheels; damage switch nodes.
 5. Check the systems in VR-Forces: the SOE's Edit Properties shows each system's position (UG 66.4.4); detection
    from the mast (Q16); a weapon slewing the model's parts in a scenario (Q19, Q20).
-   Add elevation joints to Lincoln's six weapon mounts in Blender, so their weapons pitch in 3D and need no
-   sim-only parts (Q20).
+   Give Lincoln's six weapon mounts their elevation joints, so their weapons pitch in 3D and need no sim-only
+   parts (Q20): redraft its research and plan with the articulation roles (six weapon chains), approve, rebuild.
+8. Live check of the articulation roles with the real AI: a research turn names the roles, the plan lists every
+   chain, and the build turn uses `add_chain` and clears its own `articulation` warnings.
 6. Install test against a real custom SMS.
 7. Review and merge `feat/mak-export` and `feat/mak-kinds`.
 

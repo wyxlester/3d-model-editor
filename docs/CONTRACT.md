@@ -40,7 +40,60 @@ A moving part is an object **whose origin is its pivot**, with the custom proper
 
 `axis` is in the part's local frame. `priority` is P0, P1 or P2, as in the research's rig plan.
 Children are parented in Blender, so the hierarchy survives into glTF. Fixed parts carry no
-property.
+property. A joint made by `me3d.add_chain` (§3b) also carries `"role"` (its articulation role)
+and `"chain"` (its place in the role's chain, 0 = the top joint).
+
+## 3b. Articulation roles (what a moving component needs)
+
+A simulator moves only what the model gives it a joint for, so each moving component is planned
+as a whole before it is built. Example: VR-Forces drives a gun mount's training and its barrel's
+elevation as two parts, the gun's node under the mount's (MAK manual 21.4, 21.5.1; users guide
+73.3.1). A mount built with one turning joint gets its elevation as a sim-only part, and the barrel
+never pitches in 3D (`mak/references/open-questions.md` Q20).
+
+`catalog/articulation/roles.json` (`me3d.articulation_roles/1`) lists the roles. Each one is
+simulator-neutral data:
+- `id`, `label`, `example` (a top joint name, e.g. `Weapons__Phalanx_1`), and `match` (words).
+- `kinds`: the kinds it applies to, as MAK profile kinds (`surface_ship`, `fixed_wing`,
+  `ground_vehicle`...). `kinds_for_project` maps a project kind onto them (`ship` →
+  `surface_ship`). A new kind adds a row there and tags; no code changes.
+- `joints`: the chain, top first, each nested under the one before. Each joint has:
+  - `suffix`: its name is `<top>__<Suffix>`; `""` is the top joint itself;
+  - `motion`, and `axis` in the ship frame (azimuth z, elevation y, rotation x, translate_z z);
+  - `kind` (revolute or prismatic);
+  - `limits`: degrees, or metres for a prismatic joint. `[0, 0]` is a fixed joint, which still
+    exists: the simulation binds a part to it, e.g. a launcher's launch point;
+  - `pivot` (where its origin goes), `neutral` (its rest pose), and `holds` (the geometry under it).
+    Every joint needs some geometry, even a fixed one, because MAK refuses an empty DOF.
+- `evidence`: manual sections and, where known, the MAK sysdef and Table 58 codes.
+  `mak/tests/test_roles.py` checks it against the VR-Forces install: a weapon role's chain binds its
+  stock sysdef with no sim-only part, and its limits match the sysdef's.
+
+It flows through three stages:
+1. **Research** (§12): each `articulation` entry for a moving component names its `role` (or
+   `other` with a `reason`) and `count`.
+2. **Design plan** (§5, the gate): `design_plan.articulation` =
+   `[{role, parts: [top joint names], priority?, limits?: {suffix: [min, max]}, dropped?: "why"}]`.
+   The server expands it into `design_plan.chains` =
+   `[{role, top, priority, joints: [{name, parent, suffix, motion, axis, kind, min, max, pivot, neutral, holds}]}]`.
+   A plan is refused, when saved and when approved, if:
+   - a role is unknown for the kind;
+   - a name is not `Group__Part`;
+   - a limit override names a joint the role does not have;
+   - a P0 or P1 research component has fewer instances than its `count` and no entry saying why it
+     is `dropped`.
+3. **Build** (the nudge): the build AI makes each instance with
+   `me3d.add_chain(role, name, parent, pivots, priority, limits)`. That makes one Empty per joint at
+   its pivot, nested, with `me3d_joint`; the AI parents the geometry under them. After every build,
+   the server checks `parts.json` against `design_plan.chains`, plus any role-tagged top joint the
+   plan does not list. The findings go to `build_report.articulation` as
+   `[{level: warning|info, code, part, message}]`. Codes:
+   - `articulation-missing-joint`, `articulation-no-geometry`, `articulation-not-nested`,
+     `articulation-wrong-motion` (warnings, also added to `warnings` as `articulation: ...`);
+   - `articulation-limits`, `articulation-unplanned` (info).
+
+   The rebuild tool's result lists the warnings, so the AI fixes them in the same turn. A build is
+   never failed, and exports are never blocked, for these.
 
 ## 4. Builder command line (Blender, headless)
 
@@ -102,8 +155,10 @@ the exit code**: Blender returns 0 even when a script raises an error, unless th
   2. **Design plan.** The AI drafts `project.design_plan` = `{"status":"draft|approved|stale",
      "summary": [plain-English lines: size, hull form, each superstructure tier, colours, details
      to add as custom ops, assumptions], "spec": {the full custom ship spec it would build},
-     "research_rev": n, "at": iso}` via a research-mode tool, and redrafts it whenever asked. Any
-     later change to the research makes an approved plan `stale`.
+     "research_rev": n, "at": iso, "articulation": [...], "chains": [...]}` via a research-mode tool,
+     and redrafts it whenever asked. Any later change to the research makes an approved plan
+     `stale`. `articulation` and `chains` are the plan's moving components (§3b). A plan that leaves
+     out a researched P0/P1 component cannot be saved or approved.
   3. **Approve and build.** `POST /api/projects/{id}/design-plan/approve` (only on a `draft`
      plan matching the current research) marks it `approved` and starts the build job from its
      `spec` plus a build-mode AI turn for the custom-op details; returns `{"job_id"}`. Nothing
@@ -333,7 +388,7 @@ This is what goes to Unreal now and MAK later. One folder:
   ship/<ship_id>.glb          the ship (sections 1-3)
   ship/<ship_id>.json         strait.ship_model/1 metadata (StraitsSim-compatible)
   ship/articulation.json      [{"part","parent","axis","min_deg","max_deg","priority","kind","pivot_m":[x,y,z],
-                                "rotation_deg":[x,y,z]}]
+                                "rotation_deg":[x,y,z]}] (+ "role", "chain" for joints made by add_chain, §3b)
   ship/mak.json               the ship project's MAK settings (§10, `Project.mak`) plus "name", the ship
                               project's name (the VR-Forces entity is named after it); absent if none
   crew/<crew_id>.glb          one per distinct crew member
@@ -670,9 +725,16 @@ standard is the PCG 3-Series dossier described in `docs/PLAN.md`.
   "claims": [{"claim": "Four outboards", "sources": ["S01", "P02"], "status": "Official + photo",
               "consequence_for_model": "Model four separate motor assemblies; no waterjets."}],
   "open_questions": [{"question": "...", "meanwhile": "..."}],
-  "articulation": [{"part": "Transom__Outboard_1", "motion": "steer, tilt, prop spin", "priority": "P0"}]
+  "articulation": [{"part": "Transom__Outboard_1", "motion": "steer, tilt, prop spin", "priority": "P0"},
+                   {"part": "Weapons__Phalanx", "role": "gun_mount", "count": 2, "motion": "train and elevate",
+                    "priority": "P0", "evidence": ["S03"]}]
 }
 ```
+
+An `articulation` entry for a moving component names its `role` from §3b (or `other` with a
+`reason`) and how many the vessel has (`count`, default 1). The research prompt lists the roles for
+the project's kind. Entries for parts that must not move have motion `fixed` and no role. Older
+research without roles still saves.
 
 ### Photographs and close-ups (Lester, 29 Oct: research "doesn't render photos and close up for me. the standard … should be like" the PCG 3-Series dossier)
 

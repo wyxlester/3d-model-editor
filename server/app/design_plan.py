@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from . import articulation as art
 from .specmerge import deep_merge
 
 # Contract §5 names these forms. Used only when the catalog has no options for them.
@@ -232,6 +233,12 @@ def approve_refusal(project: dict) -> str | None:
     if plan.get("research_rev") != project.get("research_rev", 0):
         return ("The research changed after this plan was drafted. Ask the AI in Research to redraft the plan, "
                 "then approve it.")
+    # Contract §3b, the gate: a plan drafted before the articulation roles, or one that leaves out a moving part
+    # the research needs, would build a model the simulator cannot move.
+    _, errs = art.plan_problems(plan.get("articulation") or [], project.get("research"), project.get("kind"))
+    if errs:
+        return ("The plan does not give every moving part the joints it needs (" + errs[0] + "). Ask the AI in "
+                "Research to redraft the plan, then approve it.")
     return None
 
 

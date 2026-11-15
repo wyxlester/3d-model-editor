@@ -377,21 +377,70 @@ def obj(name):
 # Joints, stations, sockets (contract sections 2 and 3)
 # --------------------------------------------------------------------------------------------
 
-def set_joint(ob, axis, min_deg, max_deg, priority="P1", kind="revolute"):
+def set_joint(ob, axis, min_deg, max_deg, priority="P1", kind="revolute", role=None, chain=None):
     if axis not in ("x", "y", "z"):
         raise ValueError("joint axis must be x, y or z")
     if priority not in ("P0", "P1", "P2"):
         raise ValueError("joint priority must be P0, P1 or P2")
     if ob.parent is None:
         raise ValueError(f"moving part {ob.name} must have a parent")
-    ob["me3d_joint"] = json.dumps({"axis": axis, "min_deg": float(min_deg),
-                                   "max_deg": float(max_deg), "priority": priority, "kind": kind})
+    data = {"axis": axis, "min_deg": float(min_deg), "max_deg": float(max_deg), "priority": priority, "kind": kind}
+    if role is not None:                       # contract §3b: made by add_chain
+        data.update(role=str(role), chain=int(chain or 0))
+    ob["me3d_joint"] = json.dumps(data)
     return ob
 
 
 def get_joint(ob):
     raw = ob.get("me3d_joint")
     return json.loads(raw) if raw else None
+
+
+ROLES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "catalog", "articulation", "roles.json")
+_ROLES = {}
+
+
+def roles():
+    """The articulation roles (catalog/articulation/roles.json, contract §3b), by id."""
+    if not _ROLES:
+        with open(ROLES_PATH, encoding="utf-8") as f:
+            _ROLES.update({r["id"]: r for r in json.load(f)["roles"]})
+    return _ROLES
+
+
+def add_chain(role, name, parent, pivots, priority="P1", limits=None):
+    """Make a moving component's joints from its articulation role: returns one Empty per joint, nested.
+
+    ``role`` is a role id (gun_mount, trainable_launcher, rotating_radar, rudder ...). ``name`` is the top joint,
+    Group__Part (Weapons__Phalanx_1); the joints under it are named ``<name>__<Suffix>`` (Weapons__Phalanx_1__Gun).
+    ``parent`` is the part it sits on. ``pivots`` is the world position of each joint, top first (a shorter list
+    repeats its last point). ``limits`` overrides by suffix ("" is the top joint): {"Gun": (-10, 80)}.
+    Each Empty's origin is its pivot and it carries me3d_joint with the role's axis and limits. Put the
+    geometry under the joint that moves it: the barrel under ...__Gun, the housing under the mount. Every joint
+    needs some geometry of its own, even a fixed one (a launcher's front face): MAK refuses an empty DOF (21.4)."""
+    spec = roles().get(role)
+    if spec is None:
+        raise ValueError(f"unknown articulation role {role!r}; roles: {sorted(roles())}")
+    if not re.match(rf"^{_SEG}__{_SEG}$", name):
+        raise ValueError(f"chain name {name!r} must be Group__Part; the joints under it get __<Suffix>")
+    pts = [Vector(p) for p in (pivots if pivots and not isinstance(pivots[0], (int, float)) else [pivots])]
+    if not pts:
+        raise ValueError("add_chain needs at least one pivot")
+    out, up = [], parent
+    for i, j in enumerate(spec["joints"]):
+        full = f"{name}__{j['suffix']}" if j["suffix"] else name
+        if full in bpy.data.objects:
+            raise ValueError(f"part {full!r} already exists")
+        ob = bpy.data.objects.new(full, None)
+        ob.empty_display_type = "PLAIN_AXES"
+        ob.empty_display_size = 0.3
+        bpy.context.scene.collection.objects.link(ob)
+        place(ob, pts[min(i, len(pts) - 1)], up)
+        lo, hi = (limits or {}).get(j["suffix"], j["limits"])
+        set_joint(ob, j["axis"], lo, hi, priority, j["kind"], role=role, chain=i)
+        out.append(ob)
+        up = ob
+    return out
 
 
 def add_station(name, location, parent, pose="stand", activities=(), label_text=None, yaw_deg=0.0):

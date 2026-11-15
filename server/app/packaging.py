@@ -69,6 +69,7 @@ def articulation(parts: list) -> list[dict]:
         out.append({"part": p["path"], "parent": p.get("parent"), "axis": j.get("axis"),
                     "min_deg": j.get("min_deg"), "max_deg": j.get("max_deg"),
                     "priority": j.get("priority"), "kind": j.get("kind", "revolute"),
+                    **{k: j[k] for k in ("role", "chain") if k in j},   # §3b: made with add_chain
                     "pivot_m": pivot,
                     "rotation_deg": _vec3(rot, "") if isinstance(rot, (list, tuple)) and len(rot) == 3 else [0.0, 0.0, 0.0]})
     return out

@@ -293,7 +293,10 @@ function customResearchTurn(p: Store['projects'][string], message: string) {
       { question: 'Is the fly-bridge open or covered with a hard top?', meanwhile: 'Modelled open' },
       { question: 'Should the tender garage in the stern open?', meanwhile: 'Closed, not articulated' },
     ],
-    articulation: [],
+    articulation: [
+      { part: 'Arch__Radar', role: 'rotating_radar', count: 1, motion: 'spins', priority: 'P1' },
+      { part: 'Deck__Tender_Crane', role: 'crane', count: 1, motion: 'slews and luffs', priority: 'P2' },
+    ],
     // Photographs and close-ups carry over: a research turn amends the record, it does not restart it.
     ...(prev?.photos ? { photos: prev.photos, closeups: prev.closeups, coverage: prev.coverage, photo_count: prev.photo_count, count_method: prev.count_method } : {}),
   };
@@ -323,6 +326,15 @@ function customResearchTurn(p: Store['projects'][string], message: string) {
         `Assumed · beam ${beam} m and draught 2.1 m (typical for ${loa} m); fly-bridge open`,
       ],
       spec: { schema: 'me3d.ship_spec/1', type: 'custom', params: { loa_m: loa, beam_m: beam, draught_m: 2.1 } },
+      // §3b: what the server expands from the plan's articulation (catalog/articulation/roles.json)
+      articulation: [{ role: 'rotating_radar', parts: ['Arch__Radar'] }, { role: 'crane', parts: ['Deck__Tender_Crane'], priority: 'P2' }],
+      chains: [
+        { role: 'rotating_radar', top: 'Arch__Radar', priority: 'P1', joints: [
+          { name: 'Arch__Radar', parent: null, suffix: '', motion: 'azimuth', axis: 'z', kind: 'revolute', min: -180, max: 180, pivot: "the antenna's turning axis", neutral: 'facing forward', holds: 'the antenna array' }] },
+        { role: 'crane', top: 'Deck__Tender_Crane', priority: 'P2', joints: [
+          { name: 'Deck__Tender_Crane', parent: null, suffix: '', motion: 'azimuth', axis: 'z', kind: 'revolute', min: -170, max: 170, pivot: 'the slewing ring', neutral: 'stowed', holds: 'the crane house' },
+          { name: 'Deck__Tender_Crane__Jib', parent: 'Deck__Tender_Crane', suffix: 'Jib', motion: 'elevation', axis: 'y', kind: 'revolute', min: 0, max: 75, pivot: 'the jib heel pin', neutral: 'in its rest', holds: 'the jib' }] },
+      ],
     };
   }
   // A described ship starts under "Other"; the research files it in the closest catalog category and

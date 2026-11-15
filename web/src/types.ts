@@ -9,6 +9,40 @@ export interface Joint {
   max_deg: number;
   priority: 'P0' | 'P1' | 'P2' | string;
   kind: 'revolute' | string;
+  /** §3b: set by me3d.add_chain — the articulation role and this joint's place in its chain (0 = top). */
+  role?: string;
+  chain?: number;
+}
+
+/** §3b: one joint of a planned moving component, expanded from its articulation role. */
+export interface ArticulationJoint {
+  name: string;
+  parent: string | null;
+  suffix: string;
+  motion: string;
+  axis: 'x' | 'y' | 'z';
+  kind: string;
+  min: number;
+  max: number;
+  pivot: string;
+  neutral: string;
+  holds: string;
+}
+
+/** §3b: one planned moving component (a design plan's `chains`). */
+export interface ArticulationChain {
+  role: string;
+  top: string;
+  priority: string;
+  joints: ArticulationJoint[];
+}
+
+/** §3b: the build's check against the plan's moving components. */
+export interface ArticulationFinding {
+  level: 'warning' | 'info';
+  code: string;
+  part: string;
+  message: string;
 }
 
 /** §4 parts.json row. All positions in the Blender world frame, metres. */
@@ -34,6 +68,8 @@ export interface BuildReport {
   bounds_min?: Vec3;
   bounds_max?: Vec3;
   seconds?: number;
+  /** §3b: present when the version has planned or role-tagged moving components. */
+  articulation?: ArticulationFinding[];
 }
 
 export type PinStatus = 'open' | 'working' | 'waiting' | 'resolved';
@@ -92,6 +128,9 @@ export interface DesignPlan {
   build_error?: string;
   /** The user's own values for the plan's params: they win when it is built (CONTRACT §12, Review). */
   user_params?: Record<string, unknown>;
+  /** §3b: the AI's moving components, and the joints each one needs (expanded by the server). */
+  articulation?: { role: string; parts?: string[]; priority?: string; limits?: Record<string, [number, number]>; dropped?: string }[];
+  chains?: ArticulationChain[];
 }
 
 /** A saved version of the research, as listed (the research itself is fetched by number). */
@@ -536,7 +575,7 @@ export interface Research {
   sources?: { id: string; title: string; url?: string; status: EvidenceStatus; what_it_proves?: string }[];
   claims?: { claim: string; value?: string | number | null; unit?: string | null; sources?: string[] | string; status: EvidenceStatus; consequence_for_model?: string }[];
   open_questions?: { question: string; meanwhile?: string }[];
-  articulation?: { part: string; motion: string; priority: string }[];
+  articulation?: { part: string; motion: string; priority: string; role?: string; count?: number; axis?: string; range_deg?: [number, number]; reason?: string; evidence?: string[] }[];
   /** Distinct exposures only (crops and republished copies do not count), and how they were counted. */
   photo_count?: number;
   count_method?: string;

@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 
 from .builds import Builds, summarise_change
 from .catalog import Catalog, CatalogError
+from . import articulation as roles
 from . import crew_modules as cm
 from . import design_plan as dp
 from . import research_media as rm
@@ -347,7 +348,9 @@ class AgentSession:
             if self.is_custom:
                 tools.append(("save_design_plan", self._design_plan_doc(),
                               _obj({"summary": {"type": "array", "items": {"type": "string"}},
-                                    "spec": {"type": "object"}}, ["summary", "spec"])))
+                                    "spec": {"type": "object"},
+                                    "articulation": {"type": "array", "items": {"type": "object"}}},
+                                   ["summary", "spec"])))
             if self.kind == "ship":
                 # A catalog without categories (older installs, test stand-ins) just offers none.
                 get = getattr(self.catalog, "categories", None)
@@ -481,7 +484,10 @@ class AgentSession:
                 "+X bow, +Y port, +Z up, origin at the waterline amidships. Name every object you create "
                 "Group__Part (or Group__Part__Sub), letters/digits/underscore only, e.g. Mast__Horn; "
                 "parent it to the part it sits on. Moving parts: origin at the pivot and custom property "
-                "me3d_joint. No file, network or OS access (imports of os/sys/subprocess, open(), eval, "
+                "me3d_joint. A moving component with an articulation role (a weapon mount, a radar, a rudder, a "
+                "crane) is made with me3d.add_chain(role, name, parent, pivots): it returns one joint per link of "
+                "the role's chain, nested and pivoted; parent the geometry under them. "
+                "No file, network or OS access (imports of os/sys/subprocess, open(), eval, "
                 "exec are rejected). Helpers:\n" + me3d_helpers(self.repo_root))
 
     def _design_plan_doc(self) -> str:
@@ -500,7 +506,13 @@ class AgentSession:
                 "metres, origin amidships at the waterline, +X bow, so the hull spans -loa_m/2..+loa_m/2. Tiers "
                 "stack from the deck up; each must lie within the hull and on the tier below it, no wider than "
                 "the beam. Leave custom_ops empty: details go in the summary. The tool validates and returns "
-                "errors to fix.\n" + known)
+                "errors to fix.\n"
+                "articulation: every moving component the research gives a role, as [{role, parts: [the top joint's "
+                "name for each instance, e.g. Weapons__Phalanx_1, Weapons__Phalanx_2], priority, limits?: "
+                "{suffix: [min, max]} ('' is the top joint), dropped?: 'why it is left out'}]. The joints under each "
+                "part are named for you from the role (Weapons__Phalanx_1__Gun). A P0 or P1 research component "
+                "with fewer instances here than its count is refused. Say them in the summary in plain words too "
+                "('Two Phalanx guns: the mount turns and the barrel elevates').\n" + known)
 
     def _custom_item_doc(self) -> str:
         return ("Make a module's item from a description when no preset fits (a singlet, shorts, boots, a "
@@ -638,6 +650,7 @@ class AgentSession:
             "closeups": [{k: c.get(k) for k in ("id", "photo", "title", "what_it_shows", "claims") if c.get(k) not in (None, "", [])}
                          for c in r.get("closeups") or []],
             "open_questions": list(r.get("open_questions") or []),
+            "articulation": list(r.get("articulation") or []),
             "sources": [{k: s.get(k) for k in ("id", "title", "status") if s.get(k)} for s in r.get("sources") or []],
         }
         if section is not None:
@@ -647,7 +660,7 @@ class AgentSession:
         out = {"subject": r.get("subject"), "verdict": (r.get("summary") or {}).get("verdict"),
                "coverage": (r.get("coverage") or {}).get("note"), "excluded": excluded_note(project) or None,
                **sections}
-        for key in ("sources", "open_questions", "claims", "closeups", "photos"):  # cut the least needed first
+        for key in ("sources", "open_questions", "claims", "closeups", "photos", "articulation"):  # least needed first
             if len(json.dumps(out, indent=1)) <= TOOL_TEXT_LIMIT:
                 break
             out = json.loads(fit_rows(out, key, f"more not listed: get_research with section={key} lists them all"))
@@ -680,10 +693,17 @@ class AgentSession:
             self.built_spec = copy.deepcopy(self.spec)
             self.parts = self.store.parts(self.pid, n)
             self.report = report
-        return {"ok": bool(report.get("ok")), "version": n, "errors": report.get("errors", []),
-                "warnings": report.get("warnings", []), "triangles": report.get("triangles"),
-                "note": "Now on screen." if report.get("ok") else
-                        "Failed: the previous version stays on screen. Fix the spec and rebuild."}
+        out = {"ok": bool(report.get("ok")), "version": n, "errors": report.get("errors", []),
+               "warnings": report.get("warnings", []), "triangles": report.get("triangles"),
+               "note": "Now on screen." if report.get("ok") else
+                       "Failed: the previous version stays on screen. Fix the spec and rebuild."}
+        missing = [f for f in report.get("articulation") or [] if f.get("level") == "warning"]
+        if missing:
+            # Contract §3b: the check after every build. The AI fixes these in the same turn (the nudge).
+            out["articulation"] = [f["message"] for f in missing]
+            out["note"] += (f" Articulation: {len(missing)} joint(s) the plan needs are missing or wrong (listed in "
+                            "articulation). Fix them, with me3d.add_chain for a whole component, and rebuild.")
+        return out
 
     def t_reply_to_pin(self, pin_id: str, text: str, status: str) -> str:
         if status not in ("waiting", "resolved", "open"):
@@ -1149,7 +1169,7 @@ class AgentSession:
     def t_save_research(self, research: dict) -> str:
         stored = self.store.load(self.pid).get("research") or {}
         media_ids = [m.get("id") for k in ("photos", "closeups") for m in stored.get(k) or []]
-        errors = validate_research(research, media_ids)
+        errors = validate_research(research, media_ids, self.kind)
         if errors:
             raise ToolError("Research not saved. Fix: " + "; ".join(errors))
         research = dict(research, schema="me3d.research/1")
@@ -1361,21 +1381,26 @@ class AgentSession:
             project["category"] = label
         return f"Filed under {label}."
 
-    def t_save_design_plan(self, summary: list, spec: dict) -> str:
+    def t_save_design_plan(self, summary: list, spec: dict, articulation: list | None = None) -> str:
         if not self.is_custom:
             raise ToolError("Design plans are only for custom ships.")
         errors = dp.check_summary(summary)
+        research = self.store.load(self.pid).get("research") or {}
+        chains, art_errors = roles.plan_problems(articulation, research, self.kind)
         try:
             default = self.catalog.default_spec("ship", "custom")
         except CatalogError:
             default = None
         full, spec_errors = dp.plan_spec(spec, self.spec, default, self.cat_entry.get("param_docs") or {})
-        errors += spec_errors
+        errors += spec_errors + art_errors
         if errors:
             raise ToolError("Plan not saved. Fix: " + "; ".join(errors))
-        plan = self.store.set_design_plan(self.pid, [s.strip() for s in summary], full)
+        plan = self.store.set_design_plan(self.pid, [s.strip() for s in summary], full,
+                                          list(articulation or []), chains)
         self.plan_saved = True
-        return (f"Design plan saved as a draft against research revision {plan['research_rev']}. The user approves "
+        joints = sum(len(c["joints"]) for c in chains)
+        return (f"Design plan saved as a draft against research revision {plan['research_rev']}"
+                f"{f', with {len(chains)} moving components ({joints} joints)' if chains else ''}. The user approves "
                 "it on screen; nothing is built until then.")
 
 
@@ -1387,8 +1412,11 @@ RESEARCH_DOC = (
     ". Sister craft are 'Comparison only'.\n"
     "claims: [{claim, value?, unit?, sources: [source ids], status, consequence_for_model}].\n"
     "open_questions: [{question, why_it_matters}].\n"
-    "articulation: [{part (Group__Part name), motion, axis?, range_deg?: [min,max], priority: P0|P1|P2, "
-    "evidence: [source ids]}] including parts that must NOT move (motion 'fixed').\n"
+    "articulation: [{part (Group__Part name), role (an articulation role from the list in your instructions, or "
+    "'other' with a reason), count (how many the vessel has; default 1), motion, axis?, range_deg?: [min,max], "
+    "priority: P0|P1|P2, evidence: [source ids]}] including parts that must NOT move (motion 'fixed', no role). "
+    "Every weapon, trainable sensor, rudder and other moving fitting gets a role: the role says which joints it "
+    "needs (a gun mount turns AND its barrel elevates), and the design plan commits to each one.\n"
     "A claim may cite stored photographs and close-ups (P01, C02) as well as sources. Photographs, close-ups "
     "and coverage are not part of this record: add_photo, add_closeup and set_coverage manage them, and they "
     "are kept whenever you save."
@@ -1435,8 +1463,9 @@ def _today() -> str:
     return date.today().isoformat()
 
 
-def validate_research(r: Any, media_ids: Any = ()) -> list[str]:
-    """media_ids: stored photo and close-up ids (P01, C01), which claims may cite like sources."""
+def validate_research(r: Any, media_ids: Any = (), kind: str | None = "ship") -> list[str]:
+    """media_ids: stored photo and close-up ids (P01, C01), which claims may cite like sources. `kind` picks
+    the articulation roles a component may name (contract §3b)."""
     errs: list[str] = []
     if not isinstance(r, dict):
         return ["research must be an object"]
@@ -1483,6 +1512,7 @@ def validate_research(r: Any, media_ids: Any = ()) -> list[str]:
         for i, a in enumerate(art):
             if not isinstance(a, dict) or not a.get("part") or not a.get("motion"):
                 errs.append(f"articulation[{i}] needs part and motion")
+        errs += roles.research_problems(art, kind)
     return errs
 
 
@@ -1501,6 +1531,7 @@ The user is Lester: ex-navy, the product owner, not an engineer.
 SHIP_PROMPT = """You edit one ship model for a maritime simulator. Blender builds the model from a JSON spec (me3d.ship_spec/1); you change the spec only through your tools: params (the builder's own knobs), per-part overrides, joint limits, and custom ops (Blender Python, for geometry no knob covers).
 - get_project is an overview: read a custom op's code with get_custom_op and look up parts with get_parts when you need them.
 - Asked to match the research or its photographs: read it with get_research and look at the photographs and close-ups with view_photo. Photographs are the source of truth; a claim marked not_used rests only on sources the user crossed out. Never say the research is out of reach: these tools read all of it.
+- Moving components (weapons, trainable sensors, radars, rudders, cranes, hatches) are built with me3d.add_chain, one call per instance, with the role and names the plan or research gives: it makes every joint the role needs, nested and pivoted, and you parent the geometry under the joints it returns. A gun's barrel goes under its Gun joint, not under the mount, or it cannot elevate. Every joint needs some geometry of its own, even a fixed one (a launcher's front face). After each rebuild, fix every articulation warning before you finish.
 """ + COMMON_RULES
 
 CREW_PROMPT = """You edit one human crew member for a maritime simulator. Blender (MPFB2) builds the person from a JSON spec (me3d.crew_spec/1): body sliders, clothes, equipment and animations, plus custom items (Blender Python, for anything the catalog lacks).
@@ -1533,7 +1564,7 @@ RESEARCH_PROMPT = """You research one real vessel so a 3D model of it can be bui
 - Use public sources only (WebSearch, WebFetch). Pick ONE exact baseline hull; sister craft are 'Comparison only'; other classes are not evidence.
 - Every source gets an evidence status: Official, Photographed, Photo reading, Inference, Comparison only, Secondary lead, Unverified. Your rating is a judgement, never 'verified'.
 - Every claim says what it changes in the model (consequence_for_model). Unknowns go to open_questions, not guesses.
-- Propose articulation: what moves (P0 essential .. P2 nice), and what must not move.
+- Propose articulation: what moves (P0 essential .. P2 nice), and what must not move. Give each moving component its articulation role (listed below) and how many there are; the role says which joints it needs (a weapon that trains and elevates needs both).
 - Save with save_research (it validates; fix and resave on errors). Then reply in two or three plain sentences: the verdict and the biggest open question.""" + PHOTO_RULES
 
 
@@ -1543,7 +1574,7 @@ CUSTOM_RESEARCH_PROMPT = """You research a vessel of any type that the user aske
 - Every claim says what it changes in the model. Unknowns go to open_questions as concrete questions Lester can answer in one line, each with what you assume meanwhile ('How long is it? Meanwhile 24 m, from the photo's proportions'). Ask the few that change the model most, not everything.
 - Amend, do not restart: the saved research and design plan so far are given below. Each user message is a correction, an answer or more photos: fold it into the research (answered questions become claims with the user as source, status 'Official' when they state a fact about their own vessel), and resave the whole record with save_research.
 - When the research is good enough to build from, or the user asks for a plan, draft the design plan with save_design_plan (after save_research). Redraft it whenever the research changes. Keep its summary in plain English: size, hull form, each superstructure tier, colours, details to add, and assumptions with values.
-- Articulation: what moves (radar spin, davit, tender crane) and what must not.
+- Articulation: what moves (radar spin, davit, tender crane, every weapon mount) and what must not. Give each moving component its articulation role (listed below) and how many there are. The design plan's articulation lists each instance by name (save_design_plan); a P0 or P1 component left out is refused unless you say why it is dropped.
 - The ship starts filed under "Other" in the ship list. While it is still under "Other", call set_category in the same turn you identify what kind of vessel it is (usually the first turn), before you reply: file it in the closest of the catalog's ship categories (a motor yacht goes under "Passenger and leisure") and say in your reply where you filed it. Do not leave it under "Other" for a later turn. Lester can change it in the ship list.
 - Reply in two to four plain sentences: what you found or changed, the most important open question, whether a plan is ready to approve, and the category you filed it under if you filed it this turn.""" + PHOTO_RULES
 
@@ -1570,7 +1601,8 @@ def custom_research_context(project: dict, spec: dict, cat_entry: dict) -> str:
     if plan:
         lines.append("Design plan so far (status " + str(plan.get("status")) + ", drafted against research revision "
                      f"{plan.get('research_rev')}): " + json.dumps({"summary": plan.get("summary"),
-                                                                    "params": (plan.get("spec") or {}).get("params")}))
+                                                                    "params": (plan.get("spec") or {}).get("params"),
+                                                                    "articulation": plan.get("articulation") or []}))
     else:
         lines.append("Design plan: none yet.")
     lines.append("Current model params: " + json.dumps(spec.get("params") or {}))
@@ -1610,8 +1642,9 @@ def research_apply_prompt() -> str:
             "crossed out, so do not rely on them. Compare with the model (get_project; get_custom_op and "
             "get_parts for detail) and change what the research shows differently: sizes, colours, missing or "
             "wrong parts. The user is watching the model change, so work in small groups of related changes "
-            "and rebuild after each group, fixing any errors before the next. Reply with what you changed, "
-            "which photo or claim each change rests on, and what you could not change and why.")
+            "and rebuild after each group, fixing any errors before the next. Moving components the research gives "
+            "an articulation role are built with me3d.add_chain so they get every joint the role needs. Reply with "
+            "what you changed, which photo or claim each change rests on, and what you could not change and why.")
 
 
 def plan_build_prompt(plan: dict) -> str:
@@ -1619,12 +1652,33 @@ def plan_build_prompt(plan: dict) -> str:
     summary = "\n".join(f"- {s}" for s in plan.get("summary") or [])
     # The user watches this build on the Build screen, each version appearing as it lands, so the details
     # go on a group at a time rather than all at once at the end.
-    return ("The user approved this design plan and the hull and superstructure from it are now built and on "
+    text = ("The user approved this design plan and the hull and superstructure from it are now built and on "
             f"screen:\n{summary}\n\nAdd every detail the plan lists that the build does not have yet (fly-bridge "
             "furniture, rails, davits, antennas and so on) as custom ops. The user is watching the model take shape, "
             "so work in small groups of related details (the deck fittings, then the rails, then the masts and "
             "antennas, and so on) and rebuild after each group, fixing any errors before the next. Do not "
             "change the size, hull form or tiers: they are what the user approved. Reply with what you added.")
+    chains = plan.get("chains") or []
+    if chains:
+        text += "\n\n" + chains_brief(chains)
+    return text
+
+
+def chains_brief(chains: list[dict]) -> str:
+    """The plan's moving components for the build turn (contract §3b): every joint by name, with what it
+    does, where its origin goes and what geometry hangs under it."""
+    lines = ["The plan's moving components. Build each one with me3d.add_chain(role, name, parent, pivots), "
+             "pivots being the world position of each joint in order, then put its geometry under the joints it "
+             "returns (what each holds is listed; every joint needs some geometry, even a fixed one). After every "
+             "rebuild the build is checked against this list, and the rebuild result names any joint that is missing, empty, not nested or turning about the wrong axis."]
+    for c in chains:
+        lines.append(f"- {c['top']} ({c['role']}, {c.get('priority', 'P1')}):")
+        for j in c["joints"]:
+            span = " (fixed in the model)" if j["min"] == j["max"] else f", {j['min']:g}..{j['max']:g}"
+            under = f"; under {j['parent']}" if j["parent"] else ""
+            lines.append(f"  - {j['name']}: {j['motion']} about {j['axis']}{span}; origin at {j['pivot']}; "
+                         f"neutral {j['neutral']}; holds {j['holds']}{under}")
+    return "\n".join(lines)
 
 
 def module_prompt(module: str) -> str:
@@ -1722,8 +1776,11 @@ def variant_research_prompt(source: dict, brief: str, research: dict | None) -> 
 
 def system_prompt(kind: str, mode: str, base: str | None = None) -> str:
     if mode == "research":
-        return CUSTOM_RESEARCH_PROMPT if kind == "ship" and base == "custom" else RESEARCH_PROMPT
-    return SHIP_PROMPT if kind == "ship" else CREW_PROMPT
+        text = CUSTOM_RESEARCH_PROMPT if kind == "ship" and base == "custom" else RESEARCH_PROMPT
+    else:
+        text = SHIP_PROMPT if kind == "ship" else CREW_PROMPT
+    block = roles.prompt_block(kind)          # contract §3b; none for crew
+    return text + ("\n\n" + block if block else "")
 
 
 # ---- runners ----------------------------------------------------------------------------

@@ -52,6 +52,36 @@ renderer, UG 46.14). Parts that come from the model cannot be removed in the SOE
 10. glTF animations are dropped. VR-Forces drives parts from simulation state; flipbook animation uses switch
     nodes (manual 21.5.1, 21.6).
 
+## Upstream: articulation roles, planned before the model is built
+
+The rules above are checked at export, when the model is already built. In the 3d-model-editor they are also
+planned before Blender builds it (editor CONTRACT §3b):
+- **The roles.** `catalog/articulation/roles.json` gives each kind of moving component its chain of joints, top
+  first, each nested under the one before. For each joint:
+  - motion and axis in the editor frame (azimuth z, elevation y, rotation x);
+  - limits;
+  - where the pivot goes, the neutral pose, and the geometry it holds.
+- **Two weapon chains:**
+
+  | Role | Joints | Codes | Binds |
+  |---|---|---|---|
+  | `gun_mount` | `Weapons__Phalanx_1` (az) -> `__Gun` (el) | 4096, 4416 | `phalanx-20mm-gun` whole |
+  | `trainable_launcher` | mount (az) -> `__Elevation` (el) -> `__Launcher` (fixed 0..0, the launch point) | 4096, 4736, 4768 | `ram-missile-launcher` whole |
+- **Fixed joints still count.** A fixed joint is still a joint, because the sysdef binds a part to it. Every joint
+  needs some geometry under it, or `inspect_glb` refuses it (`artpart-no-geometry`).
+- **Kinds.** Roles are tagged with profile kinds (`surface_ship`, `fixed_wing`, `ground_vehicle`...). Landing gear,
+  control surfaces, rotors and wheels are there for the aircraft and vehicle kinds.
+- **The flow:**
+  - research names each moving component's role;
+  - the design plan commits each instance, and is refused if a P0/P1 one is missing;
+  - the build AI uses `me3d.add_chain`;
+  - every build is checked against the plan.
+- **Grounding.** `mak/tests/test_roles.py` checks each role against this pipeline and the install:
+  - codes from `suggest_code`;
+  - motion from `motion_of`;
+  - a whole binding with `systems.assign`, so no sim-only part (Q20);
+  - limits against the sysdef.
+
 ## Frames and units
 - Model: X right, Y forward, Z up, metres (manual 21.2).
 - `.entity` bodyPosition: forward = model Y, right = model X, down = -model Z.

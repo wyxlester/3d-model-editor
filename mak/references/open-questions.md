@@ -68,6 +68,13 @@ Resolve each against the install, or with a real import in the GUI, then update 
     - a note per mount from `draft_manifest`.
   - **The fix:** add the elevating joint under the mount in Blender and draft again. The model's part is then
     used, and no sim-only part is added.
+  - **At the source (2026-11-15).** The 3d-model-editor now plans articulation before the build (editor CONTRACT
+    §3b, `references/articulation.md` "Upstream"):
+    - a weapon's research entry names its role (`gun_mount`, `trainable_launcher`);
+    - the design plan lists each chain;
+    - Blender builds it with `me3d.add_chain`, so the elevating part exists in the model.
+    A test ship built that way (Phalanx + RAM) exported with both weapons fully bound and no `part-sim-only`
+    warning. Sim-only parts remain the fallback for models built before this, such as Lincoln.
   - **To observe in VR-Forces:** the weapon slews and fires at targets above the horizon; the barrel stays
     level; any errors in the log about articulated parts the model lacks.
   - **Observation log:**
@@ -83,6 +90,10 @@ Resolve each against the install, or with a real import in the GUI, then update 
       - the six weapons are on the Systems tab (Phalanx 20mm CIWS ×2, RAM launcher ×4);
       - still to see in a scenario: the weapon slewing and firing above the horizon with the barrel level, and
         the log.
+    - 2026-11-15, editor articulation roles:
+      - the post-build check on Lincoln's parts, against a plan with its six weapon chains, names the same 10
+        missing joints the export added as sim-only parts (`server/tests/test_articulation.py`);
+      - Lincoln itself has not been rebuilt yet.
 - **Q22 Sea Sparrow stand-in.** The install has no Sea Sparrow (RIM-7/ESSM) munition or launcher.
   `ram-missile-launcher` (RIM-116, a trainable box launcher like the Mk 29) stands in for mounts named Sea
   Sparrow, ESSM or RIM-7, with "stands in" in the reason. A real Sea Sparrow needs its own munition entity, an

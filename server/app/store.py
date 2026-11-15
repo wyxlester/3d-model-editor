@@ -451,11 +451,14 @@ class ProjectStore:
         """data/projects/<id>/research/{photos,closeups}/: files the research tools store."""
         return self._dir(pid) / "research"
 
-    def set_design_plan(self, pid: str, summary: list[str], spec: dict) -> dict:
-        """A new draft, stamped with the research revision it was drafted against."""
+    def set_design_plan(self, pid: str, summary: list[str], spec: dict, articulation: list | None = None,
+                        chains: list | None = None) -> dict:
+        """A new draft, stamped with the research revision it was drafted against. `articulation` is the
+        AI's list of moving components and `chains` their expanded joints (contract §3b)."""
         with self.edit(pid) as project:
             plan = {"status": "draft", "summary": summary, "spec": spec,
-                    "research_rev": int(project.get("research_rev") or 0), "at": now_iso()}
+                    "research_rev": int(project.get("research_rev") or 0), "at": now_iso(),
+                    "articulation": list(articulation or []), "chains": list(chains or [])}
             old = project.get("design_plan")
             if isinstance(old, dict) and old.get("user_params"):
                 plan["user_params"] = old["user_params"]  # the user's values outlive a redraft

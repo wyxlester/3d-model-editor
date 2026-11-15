@@ -1,0 +1,260 @@
+{
+  "schema": "me3d.articulation_roles/1",
+  "doc": "Moving components and the joint chain each needs (contract §3b). Read by the server (research, plan and build checks) and by blender/common.py add_chain. Simulator-neutral: motion, axis, pivot, neutral pose, nesting. Each joint nests under the one before it. Axes are in the editor frame (+X bow/forward, +Y port/left, +Z up). Limits are degrees for revolute joints and metres for prismatic ones, in the motion's own sense (elevation: up is positive). `kinds` are the MAK profile kinds (mak/pipeline/profiles.py); `evidence.mak` is checked against the VR-Forces install by mak/tests/test_roles.py.",
+  "kinds_for_project": {"ship": ["surface_ship"]},
+  "roles": [
+    {
+      "id": "gun_mount",
+      "example": "Weapons__Phalanx_1",
+      "label": "Trainable gun (CIWS, autocannon, gun turret)",
+      "kinds": ["surface_ship", "ground_vehicle", "fixed_wing", "rotary_wing"],
+      "match": ["ciws", "phalanx", "goalkeeper", "autocannon", "gun turret", "machine gun", "bushmaster"],
+      "group": "Weapons",
+      "joints": [
+        {"suffix": "", "motion": "azimuth", "axis": "z", "kind": "revolute", "limits": [-180, 180],
+         "pivot": "centre of the training ring, on the deck", "neutral": "facing forward",
+         "holds": "the base, housing and everything that trains"},
+        {"suffix": "Gun", "motion": "elevation", "axis": "y", "kind": "revolute", "limits": [-20, 85],
+         "pivot": "the trunnion: the barrel's elevation axis", "neutral": "barrel level, pointing forward",
+         "holds": "the barrel, cradle and everything that pitches with it; its tip is the muzzle"}
+      ],
+      "evidence": {"mak": {"sysdef": "weapons/phalanx-20mm-gun.sysdef", "codes": [4096, 4416]},
+                   "manual": ["AddContentToMAK 21.4", "AddContentToMAK 21.5.1", "UG 73.3.1"]}
+    },
+    {
+      "id": "naval_gun",
+      "example": "Weapons__Mk45_1",
+      "label": "Naval gun with a recoiling barrel (Mk 45, Oto Melara 76 mm)",
+      "kinds": ["surface_ship"],
+      "match": ["naval gun", "mk 45", "mk45", "oto melara", "76 mm", "5 inch", "127 mm", "main gun"],
+      "group": "Weapons",
+      "joints": [
+        {"suffix": "", "motion": "azimuth", "axis": "z", "kind": "revolute", "limits": [-142, 142],
+         "pivot": "centre of the gun house's training ring", "neutral": "facing forward",
+         "holds": "the gun house and everything that trains"},
+        {"suffix": "Cradle", "motion": "elevation", "axis": "y", "kind": "revolute", "limits": [-9, 70],
+         "pivot": "the trunnion", "neutral": "level", "holds": "the cradle and the barrel"},
+        {"suffix": "Barrel", "motion": "elevation", "axis": "y", "kind": "revolute", "limits": [0, 0],
+         "pivot": "the trunnion (same point as the cradle)", "neutral": "level",
+         "holds": "the barrel only; its tip is the muzzle (fixed in the model, the simulation's gun actuator)"}
+      ],
+      "evidence": {"mak": {"sysdef": "weapons/MK45NavalGun.sysdef", "codes": [4096, 4416, 4448]},
+                   "manual": ["AddContentToMAK 21.4", "UG 73.3.1"]}
+    },
+    {
+      "id": "trainable_launcher",
+      "example": "Weapons__RAM_1",
+      "label": "Trainable missile launcher (RAM, Sea Sparrow box, Harpoon canisters on a mount)",
+      "kinds": ["surface_ship", "ground_vehicle"],
+      "match": ["ram", "rolling airframe", "sea sparrow", "seasparrow", "essm", "nsssm", "launcher", "sam launcher"],
+      "group": "Weapons",
+      "joints": [
+        {"suffix": "", "motion": "azimuth", "axis": "z", "kind": "revolute", "limits": [-180, 180],
+         "pivot": "centre of the training ring", "neutral": "facing forward",
+         "holds": "the pedestal and everything that trains"},
+        {"suffix": "Elevation", "motion": "elevation", "axis": "y", "kind": "revolute", "limits": [-20, 40],
+         "pivot": "the elevation trunnions either side of the launcher box", "neutral": "level",
+         "holds": "the launcher box or canisters and everything that pitches"},
+        {"suffix": "Launcher", "motion": "elevation", "axis": "y", "kind": "revolute", "limits": [0, 0],
+         "pivot": "the front face of the box (where missiles leave)", "neutral": "level",
+         "holds": "the box face or a small marker at the muzzle (fixed in the model; the simulation's launch point)"}
+      ],
+      "evidence": {"mak": {"sysdef": "weapons/ram-missile-launcher.sysdef", "codes": [4096, 4736, 4768]},
+                   "manual": ["AddContentToMAK 21.4", "UG 73.3.1"]}
+    },
+    {
+      "id": "vertical_launcher",
+      "example": "Weapons__VLS_1",
+      "label": "Vertical launch cells (Mk 41 VLS)",
+      "kinds": ["surface_ship", "submarine"],
+      "match": ["vls", "vertical launch", "mk 41", "mk41", "launch cells"],
+      "group": "Weapons",
+      "joints": [
+        {"suffix": "", "motion": "elevation", "axis": "y", "kind": "revolute", "limits": [0, 0],
+         "pivot": "centre of the cell block's deck face", "neutral": "flush with the deck",
+         "holds": "the cell block (fixed in the model)"},
+        {"suffix": "Launcher", "motion": "elevation", "axis": "y", "kind": "revolute", "limits": [0, 0],
+         "pivot": "the cell hatches' centre", "neutral": "closed",
+         "holds": "the hatches (fixed in the model; the simulation's launch point)"}
+      ],
+      "evidence": {"mak": {"sysdef": "weapons/vertical-missile-launcher.sysdef", "codes": [4736, 4768]},
+                   "manual": ["UG 73.3.1"]}
+    },
+    {
+      "id": "rotating_radar",
+      "example": "Mast__Radar_1",
+      "label": "Rotating radar antenna",
+      "kinds": ["surface_ship", "submarine", "ground_vehicle", "fixed_wing", "rotary_wing", "building"],
+      "match": ["radar", "scanner", "air search", "surface search"],
+      "group": "Radar",
+      "joints": [
+        {"suffix": "", "motion": "azimuth", "axis": "z", "kind": "revolute", "limits": [-180, 180],
+         "pivot": "the antenna's turning axis, on its pedestal", "neutral": "facing forward",
+         "holds": "the antenna array"}
+      ],
+      "evidence": {"mak": {"codes": [5376]}, "manual": ["AddContentToMAK Table 58"]}
+    },
+    {
+      "id": "director",
+      "example": "Sensors__Director_1",
+      "label": "Fire-control director or gimballed sensor (trains and elevates)",
+      "kinds": ["surface_ship", "ground_vehicle", "fixed_wing", "rotary_wing"],
+      "match": ["director", "fire control", "mk 95", "spg-62", "illuminator", "eo/ir", "flir", "sensor turret"],
+      "group": "Sensors",
+      "joints": [
+        {"suffix": "", "motion": "azimuth", "axis": "z", "kind": "revolute", "limits": [-180, 180],
+         "pivot": "centre of the pedestal", "neutral": "facing forward", "holds": "the pedestal yoke"},
+        {"suffix": "Head", "motion": "elevation", "axis": "y", "kind": "revolute", "limits": [-30, 85],
+         "pivot": "the head's elevation axis", "neutral": "level", "holds": "the dish or sensor head"}
+      ],
+      "evidence": {"manual": ["UG 66.3", "sensors/gimbaled-visual-sensor.sysdef (codes 15424, 15744)"]}
+    },
+    {
+      "id": "rudder",
+      "example": "Hull__Rudder_1",
+      "label": "Rudder",
+      "kinds": ["surface_ship", "submarine"],
+      "match": ["rudder"],
+      "group": "Hull",
+      "joints": [
+        {"suffix": "", "motion": "azimuth", "axis": "z", "kind": "revolute", "limits": [-35, 35],
+         "pivot": "the rudder stock", "neutral": "centred", "holds": "the rudder blade"}
+      ],
+      "evidence": {"mak": {"codes": [1025]}, "manual": ["AddContentToMAK Table 58"]}
+    },
+    {
+      "id": "mast_extension",
+      "example": "Sail__Periscope_1",
+      "label": "Periscope, snorkel or raising mast",
+      "kinds": ["submarine", "ground_vehicle"],
+      "match": ["periscope", "snorkel", "raising mast", "telescopic mast"],
+      "group": "Sail",
+      "joints": [
+        {"suffix": "", "motion": "translate_z", "axis": "z", "kind": "prismatic", "limits": [0, 6],
+         "pivot": "its base, lowered", "neutral": "lowered", "holds": "the mast and its head"}
+      ],
+      "evidence": {"mak": {"codes": [2048]}, "manual": ["AddContentToMAK Table 58", "sensors/periscope.sysdef"]}
+    },
+    {
+      "id": "crane",
+      "example": "Deck__Crane_1",
+      "label": "Slewing and luffing crane",
+      "kinds": ["surface_ship", "ground_vehicle"],
+      "match": ["crane", "boom crane", "knuckle crane"],
+      "group": "Deck",
+      "joints": [
+        {"suffix": "", "motion": "azimuth", "axis": "z", "kind": "revolute", "limits": [-170, 170],
+         "pivot": "the slewing ring on the pedestal", "neutral": "jib stowed fore-and-aft",
+         "holds": "the crane house"},
+        {"suffix": "Jib", "motion": "elevation", "axis": "y", "kind": "revolute", "limits": [0, 75],
+         "pivot": "the jib heel pin", "neutral": "jib in its rest", "holds": "the jib"}
+      ],
+      "evidence": {"manual": ["AddContentToMAK 21.4"]}
+    },
+    {
+      "id": "davit",
+      "example": "Deck__Davit_1",
+      "label": "Boat davit",
+      "kinds": ["surface_ship"],
+      "match": ["davit"],
+      "group": "Deck",
+      "joints": [
+        {"suffix": "", "motion": "rotation", "axis": "x", "kind": "revolute", "limits": [0, 60],
+         "pivot": "the davit's hinge on the deck edge", "neutral": "stowed inboard", "holds": "the davit arm and boat"}
+      ],
+      "evidence": {"manual": ["AddContentToMAK 21.4"]}
+    },
+    {
+      "id": "deck_elevator",
+      "example": "Deck__Elevator_1",
+      "label": "Aircraft or vehicle deck elevator",
+      "kinds": ["surface_ship"],
+      "match": ["deck elevator", "aircraft elevator", "lift"],
+      "group": "Deck",
+      "joints": [
+        {"suffix": "", "motion": "translate_z", "axis": "z", "kind": "prismatic", "limits": [-8, 0],
+         "pivot": "the platform's centre, at flight-deck level", "neutral": "raised, flush with the deck",
+         "holds": "the platform"}
+      ],
+      "evidence": {"mak": {"codes": [7296]}, "manual": ["AddContentToMAK Table 58"]}
+    },
+    {
+      "id": "hatch",
+      "example": "Deck__Hatch_1",
+      "label": "Hatch, door or ramp on a hinge",
+      "kinds": ["surface_ship", "submarine", "ground_vehicle", "fixed_wing", "rotary_wing", "building"],
+      "match": ["hatch", "door", "ramp", "hangar door", "stern ramp"],
+      "group": "Deck",
+      "joints": [
+        {"suffix": "", "motion": "rotation", "axis": "x", "kind": "revolute", "limits": [0, 90],
+         "pivot": "the hinge line", "neutral": "closed", "holds": "the leaf"}
+      ],
+      "evidence": {"mak": {"codes": [3232]}, "manual": ["AddContentToMAK Table 58"]}
+    },
+    {
+      "id": "landing_gear",
+      "example": "Gear__Landing_Gear_1",
+      "label": "Retractable landing gear leg",
+      "kinds": ["fixed_wing", "rotary_wing"],
+      "match": ["landing gear", "undercarriage", "nose gear", "main gear"],
+      "group": "Gear",
+      "joints": [
+        {"suffix": "", "motion": "elevation", "axis": "y", "kind": "revolute", "limits": [0, 90],
+         "pivot": "the leg's retraction pivot", "neutral": "down and locked", "holds": "the leg and wheels"}
+      ],
+      "evidence": {"mak": {"codes": [3072]}, "manual": ["AddContentToMAK Table 58", "fixed-wing movement sysdefs"]}
+    },
+    {
+      "id": "control_surface",
+      "example": "Wing__Aileron_Left",
+      "label": "Flight control surface (aileron, flap, elevator)",
+      "kinds": ["fixed_wing"],
+      "match": ["aileron", "flap", "elevator", "control surface"],
+      "group": "Wing",
+      "joints": [
+        {"suffix": "", "motion": "elevation", "axis": "y", "kind": "revolute", "limits": [-25, 25],
+         "pivot": "the hinge line", "neutral": "neutral (in line with the wing)", "holds": "the surface"}
+      ],
+      "evidence": {"manual": ["AddContentToMAK Table 58 (1056-1248)"]}
+    },
+    {
+      "id": "rotor",
+      "example": "Rotor__Main",
+      "label": "Main rotor (spins about the vertical)",
+      "kinds": ["rotary_wing"],
+      "match": ["main rotor", "rotor"],
+      "group": "Rotor",
+      "joints": [
+        {"suffix": "", "motion": "spin", "axis": "z", "kind": "revolute", "limits": [-180, 180],
+         "pivot": "the rotor hub", "neutral": "any", "holds": "the hub and blades"}
+      ],
+      "evidence": {"manual": ["AddContentToMAK Table 58 (1184)"]}
+    },
+    {
+      "id": "propeller",
+      "example": "Hull__Propeller_1",
+      "label": "Propeller or tail rotor (spins about a horizontal axis)",
+      "kinds": ["surface_ship", "submarine", "fixed_wing", "rotary_wing"],
+      "match": ["propeller", "screw", "tail rotor", "prop"],
+      "group": "Hull",
+      "joints": [
+        {"suffix": "", "motion": "spin", "axis": "x", "kind": "revolute", "limits": [-180, 180],
+         "pivot": "the hub, on the shaft line", "neutral": "any", "holds": "the hub and blades"}
+      ],
+      "evidence": {"manual": ["AddContentToMAK Table 58 (1216)", "mak references/kinds.md: spin is visual-only"]}
+    },
+    {
+      "id": "wheel",
+      "example": "Wheels__Left_1",
+      "label": "Road wheel",
+      "kinds": ["ground_vehicle", "fixed_wing"],
+      "match": ["wheel"],
+      "group": "Wheels",
+      "joints": [
+        {"suffix": "", "motion": "spin", "axis": "y", "kind": "revolute", "limits": [-180, 180],
+         "pivot": "the axle centre", "neutral": "any", "holds": "the wheel"}
+      ],
+      "evidence": {"manual": ["AddContentToMAK Table 58 (9120+)"]}
+    }
+  ]
+}

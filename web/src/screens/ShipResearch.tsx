@@ -284,6 +284,7 @@ function PlanPanel({ project, busy, error, onApprove, onAsk, onChange, detail }:
           ))}
         </div>
       )}
+      {plan && <PlanMoving plan={plan} />}
       {plan?.spec && <PlanValues project={project} editable={st === 'draft' && !busy} onChange={onChange} />}
       {detail && <div style={{ display: 'flex', flexDirection: 'column', gap: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}>{detail}</div>}
       <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 12 }}>
@@ -298,6 +299,28 @@ function PlanPanel({ project, busy, error, onApprove, onAsk, onChange, detail }:
         <span className="faint" style={{ fontSize: 12, textAlign: 'center' }}>Building starts only when you approve. A later change to the research needs approval again.</span>
       </div>
     </>
+  );
+}
+
+const MOVES: Record<string, string> = { azimuth: 'turns', elevation: 'elevates', rotation: 'swings', spin: 'spins', translate_x: 'slides', translate_y: 'slides', translate_z: 'rises' };
+
+/** §3b: the plan's moving components, each with the joints it will be built with. */
+function PlanMoving({ plan }: { plan: NonNullable<Project['design_plan']> }) {
+  const chains = plan.chains ?? [];
+  const dropped = (plan.articulation ?? []).filter((a) => a.dropped);
+  if (!chains.length && !dropped.length) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, lineHeight: 1.5 }}>
+      <span style={{ fontWeight: 600, fontSize: 13 }}>Moving parts</span>
+      {chains.map((c) => (
+        <span key={c.top} className="muted">
+          <b style={{ color: 'var(--text)', fontWeight: 500 }}>{partLabel(c.top)}</b>
+          {' · '}
+          {c.joints.map((j) => `${j.suffix ? `${j.suffix.toLowerCase()} ` : ''}${j.min === j.max ? 'fixed' : `${MOVES[j.motion] ?? j.motion} ${j.min}…${j.max}${j.kind === 'prismatic' ? ' m' : '°'}`}`).join(', ')}
+        </span>
+      ))}
+      {dropped.map((a) => <span key={a.role} className="warn">Left out: {a.role.replace(/_/g, ' ')} ({a.dropped})</span>)}
+    </div>
   );
 }
 
@@ -437,16 +460,17 @@ function Claims({ r, sel, setSel, excluded = [] }: { r: Research; sel: Sel; setS
 }
 
 function Articulation({ r, id }: { r: Research; id: string }) {
-  const cols = '220px 120px minmax(0, 1fr) 110px';
+  const cols = 'minmax(0, 1.4fr) minmax(0, 1fr) 64px minmax(0, 1fr) 96px';
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <Head n="04" eyebrow="Articulation proposal" title="Rig only the mechanisms the references support" sub="Priority P0 to P2. What must not move is recorded too." />
+      <Head n="04" eyebrow="Articulation proposal" title="Rig only the mechanisms the references support" sub="Priority P0 to P2. Each moving part's role says which joints it needs (a gun mount turns and its barrel elevates). What must not move is recorded too." />
       <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '8px 12px', fontSize: 12, color: 'var(--text-3)', borderBottom: '1px solid var(--border)' }}>
-        <span>Part</span><span>Priority</span><span>Motion</span><span />
+        <span>Part</span><span>Role</span><span>Priority</span><span>Motion</span><span />
       </div>
       {(r.articulation ?? []).map((a, i) => (
         <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '10px 12px', borderBottom: '1px solid var(--bubble)', alignItems: 'center' }}>
           <span style={{ fontWeight: 500 }}>{a.part.includes('__') ? partLabel(a.part) : a.part}</span>
+          <span className="muted">{a.role ? `${a.role.replace(/_/g, ' ')}${(a.count ?? 1) > 1 ? ` ×${a.count}` : ''}` : '—'}</span>
           <span><span className={`chip ${PRIORITY[a.priority] ?? 'grey'}`}>{a.priority}</span></span>
           <span className="muted">{a.motion}</span>
           {a.part.includes('__') ? <Link to={paths.shipBuild(id, a.part)} style={{ fontSize: 12 }}>Show in Build</Link> : <span />}
