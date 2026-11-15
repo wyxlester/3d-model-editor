@@ -118,8 +118,8 @@ The catalog records every art-part entry with its component (`Sysdef.art_entries
 After the systems are applied, `systems.associate_parts` names every part a system drives `<entry>-<code>`,
 as stock entities do (1709 descriptors, e.g. 2S1 `azimuth-mount-4096`). A repeated name gets `-<code>` again.
 It reports `part-component` (part -> system / component) and `part-visual-only` (parts no component drives:
-radars, rudders and deck elevators have no stock system). Whether the SOE's "Associated Component" column
-follows these names is open question Q21.
+radars, rudders and deck elevators have no stock system). The SOE's "Associated Component" column shows each
+of these parts as `<system>:<component>`, e.g. `main-30mm-gun:turret` (confirmed on the Lincoln reimport, Q21).
 4. **Check.** `validate` checks the written `.entity` (`systems.check_entity_systems`, `check_ammunition`):
 
 | Finding | Level | Check |

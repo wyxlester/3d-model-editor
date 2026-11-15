@@ -6,10 +6,6 @@ Resolve each against the install, or with a real import in the GUI, then update 
 `mak/tests/test_editor_rules.py` checks the same rules against the installed donor).
 
 ## Open
-- **Q0 Colours in the GUI.** The hand import showed the ship all white: MAK's renderer ignored OpenFlight
-  material-palette colours. Fixed by carrying each material's colour in the face colour (palette materials are
-  now white). medfTool's decrypted output shows the colours in the geometry; **the SOE rendering still needs
-  checking.**
 - **Q1 FBX axis handling (FBX route only).** Blender reads our FBX back correctly; does VR-Forces honour the FBX
   header axis system?
 - **Q3b Copying files straight into an SMS.** Is copying `output/<name>/sms/*` into `data/simulationModelSets/<sms>/`
@@ -78,23 +74,41 @@ Resolve each against the install, or with a real import in the GUI, then update 
     - 2026-11-15, USS Abraham Lincoln (donor Invincible-class Carrier):
       - 6 mounts, all azimuth-only;
       - sim-only parts added: Phalanx 1-2 guns 4416/4448; RAM 1-2 elevating mounts 4288/4320 and launchers
-        4736/4768; Sea Sparrow 1-2 (RAM stand-in) elevating mounts 4352/4384 and launchers 4800/4832;
-      - not yet checked in VR-Forces.
-- **Q21 Associated Component.** The SOE's Physical tab has an "Associated Component" column for each part.
-  - **What the importer does:** names each part a system drives after that component's art-part entry,
-    `<entry>-<code>` (e.g. `primary-turret-4096`, `azimuth-mount-4160`). Stock entities do the same: 1709
-    descriptors use this form, and about 90% of all stock descriptors use the name of an entry in one of their
-    systems' sysdefs.
-  - **Unconfirmed:** whether the SOE fills the column from this name, from the bound code, or both. Check on
-    the Lincoln import.
-  - **Parts no stock system drives** (radars, rudder, deck elevators) stay unassociated: they move in the model
-    only (`part-visual-only`).
+        4736/4768; Sea Sparrow 1-2 (RAM stand-in) elevating mounts 4352/4384 and launchers 4800/4832.
+    - 2026-11-15, the same entity reimported in the SOE (Physical and Systems tabs):
+      - all 10 sim-only parts are listed, with the Associated Component of their weapon (Q21);
+      - they have **no Animate checkbox**, while the model's own parts (turrets, radars, elevators, rudder) do:
+        the SOE knows they have no node in the model;
+      - the two Phalanx guns have a Fire (muzzle flash) button;
+      - the six weapons are on the Systems tab (Phalanx 20mm CIWS ×2, RAM launcher ×4);
+      - still to see in a scenario: the weapon slewing and firing above the horizon with the barrel level, and
+        the log.
 - **Q22 Sea Sparrow stand-in.** The install has no Sea Sparrow (RIM-7/ESSM) munition or launcher.
   `ram-missile-launcher` (RIM-116, a trainable box launcher like the Mk 29) stands in for mounts named Sea
   Sparrow, ESSM or RIM-7, with "stands in" in the reason. A real Sea Sparrow needs its own munition entity, an
   `ammunitionParams.mtl` entry and a weapon sysdef.
 
 ## Resolved
+- **Q0 Colours in the GUI.** The first hand import showed the ship all white: MAK's renderer ignored OpenFlight
+  material-palette colours. Fixed by carrying each material's colour in the face colour (palette materials are
+  white). **Confirmed in the SOE** on the 2026-11-15 reimport of USS Abraham Lincoln (3D Models view):
+  - the materials render distinctly: deck dark grey, hull and island light, yellow and white deck markings, and
+    the red antifouling stripe at the waterline;
+  - every material is brightened by the same factor of about 1.6 under the scene lighting. The deck is 0.22 in the
+    model and renders at about 0.37 (pixel 94, 100, 100); the hull and island are 0.55-0.6 and render at about
+    0.9 (214-237). So the hull looking near-white is lighting, not a lost colour.
+- **Q21 Associated Component.** The SOE's Physical tab has an "Associated Component" column for each part.
+  The importer names each part a system drives after that component's art-part entry, `<entry>-<code>` (e.g.
+  `primary-turret-4096`, `azimuth-mount-4160`), as 1709 stock descriptors are named.
+  - **Confirmed in the SOE** on the 2026-11-15 Lincoln reimport. The column shows `<system>:<component>`:
+    - `main-30mm-gun:turret` for turrets 4096 and 4128;
+    - `main-30mm-gun:main-gun-joy` for guns 4416 and 4448;
+    - `RAM-Missile-Launcher:rotating-mount-point` for 4160-4256;
+    - `RAM-Missile-Launcher:elevating-mount-point` for 4288-4384;
+    - `RAM-Missile-Launcher:launcher` for 4736-4832.
+  - Radars, rudder and deck elevators are blank, as expected: no stock system drives them (`part-visual-only`).
+  - Not separated: whether the SOE matches by the name or by the bound code. Both are written, so it doesn't
+    matter for the importer.
 - **Q2 8-field vs 7-field type.** `.entity` objectType = VR-Forces object super-type + 7-field DIS type (UG D.3.1).
   Entities use `1:`. Confirmed by the hand import (`1:1:3:15:80:1:0:0`).
 - **Q3 Custom visuals location.** The SOE writes `<sms>/gui/visuals/Entity/<name>.leaf` + `<name>.metx` and

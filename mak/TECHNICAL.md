@@ -392,7 +392,7 @@ bug (fix the generator, not the output) or an SOE convention to adopt; record wh
 ### 6.1 OpenFlight writer
 - Geometry from every triangle primitive (indexed or not), normals (flat when absent), UVs, double-sided flags.
 - Materials: base colour **on each face** (VR-Forces ignored palette colours: the first hand import showed a
-  white ship), textures extracted from the glb.
+  white ship; confirmed rendering in the SOE on the 2026-11-15 reimport, Q0), textures extracted from the glb.
 - One DOF node per moving part: origin at the pivot, limits on its motion axis, and a comment in MAK's own
   format (`@dis articulated_part <code> rotate_min p,r,y ...`); the root carries `@dis entity_type`.
 - Verified by re-reading the file and by `medfTool --writeNodeInfo` (MAK's reader lists every part).
@@ -515,7 +515,9 @@ The `.entity`'s sensors, weapons and other systems are the donor's (UG 65.3.1), 
 - **Parts and components** (UG 66.3): every part a system drives is named after that component's art-part entry,
   `<entry>-<code>`, as stock entities name theirs (e.g. `primary-turret-4096`, `azimuth-mount-4160`). The report
   lists part -> system / component (`part-component`) and the parts no stock system drives (`part-visual-only`:
-  radars, rudders, deck elevators). Whether the SOE's Associated Component column follows the names is Q21.
+  radars, rudders, deck elevators). The SOE shows the component in its Associated Component column, e.g.
+  `main-30mm-gun:turret` (confirmed on the Lincoln reimport, Q21). Sim-only parts have no Animate checkbox
+  there.
 - Results:
   - Harmony: the passive radar sensor moves to `Mast__Radar_1` (136, -4, -56.1 body) and the visual sensor to the
     bridge eye.
@@ -531,7 +533,9 @@ The `.entity`'s sensors, weapons and other systems are the donor's (UG 65.3.1), 
 | Origin: land = ground-contact plane at the yaw axis; air/space = centre of gravity; surface/subsurface = waterline at the centre of buoyancy | ACM 21.2.1, Table 43 |
 | Editor ships: +X bow, +Y port, +Z up, origin at the waterline amidships; parts named `Group__Part`; joint pivot = node origin; joint axis local, turned by `rotation_deg` | CONTRACT §1-§3 |
 | A moving part is one node with its geometry beneath it, no rotation or scale in the neutral pose, child parts under the parent | ACM 21.4 |
-| The donor is the same kind, and its systems suit the new object once fitted (6.11) | UG 65.3.1 (a copy keeps the donor's behaviour) |
+| The donor is the same kind, and its systems suit the new object once fitted and completed from the stock class (6.11) | UG 65.3.1 (a copy keeps the donor's behaviour) |
+| A system most stock entities of the same kind and class (military or civilian) have is one the new object should have | UG 66.4; install counts (e.g. 70% of military ships have surface-default damage) |
+| A part named `<entry>-<code>` after the component that drives it is tied to that component; a part the model lacks can live in the `.entity` only | UG 66.3, 66.3.1; install (1709 stock descriptors use the name); confirmed in the SOE (Q21); the in-scenario behaviour of sim-only parts is still open (Q20) |
 | A sensor detects from its `sensor-position`; the radar part's pivot or the bridge eye is a better place than the donor's | UG 71.4.2, 72.1.2; not yet checked in VR-Forces (Q16) |
 | A weapon drives whatever parts its part parameters name, so rebinding them to the model's parts works | UG 73.1.1, 73.3.1; install (1372 of 1383 bindings match the entity's parts); not yet checked in VR-Forces (Q19) |
 | `.entity` object type = super-type `1` (individual) + DIS type | UG D.3.1 |
@@ -609,7 +613,7 @@ Planned, not done:
 3. Kind field and per-kind donor/part suggestions in the Review panel.
 4. Animation sequences for rotors, propellers and wheels; damage switch nodes.
 5. Check the systems in VR-Forces: the SOE's Edit Properties shows each system's position (UG 66.4.4); detection
-   from the mast (Q16); a rebound weapon slewing the model's parts (Q19); the Associated Component column (Q21).
+   from the mast (Q16); a weapon slewing the model's parts in a scenario (Q19, Q20).
    Add elevation joints to Lincoln's six weapon mounts in Blender, so their weapons pitch in 3D and need no
    sim-only parts (Q20).
 6. Install test against a real custom SMS.
