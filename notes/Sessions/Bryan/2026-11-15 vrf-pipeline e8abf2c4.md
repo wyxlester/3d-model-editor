@@ -78,7 +78,8 @@ the docs up to date before every commit.
   barrel level (Q19, Q20)? Do the sensors detect from the mast and bridge (Q16)? Do the sensors' red dots in
   Edit Properties sit there?
 - [ ] **Bryan:** add elevation joints to Lincoln's six weapon mounts in Blender, then draft again; the sim-only
-  parts go away.
+  parts go away. *Now done through the editor instead: the plan's articulation roles give each mount its
+  elevation joint (session 7b16c568); Lincoln has been rebuilt that way, its export still to redo.*
 - [ ] **Bryan / Lester:** review and merge `feat/mak-export` and `feat/mak-kinds`.
 - [ ] **DTS:** a real Sea Sparrow needs its own munition, ammunition entry and launcher (Q22).
 - [ ] **DTS:** can several model parts share one part code, so rudders 2-4 turn with rudder 1 (Q18)?
