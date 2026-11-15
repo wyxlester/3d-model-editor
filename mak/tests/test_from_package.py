@@ -137,6 +137,53 @@ class TestPrepare(Base):
         self.assertEqual(m["name"], "s_3_series")
 
 
+class TestCodesFollowSuggestions(Base):
+    """Contract §10 parts_suggested, and the export's own warnings. On 15 Nov, settings drafted by a stale server
+    kept Lincoln's weapon mounts static and the export came out with no weapons and no warning."""
+
+    def codes(self, p):
+        return {x["node"]: x["dis_part"] for x in p.manifest["articulated_parts"]}
+
+    def test_a_saved_suggestion_follows_todays(self):
+        # saved when the draft suggested no code for the turret: today it suggests 4096, and the export uses it
+        mak = dict(MAK, parts={"turret": None, "gun": 4416}, parts_suggested={"turret": None, "gun": 4416})
+        p = self.convert(mak=mak)
+        self.assertEqual(self.codes(p), {"turret": 4096, "gun": 4416})
+        self.assertFalse([w for w in p.warnings if "static" in w or "differ" in w], p.warnings)
+
+    def test_a_code_the_user_chose_is_kept(self):
+        mak = dict(MAK, parts={"turret": 4128, "gun": None}, parts_suggested={"turret": 4096, "gun": 4416})
+        self.assertEqual(self.codes(self.convert(mak=mak)), {"turret": 4128})
+
+    def test_a_part_the_settings_dont_name_gets_todays_suggestion(self):
+        self.assertEqual(self.codes(self.convert(mak=dict(MAK, parts={"turret": 4096}))), {"turret": 4096, "gun": 4416})
+
+    def test_older_settings_are_kept_but_warned_about(self):
+        # Lincoln's case: no parts_suggested, the mount static, the gun coded
+        p = self.convert(mak=dict(MAK, parts={"turret": None, "gun": 4416}))
+        self.assertEqual(self.codes(p), {"gun": 4416})
+        self.assertTrue(any("turret is static (suggested now: 4096)" in w for w in p.warnings), p.warnings)
+        self.assertTrue(any(w.startswith("gun has part code 4416, but turret, the moving part it sits on, is static")
+                            for w in p.warnings), p.warnings)
+
+    def test_suggestions_match_the_review_panel(self):
+        joints = {j["part"]: j for j in ARTICULATION}
+        self.assertEqual(from_package.suggest_codes(joints), {"turret": 4096, "gun": 4416})
+
+    def test_bare_weapon_mounts_are_counted(self):
+        joints = {"Weapons__Phalanx_1": {"axis": "z", "parent": "Hull__Main"},
+                  "Weapons__Phalanx_1__Gun": {"axis": "y", "parent": "Weapons__Phalanx_1"},
+                  "Weapons__RAM_1": {"axis": "z", "parent": "Hull__Main"}}
+        suggested = {"Weapons__Phalanx_1": 4096, "Weapons__Phalanx_1__Gun": 4416, "Weapons__RAM_1": 4128}
+        drafted = [{"system": "weapon", "sysdef": "weapons/phalanx-20mm-gun.sysdef",
+                    "bind": {"turret-art-part-type": "Weapons__Phalanx_1", "gun-art-part-type": "Weapons__Phalanx_1__Gun"}}]
+        w = from_package.weapon_warnings(joints, {}, suggested, drafted)
+        self.assertEqual(len(w), 1)
+        self.assertTrue(w[0].startswith("Weapons fitted: 1 of 2 weapon mounts. No weapon system drives Weapons__RAM_1"))
+        self.assertEqual(from_package.weapon_warnings(joints, {}, suggested, drafted + [
+            {"system": "weapon-2", "sysdef": "weapons/ram-missile-launcher.sysdef", "bind": {"rot-turret-art-part-type": "Weapons__RAM_1"}}]), [])
+
+
 class TestRefusals(Base):
     def test_no_mak_settings(self):
         with self.assertRaisesRegex(from_package.PackageError, "no MAK settings"):

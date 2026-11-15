@@ -542,7 +542,8 @@ function makInstall(sceneId: string, b: { sms?: string; confirm?: boolean }): { 
 async function handle(method: string, path: string, body: any): Promise<unknown> {
   const m = (re: RegExp) => path.match(re);
   let r: RegExpMatchArray | null;
-  if (method === 'GET' && path === '/api/health') return { blender: true, mpfb: true, ai: true, unreal: true, mak: true };
+  if (method === 'GET' && path === '/api/health') return { blender: true, mpfb: true, ai: true, unreal: true, mak: true,
+    code: { stale: false, started: '2026-11-15T00:00:00Z', changed: [], changed_count: 0 } };
   if (method === 'GET' && path === '/api/catalog') return catalog;
   if (method === 'POST' && path === '/api/route') return route(String(body?.message ?? ''));
   if (method === 'GET' && path === '/api/projects') {

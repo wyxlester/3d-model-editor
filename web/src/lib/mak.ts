@@ -27,22 +27,45 @@ export interface MakRow {
   priority: string;
   suggested: number | null;
   code: string;
+  /** Settings saved before parts_suggested: the saved code differs from today's suggestion, and whether the user
+   *  chose it can't be told. The panel says so and offers the suggestion. */
+  differs?: boolean;
 }
 
 /**
- * The parts table: one row per moving part the draft found on the current version. A saved code
- * (null included) wins over the draft's suggestion. Saved parts the version no longer has are left
- * out, since the server would refuse them.
+ * The parts table: one row per moving part the draft found on the current version, with the code the export
+ * would use (CONTRACT §10, as mak/from_package.effective_codes):
+ * - a part the settings don't name: today's suggestion;
+ * - a saved code equal to the suggestion it was saved with: today's suggestion, so improved rules apply;
+ * - a code the user changed: kept;
+ * - settings saved before `parts_suggested`: kept as saved, flagged `differs` where today's suggestion differs.
+ * Saved parts the version no longer has are left out, since the server would refuse them.
  */
 export function makRows(draft: MakDraft, saved: MakSettings | null | undefined): MakRow[] {
   const savedParts = saved?.parts ?? {};
+  const was = saved?.parts_suggested;
+  const has = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
   return draft.parts.map((p) => {
-    const code = Object.prototype.hasOwnProperty.call(savedParts, p.path) ? savedParts[p.path] : p.suggested_code;
+    let code = p.suggested_code;
+    let differs = false;
+    if (has(savedParts, p.path)) {
+      const s = savedParts[p.path];
+      const accepted = was !== undefined && has(was, p.path) && (was[p.path] ?? null) === (s ?? null);
+      if (!accepted) {
+        code = s;
+        differs = was === undefined && (s ?? null) !== (p.suggested_code ?? null);
+      }
+    }
     return {
       path: p.path, label: partLabel(p.path), motion: p.motion, min_deg: p.min_deg, max_deg: p.max_deg,
-      priority: p.priority, suggested: p.suggested_code, code: code == null ? '' : String(code),
+      priority: p.priority, suggested: p.suggested_code, code: code == null ? '' : String(code), differs,
     };
   });
+}
+
+/** Every row back to today's suggestion (the panel's "Use the current suggestions"). */
+export function withSuggestions(rows: MakRow[]): MakRow[] {
+  return rows.map((r) => ({ ...r, code: r.suggested == null ? '' : String(r.suggested), differs: false }));
 }
 
 /** The panel's text fields. */
@@ -79,16 +102,19 @@ export function makSettingsOf(form: MakForm, rows: MakRow[], off: string[] = [])
   if (disErr) return { ok: false, error: disErr };
   if (!form.donor_entity.trim()) return { ok: false, error: 'Pick a donor entity: the ship copies its systems and visuals.' };
   const parts: Record<string, number | null> = {};
+  const suggested: Record<string, number | null> = {};
   for (const r of rows) {
     const c = parseCode(r.code);
     if (c === 'bad') return { ok: false, error: `${r.label}: a DIS part code is a whole number, or leave it blank to keep the part static.` };
     parts[r.path] = c;
+    suggested[r.path] = r.suggested;
   }
   const short = form.short_name.trim();
   return {
     ok: true,
     mak: {
       dis_type: form.dis_type.split(':').map((f) => f.trim()).join(':').trim(), donor_entity: form.donor_entity.trim(), short_name: short || null, parts,
+      parts_suggested: suggested,
       ...(off.length ? { systems_off: [...new Set(off)].sort() } : {}),
     },
   };

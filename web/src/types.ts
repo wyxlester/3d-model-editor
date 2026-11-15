@@ -361,6 +361,9 @@ export interface Health {
   unreal: boolean;
   /** VR-Forces and its medfTool found (CONTRACT §10). Absent from an older server. */
   mak?: boolean;
+  /** Whether the server's code changed on disk since it started (CONTRACT §10). Absent from an older server,
+   *  which is itself a reason to restart. */
+  code?: { stale: boolean; started: string; changed: string[]; changed_count: number };
 }
 
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
@@ -435,6 +438,9 @@ export interface MakSettings {
   donor_entity: string;
   short_name: string | null;
   parts: Record<string, number | null>;
+  /** The draft's suggestion for each part when saved (CONTRACT §10): a saved code equal to it follows later
+   *  suggestions; one the user changed stays. Absent on settings saved before 15 Nov. */
+  parts_suggested?: Record<string, number | null>;
   /** What the model is in VR-Forces (CONTRACT §9b); a surface ship when absent. */
   kind?: string;
   /** Drafted system changes turned down, by systemName: those systems stay as the donor has them. */
@@ -492,7 +498,7 @@ export interface MakReport {
   vrforces: string;
   name: string;
   dis_type: string;
-  checks: { name: string; pass: boolean; detail: string }[];
+  checks: { name: string; pass: boolean; level?: 'error' | 'warning' | 'info'; detail: string }[];
   pending: string[];
   not_exported: string[];
   package_dir?: string;

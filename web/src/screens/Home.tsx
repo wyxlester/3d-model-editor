@@ -7,6 +7,7 @@ import { api, errorText } from '../api';
 import { AttachmentList, Dot, ErrorNote, TopBar, filesOnlyText, useAttachPicker } from '../components/common';
 import { remember, useHealth, useJobs, useProjects } from '../hooks';
 import { briefFromCarried } from '../lib/designPlan';
+import { staleServerText } from '../lib/report';
 import { clarifyOptions, paths, projectPath, startsNewResearch, targetFor } from '../lib/routing';
 import { startDescribedShip } from './ProjectPicker';
 import type { Attachment, Message } from '../types';
@@ -91,6 +92,7 @@ export function Home() {
             {status(h?.mpfb, 'Human generator ready', 'Human generator missing')}
             {status(h?.ai, 'AI online', 'AI offline')}
             {status(h?.unreal, 'Unreal ready', 'Unreal not found')}
+            {staleServerText(h) && <span className="warn" title={staleServerText(h) ?? ''}>Restart the editor: its server runs old code</span>}
           </>}
         </div>
       </TopBar>

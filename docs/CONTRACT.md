@@ -495,8 +495,23 @@ renamed. A package without `mak.json` `name` (made before this rule) falls back 
 
 ```json
 {"ok": bool, "vrforces": "5.1.1", "name": str, "dis_type": str,
- "checks": [{"name": str, "pass": bool, "detail": str}], "pending": [str], "not_exported": [str]}
+ "checks": [{"name": str, "pass": bool, "level": "error|warning|info", "detail": str}],
+ "pending": [str], "not_exported": [str]}
 ```
+
+A check with `level` `warning` passes but needs reading; the Review panel marks it `!` and says how many there are
+instead of "every check passed". The export adds its own, named `editor:settings`, before the pipeline's:
+- the saved settings differ from today's suggestions and predate `parts_suggested` (§10);
+- a coded part sits under a moving part with no code (a gun under a static mount): no weapon can bind it;
+- "Weapons fitted: N of M weapon mounts": mounts (named so the draft suggests a turret, gun or launcher code) that
+  no weapon system drives after the systems draft.
+
+The server adds `editor:server-stale` when it runs older code than is on disk (§10 `health.code`).
+
+Part codes: a part the settings don't name gets the draft's suggestion. A saved code equal to the suggestion it
+was saved with (`parts_suggested`) follows today's suggestion. A code the user changed is kept. The Review panel's
+systems draft picks codes the same way, so it lists what the export will do. (15 Nov: settings drafted by a stale
+server kept USS Abraham Lincoln's weapon mounts static, and the export came out with no weapons and no warning.)
 
 `<name>` is the model name above. Checks include MAK's own reader loading the model (`medfTool --writeNodeInfo`)
 and seeing every part's comment. Crew are listed in `not_exported` (VR-Forces humans are DI-Guy characters,
@@ -526,7 +541,7 @@ it on every page, so work carries on, and is reported, while the user is on anot
 
 | Method and path | Body | Returns |
 |---|---|---|
-| GET `/api/health` | | `{"blender":bool,"mpfb":bool,"ai":bool,"unreal":bool,"mak":bool}` (`mak`: VR-Forces and its medfTool found) |
+| GET `/api/health` | | `{"blender":bool,"mpfb":bool,"ai":bool,"unreal":bool,"mak":bool,"code":{"stale":bool,"started":iso,"changed":[path],"changed_count":int}}` (`mak`: VR-Forces and its medfTool found; `code.stale`: the server's code (`server/app`, `mak`, `blender`, `catalog/articulation`) changed on disk since it started, so it must be restarted; Home and Review > MAK say so) |
 | GET `/api/catalog` | | `{"ships":[{"type","name","description","category"}],"crew":[{"id","name","category"}],"clothes":[str],"equipment":[str],"animations":[str],"categories":{"ship":[str],"crew":[str]}}` |
 | POST `/api/route` | `{"message","attachments"?:[file name]}` (names only; the files go with the carried message) | `{"destination":"ship_research|ship_build|ship_variant|crew|crew_variant|animation|assembly|review|clarify","reason","project_id":str|null}` |
 | GET `/api/projects` | | `[ProjectSummary]` |
@@ -566,7 +581,7 @@ it on every page, so work carries on, and is reported, while the user is on anot
 | POST `/api/scenes/{id}/unreal-test` | | `{"job_id"}` → result: the Unreal report. 409 while an editor opened by `/api/unreal/open` is still open (a test rebuilds that level) |
 | POST `/api/unreal/open` | `{"level"}`: a report's `level` (`/Game/ME3D/<id>/L_<id>`) | `{"opened","level","project"}`: the Unreal editor, with its window, on this computer, showing the test project at that level (sun, sky and sea added by the harness; not part of the package). 400 not such a level, 404 no longer on disk, 409 a test is running or the editor is already open, 503 no Unreal 5.8. *(Proposed 29 Oct; awaiting Lester.)* |
 | GET `/api/projects/{id}/mak/draft` | optional query `donor` | `{"dis_type_hint","short_name","donors":[{"entity","objectType","size_lwh","military"}],"parts":[{"path","motion","min_deg","max_deg","priority","suggested_code"}],"systems":{"donor","changes":[{"system","reason",...}],"notes":[str]}}`: suggestions from the current version's parts (ships only; 400 for crew). `systems` is what the export changes in the donor's systems, for `donor`, else the saved donor, else the first suggestion; a change has `position_from`, `bind`, `params`, `remove`, `sysdef` or `add_parts` (sim-only parts: `{code, parent, motion, min, max, max_rate, reason}`) (§9b) |
-| PATCH `/api/projects/{id}/mak` | `Project.mak` | `{"project"}`; no new version. 400 with a sentence: DIS type not 7 integers, donor not in the installed EntityLevel SMS, a part not on the current version, a code not an integer or null, an unknown `kind`, `systems_off` not a list of names |
+| PATCH `/api/projects/{id}/mak` | `Project.mak` | `{"project"}`; no new version. 400 with a sentence: DIS type not 7 integers, donor not in the installed EntityLevel SMS, a part not on the current version, a code not an integer or null, an unknown `kind`, `systems_off` not a list of names, `parts_suggested` naming a part not on the version or holding a non-integer |
 | POST `/api/scenes/{id}/mak-export` | | `{"job_id"}` → result: the §9b report plus `{"package_dir","output_dir","zip_url"}`. 409 when the ship has no `mak` settings |
 | GET `/api/mak/sms` | | `{"sms":[str]}`: custom SMSs in the VR-Forces install (stock ones left out) |
 | POST `/api/scenes/{id}/mak-install` | `{"sms","confirm":true}` | `{"job_id"}` → result `{"sms","written":[path],"merged":[path],"backups_dir"}` (`merged` = tables an entry was added to, e.g. a munition's `ammunitionParams.mtl`): copies the scene's latest passing MAK export into that SMS and SharedData, backing up every file it replaces under `data/mak_backups/`. 400 a stock or unknown SMS or no `confirm`; 409 no passing MAK export for this scene |
@@ -597,7 +612,9 @@ it on every page, so work carries on, and is reported, while the user is on anot
 `PATCH /api/projects/{id}/mak` without making a version:
 `{"dis_type": "1:3:15:80:1:0:0", "donor_entity": "Super_Tanker", "short_name": str|null,
 "parts": {"Mast__Radar_1": 5376, "Lifesaving__Davit_P1": null}}`, plus an optional `"kind"` (§9b;
-`surface_ship` when absent) and an optional `"systems_off": [str]` (drafted system changes turned down, §9b).
+`surface_ship` when absent), an optional `"systems_off": [str]` (drafted system changes turned down, §9b), and
+`"parts_suggested": {part: code|null}`, the draft's suggestion for each part when the settings were saved (the
+web app always sends it). A saved code equal to it follows later suggestions; see §9b.
 `dis_type` is the 7-field DIS entity
 type; `donor_entity` names a stock `.entity` whose systems and visuals the ship copies; `parts` maps moving
 parts to DIS articulated-part codes (null = stays static).

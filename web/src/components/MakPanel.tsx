@@ -4,7 +4,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { api, errorText, fileUrl } from '../api';
 import { useLoad } from '../hooks';
-import { disTypeError, installFolders, makFormStart, makRows, makSettingsOf, parseCode, systemChangeText, type MakForm, type MakRow } from '../lib/mak';
+import { disTypeError, installFolders, makFormStart, makRows, makSettingsOf, parseCode, systemChangeText, withSuggestions, type MakForm, type MakRow } from '../lib/mak';
 import type { MakDraft, MakInstallResult, MakReport, Project } from '../types';
 import { ErrorNote } from './common';
 
@@ -88,6 +88,14 @@ export function MakSettingsForm({ project, onSaved }: { project: Project; onSave
         </label>
       </div>
 
+      {rows.some((r) => r.differs) && (
+        <span className="warn" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          These codes were saved before the settings kept track of which were suggestions, and some differ from
+          today's suggestions (marked below). The export uses them as saved.
+          <button className="btn sm" onClick={() => { setRows(withSuggestions(rows)); setDirty(true); setSavedNote(false); }}>
+            Use the current suggestions</button>
+        </span>
+      )}
       {rows.length ? (
         <table className="report-table" style={{ marginTop: 0 }}>
           <thead>
@@ -98,7 +106,8 @@ export function MakSettingsForm({ project, onSaved }: { project: Project; onSave
               const bad = parseCode(r.code) === 'bad';
               return (
                 <tr key={r.path}>
-                  <td>{r.label} <span className="faint">{r.priority}</span></td>
+                  <td>{r.label} <span className="faint">{r.priority}</span>
+                    {r.differs && <span className="warn" style={{ display: 'block', fontSize: 12 }}>suggested now: {r.suggested ?? 'static'}</span>}</td>
                   <td>{r.motion}</td>
                   <td className="mono">{r.min_deg}° to {r.max_deg}°</td>
                   <td>
@@ -161,25 +170,34 @@ function MakSystems({ systems, loading, off, onToggle }: {
   );
 }
 
+function warnCount(report: MakReport): number {
+  return report.checks.filter((c) => c.pass && c.level === 'warning').length;
+}
+
 /** What a MAK export said: checks styled like the Unreal ones, the zip, what was left out, and how to deploy. */
 export function MakReportView({ report, installed }: { report: MakReport; installed: MakInstallResult | null }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <span style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <span className={report.ok ? 'ok' : 'bad'} style={{ fontWeight: 500 }}>
-          {report.ok ? '✓ Exported for VR-Forces and every check passed' : '✗ Exported for VR-Forces with failing checks'} · VR-Forces {report.vrforces} ·{' '}
+          {!report.ok ? '✗ Exported for VR-Forces with failing checks'
+            : warnCount(report) ? `! Exported for VR-Forces with ${warnCount(report)} warning${warnCount(report) > 1 ? 's' : ''} to read`
+            : '✓ Exported for VR-Forces and every check passed'} · VR-Forces {report.vrforces} ·{' '}
           <span className="mono" style={{ fontWeight: 400 }}>{report.name}</span> · <span className="mono" style={{ fontWeight: 400 }}>{report.dis_type}</span>
         </span>
         {report.zip_url && <a className="btn sm" href={fileUrl(report.zip_url)} download>Download zip</a>}
       </span>
       <span className="faint">Written to <span className="mono">{report.output_dir}</span>.</span>
-      {report.checks.map((c, i) => (
-        <span key={i} style={{ display: 'flex', gap: 8 }}>
-          <span className={c.pass ? 'ok' : 'bad'}>{c.pass ? '✓' : '✗'}</span>
-          <span>{c.name}</span>
-          <span className="muted">{c.detail}</span>
-        </span>
-      ))}
+      {report.checks.map((c, i) => {
+        const warn = c.pass && c.level === 'warning';
+        return (
+          <span key={i} style={{ display: 'flex', gap: 8 }}>
+            <span className={!c.pass ? 'bad' : warn ? 'warn' : 'ok'}>{!c.pass ? '✗' : warn ? '!' : '✓'}</span>
+            <span>{c.name}</span>
+            <span className={warn ? 'warn' : 'muted'}>{c.detail}</span>
+          </span>
+        );
+      })}
       {!!report.pending.length && <span className="warn">Still to do: {report.pending.join('; ')}</span>}
       {!!report.not_exported.length && <span className="muted">Not exported: {report.not_exported.join('; ')}</span>}
       {installed ? (

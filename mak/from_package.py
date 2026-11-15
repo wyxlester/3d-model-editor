@@ -15,6 +15,12 @@ turn about a horizontal axis is a spinning part (propeller, wheel): "visual".
 Systems (sensors, weapons, other) are the donor's, fitted to the model as the pipeline drafts them
 (pipeline/systems.py): sensors at the radar parts and the bridge, donor weapons rebound to the model's mounts or
 removed. `mak.json` `systems_off` lists drafted changes the user turned down (by systemName).
+
+Part codes follow the current suggestions unless the user changed them (contract §10, `parts_suggested`): a saved
+code equal to the suggestion it was saved with is re-suggested now, so a rule added after the settings were saved
+still applies. On 15 Nov, settings drafted by a stale server kept every weapon mount static and the export came
+out with no weapons and no warning. The export now also warns about a coded part under an uncoded moving
+parent, which no weapon can bind, and about weapon mounts left without a weapon system (`Prepared.warnings`).
 """
 from __future__ import annotations
 
@@ -25,7 +31,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pipeline import generate, inspect_glb, profiles, systems
+from pipeline import draft_manifest, generate, inspect_glb, profiles, systems
 from pipeline.common import safe_name
 
 DEFAULT_KIND = "surface_ship"            # what the editor builds today
@@ -43,6 +49,7 @@ class Prepared:
     manifest: dict
     pending: list[str] = field(default_factory=list)
     not_exported: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)      # shown as warning checks in the export report
 
 
 def _read(path: Path, what: str):
@@ -80,6 +87,101 @@ def motion_of(joint: dict) -> tuple[str, str | None]:
     if (joint.get("min_deg") or 0) <= -180 and (joint.get("max_deg") or 0) >= 180:
         return "visual", note
     return ("rotation" if i == 0 else "elevation"), note
+
+
+def suggest_codes(joints: dict[str, dict]) -> dict[str, int | None]:
+    """The draft's part code for each joint ({path: joint with axis, limits, kind, rotation_deg}), as Review >
+    MAK suggests them (draft_mak uses this too): Table 58 codes from the part names, in natural name order so
+    numbered parts take their family's codes in turn."""
+    used: set[int] = set()
+    out: dict[str, int | None] = {}
+    for path in sorted(joints, key=draft_manifest._natural):
+        motion, _ = motion_of(joints[path])
+        code = draft_manifest.suggest_code(path, used, {}, motion, "surface")
+        if code is not None:
+            used.add(code)
+        out[path] = code
+    return out
+
+
+def effective_codes(mak: dict, suggested: dict[str, int | None]) -> tuple[dict[str, int | None], list[str]]:
+    """(code per joint, warnings) from the saved settings and today's suggestions.
+
+    - A part the settings don't name (new since they were saved): today's suggestion.
+    - A saved code equal to the suggestion it was saved with (`parts_suggested`): today's suggestion, so the
+      settings follow the rules as they improve.
+    - A saved code the user changed: kept.
+    - Settings saved before `parts_suggested` existed: kept as saved, with a warning wherever today's suggestion
+      differs. Whether such a value was the user's choice can't be told, so it is never overridden silently."""
+    saved = mak.get("parts") or {}
+    was = mak.get("parts_suggested")
+    out, warnings, legacy = {}, [], []
+    for path, now in suggested.items():
+        if path not in saved:
+            out[path] = now
+        elif isinstance(was, dict) and path in was and saved[path] == was[path]:
+            out[path] = now
+        else:
+            out[path] = saved[path]
+            if not isinstance(was, dict) and saved[path] != now:
+                legacy.append(f"{path} is {saved[path] or 'static'} (suggested now: {now or 'static'})")
+    if legacy:
+        warnings.append("The saved MAK settings differ from today's suggestions and were saved before the settings "
+                        "recorded which codes were suggestions, so they are used as saved: " + "; ".join(legacy) +
+                        ". If you didn't choose these, open Review > MAK, press 'Use the current suggestions' and save.")
+    return out, warnings
+
+
+def chain_warnings(joints: dict[str, dict], nodes: dict, codes: dict[str, int | None]) -> list[str]:
+    """A coded part whose nearest moving ancestor has no code (a gun under a static mount): the part moves on its
+    own in VR-Forces, and a weapon, which needs the mount as well, cannot bind to it."""
+    out = []
+    for path, code in codes.items():
+        if not code:
+            continue
+        up = (nodes.get(path) or {}).get("parent") or joints[path].get("parent")
+        seen = set()
+        while up and up not in joints and up not in seen:
+            seen.add(up)
+            up = (nodes.get(up) or {}).get("parent")
+        if up in joints and not codes.get(up):
+            out.append(f"{path} has part code {code}, but {up}, the moving part it sits on, is static. It turns on "
+                       f"its own in VR-Forces, and a weapon cannot bind to it without {up}: give {up} a code in "
+                       "Review > MAK (the draft suggests one when its name says what it is).")
+    return out
+
+
+def weapon_warnings(joints: dict[str, dict], nodes: dict, suggested: dict[str, int | None],
+                    drafted: list[dict]) -> list[str]:
+    """Weapon mounts (by name: the draft suggests a turret, gun or launcher code for them) that no weapon system
+    drives after the systems draft: they move in the model only."""
+    def weapon(p):
+        return suggested.get(p) is not None and systems.is_weapon_part(int(suggested[p]))
+
+    def parent_joint(p):
+        up, seen = (nodes.get(p) or {}).get("parent") or joints[p].get("parent"), set()
+        while up and up not in joints and up not in seen:
+            seen.add(up)
+            up = (nodes.get(up) or {}).get("parent")
+        return up if up in joints else None
+
+    mounts = [p for p in sorted(joints, key=draft_manifest._natural) if weapon(p) and not weapon(parent_joint(p) or "")]
+    if not mounts:
+        return []
+    bound = {v for e in drafted if str(e.get("sysdef") or "").startswith("weapons/") and not e.get("remove")
+             for v in (e.get("bind") or {}).values() if isinstance(v, str)}
+
+    def under(p, mount):
+        while p and p != mount:
+            p = parent_joint(p)
+        return p == mount
+
+    bare = [m for m in mounts if not any(under(b, m) for b in bound if b in joints)]
+    if not bare:
+        return []
+    return [f"Weapons fitted: {len(mounts) - len(bare)} of {len(mounts)} weapon mounts. No weapon system drives "
+            f"{', '.join(bare)}: they move in the model only. Check their part codes in Review > MAK (the mount "
+            "and the gun or launcher under it both need one) and the drafted system changes."]
 
 
 def _display_name(*candidates) -> str:
@@ -133,10 +235,11 @@ def prepare(package_dir: Path, work_dir: Path, cfg: dict | None = None) -> Prepa
     articulation = _read(package_dir / ship["articulation"], "articulation.json") if ship.get("articulation") else []
 
     joints = {j["part"]: j for j in articulation if isinstance(j, dict) and j.get("part")}
-    codes = mak.get("parts") or {}
-    unknown = sorted(set(codes) - set(joints))
+    unknown = sorted(set(mak.get("parts") or {}) - set(joints))
     if unknown:
         raise PackageError(f"MAK settings name parts that are not moving parts of this version: {', '.join(unknown)}")
+    suggested = suggest_codes(joints)
+    codes, warnings = effective_codes(mak, suggested)
 
     # Model files are named after the ship project (mak.json `name`, §8), like the .entity: the ship id is the
     # spec's, which can be the template's ("custom_vessel" for USS Abraham Lincoln). Older packages: the id.
@@ -194,8 +297,10 @@ def prepare(package_dir: Path, work_dir: Path, cfg: dict | None = None) -> Prepa
     if drafted:
         out["systems"] = drafted
     pending += [f"systems: {n}" for n in notes]
+    warnings += chain_warnings(joints, nodes, codes)
+    warnings += weapon_warnings(joints, nodes, suggested, drafted)
     (model_dir / "manifest.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
 
     not_exported = [f"{c.get('id')} at {c.get('station')} (VR-Forces crew need DI-Guy characters)"
                     for c in manifest.get("crew") or [] if isinstance(c, dict)]
-    return Prepared(model_dir, out, pending, not_exported)
+    return Prepared(model_dir, out, pending, not_exported, warnings)

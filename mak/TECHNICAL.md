@@ -210,8 +210,14 @@ Pipeline `report.json`: `{"model", "kind", "kind_status", "model_format", "glb",
 "ok", "pending": [code]}`; each finding is `{"level", "code", "message"}`.
 
 Editor `mak_export_report.json` (contract §9b): `{"ok", "vrforces": "5.1.1", "name", "dis_type",
-"checks": [{"name": "<stage>:<code>", "pass", "detail"}], "pending": [str], "not_exported": [str]}`. Exit
-code 0 only when `ok`.
+"checks": [{"name": "<stage>:<code>", "pass", "level", "detail"}], "pending": [str], "not_exported": [str]}`. Exit
+code 0 only when `ok`. Warning-level checks pass but are shown with `!` and counted in the panel's headline. The
+editor's own come first, as `editor:settings`:
+- stale saved settings;
+- a coded part under an uncoded moving part;
+- "Weapons fitted: N of M weapon mounts".
+
+The server adds `editor:server-stale` when it runs older code than is on disk.
 
 ## 5. Usage guide
 
@@ -268,8 +274,15 @@ python -m pipeline.run models/MyShip
    "static" per moving part, optional `kind`. "Draft" fills suggestions. **Systems** lists the changes the export
    makes to the donor's systems (6.11) for the donor picked, each with its reason and a checkbox; unticked ones
    are saved as `systems_off` and the donor's system is kept as it is.
-2. **Export for VR-Forces**: builds the package, runs `mak/run_mak_export.py` in a subprocess, shows every check,
-   offers a zip of `mak/`.
+   - Part codes follow the suggestions unless changed by hand: the settings save each part's suggestion
+     (`parts_suggested`), and a saved code equal to it takes today's suggestion, so rules added later apply.
+   - Settings saved before 15 Nov have no `parts_suggested`. Rows whose code differs from today's suggestion are
+     marked, with a "Use the current suggestions" button.
+   - The systems list picks codes the way the export does.
+2. **Export for VR-Forces**: builds the package, runs `mak/run_mak_export.py` in a subprocess, shows every check
+   (warnings marked `!` and counted), offers a zip of `mak/`. If the editor's server is older than its code on disk,
+   Home and this panel say to restart it (`health.code`). Its drafts use the old rules: on 15 Nov a server started
+   the day before left Lincoln's mounts uncoded.
 3. **Install into VR-Forces...**: lists custom SMSs, names every folder it will write, needs confirmation.
 
 Endpoints (CONTRACT §10):
@@ -576,11 +589,11 @@ The `.entity`'s sensors, weapons and other systems are the donor's (UG 65.3.1), 
 | Suite | Command | Count (2026-11-15) | Covers |
 |---|---|---|---|
 | vrf-pipeline | `python -m unittest discover -s tests` | 150 | artparts, inspect rules, OpenFlight write/read, colours, entity building, hand-import comparisons, drafts, profiles, one full run per kind, systems (sysdef reader, catalog, apply, checks, drafts) |
-| editor `mak/tests` | `server/.venv/Scripts/python -m pytest mak/tests -q` | 184 (+8 skipped without the Harmony and Lincoln files) | the pipeline tests, package conversion, systems draft and `systems_off`, install, draft, export script, editor rules (no MAK-derived files), articulation roles against the install (`test_roles.py`) |
+| editor `mak/tests` | `server/.venv/Scripts/python -m pytest mak/tests -q` | 190 (+8 skipped without the Harmony and Lincoln files) | the pipeline tests, package conversion, systems draft and `systems_off`, install, draft, export script, editor rules (no MAK-derived files), articulation roles against the install (`test_roles.py`), codes following suggestions and the export's own warnings |
 | editor `tests/mak` | `server/.venv/Scripts/python -m pytest tests/mak -q` | 1 (slow) | export of a built package with the real `medfTool` |
-| editor server | `server/.venv/Scripts/python -m pytest server/tests -q` | 336 | endpoints, settings validation (`systems_off` included), export job with a fake runner, install refusals and backups, articulation roles (research, plan gate, post-build check on Lincoln's parts) |
+| editor server | `server/.venv/Scripts/python -m pytest server/tests -q` | 339 | endpoints, settings validation (`systems_off` included), export job with a fake runner, install refusals and backups, articulation roles (research, plan gate, post-build check on Lincoln's parts), stale-server check, `parts_suggested` |
 | editor Blender | `server/.venv/Scripts/python -m pytest tests/blender/test_add_chain.py -q` | 4 (slow) | `me3d.add_chain` builds nested joints that survive into the glb and pass the post-build check; `joint_limits` reach joints a custom op made |
-| editor web | `cd web && npm run typecheck && npm test` | 136 | panel logic, DIS type checks, system change text, build-report warning split |
+| editor web | `cd web && npm run typecheck && npm test` | 140 | panel logic, DIS type checks, system change text, build-report warning split, codes following suggestions, stale-server text |
 
 Tests that need VR-Forces skip without it. The MAK manuals and SOE-written files are not in the editor repository
 (licence), so the editor's tests rebuild expectations from the installed donor instead.
@@ -642,10 +655,10 @@ Planned, not done:
    from the mast (Q16); a weapon slewing the model's parts in a scenario (Q19, Q20).
    Give Lincoln's six weapon mounts their elevation joints, so their weapons pitch in 3D and need no sim-only
    parts (Q20): redraft its research and plan with the articulation roles (six weapon chains), approve, rebuild.
-8. Live check of the articulation roles with the real AI: a research turn names the roles, the plan lists every
-   chain, and the build turn uses `add_chain` and clears its own `articulation` warnings.
 6. Install test against a real custom SMS.
 7. Review and merge `feat/mak-export` and `feat/mak-kinds`.
+8. Live check of the articulation roles with the real AI: a research turn names the roles, the plan lists every
+   chain, and the build turn uses `add_chain` and clears its own `articulation` warnings.
 
 Open questions for the follow-up with the DTS team:
 - Ship supports on the waterline (stock ships) or on the keel (SOE calculate button)? Does the ship float at the

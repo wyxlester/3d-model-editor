@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pipeline import draft_manifest, generate, inspect_glb
-from from_package import DEFAULT_KIND, FORWARD_AXIS, draft_systems, motion_of
+from from_package import DEFAULT_KIND, FORWARD_AXIS, draft_systems, effective_codes, motion_of, suggest_codes
 
 DIS_TYPE_HINT = ("1:3:<country>:<category>:<subcategory>:<specific>:<extra> "
                  "(kind 1 = platform, domain 3 = surface; e.g. category 80 = passenger vessel, SISO-REF-010)")
@@ -26,25 +26,26 @@ def mak_bounds(report: dict) -> dict:
 
 
 def draft(parts: list, report: dict, name: str, cfg: dict, donor: str | None = None, codes: dict | None = None,
-          glb: Path | None = None, kind: str | None = None) -> dict:
+          glb: Path | None = None, kind: str | None = None, mak: dict | None = None) -> dict:
     """`donor` and `codes` are the project's MAK settings when it has them (the systems draft follows them);
-    `glb` is the version's model, whose socket nodes place the sensors."""
+    `glb` is the version's model, whose socket nodes place the sensors. `mak` (the saved settings) picks the codes
+    exactly as the export does (from_package.effective_codes), so the panel's systems draft is the export's."""
     jointed = sorted((p for p in parts if p.get("joint")), key=lambda p: draft_manifest._natural(p["path"]))
-    used: set[int] = set()
-    counters: dict[int, int] = {}
+    joints = {p["path"]: dict(p["joint"], rotation_deg=p.get("rotation_deg") or [0, 0, 0]) for p in jointed}
+    suggested = suggest_codes(joints)            # the export follows the same suggestions (contract §10)
     out_parts = []
     for p in jointed:
-        j = dict(p["joint"], rotation_deg=p.get("rotation_deg") or [0, 0, 0])
+        j = joints[p["path"]]
         motion, _ = motion_of(j)
-        code = draft_manifest.suggest_code(p["path"], used, counters, motion, "surface")
-        if code is not None:
-            used.add(code)
+        code = suggested[p["path"]]
         out_parts.append({"path": p["path"], "motion": motion, "min_deg": j.get("min_deg"), "max_deg": j.get("max_deg"),
                           "priority": j.get("priority"), "suggested_code": code})
     armed = any(c["suggested_code"] and 4096 <= c["suggested_code"] < 5056 for c in out_parts)
     donors = draft_manifest.suggest_donors(cfg, "surface", mak_bounds(report), armed=armed)
     donor = donor or (donors[0]["entity"] if donors else None)
-    chosen = {p["path"]: c for p in out_parts if (c := (codes or {}).get(p["path"], p["suggested_code"]))}
+    if codes is None:
+        codes = effective_codes(mak, suggested)[0] if mak else suggested
+    chosen = {p["path"]: c for p in out_parts if (c := codes.get(p["path"], p["suggested_code"]))}
     by_path = {p["path"]: p for p in parts}
     rows = []
     for path, code in chosen.items():

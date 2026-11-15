@@ -5,7 +5,7 @@
 
 Writes <package_dir>/mak/ (model, definitions, .entity, visual-import/) and
 <package_dir>/mak_export_report.json:
-    {"ok", "vrforces": "5.1.1", "name", "dis_type", "checks": [{"name","pass","detail"}],
+    {"ok", "vrforces": "5.1.1", "name", "dis_type", "checks": [{"name","pass","level","detail"}],
      "pending": [str], "not_exported": [str]}
 Exit code 0 only when "ok" is true. Nothing is written into the VR-Forces install (see install.py).
 """
@@ -54,13 +54,16 @@ def export(package_dir: Path, cfg: dict, mak_check: bool = True) -> dict:
         except (InputError, ValueError) as e:
             return _report(package_dir, dict(base, checks=[{"name": "settings", "pass": False, "detail": str(e)}]))
 
-    checks = []
+    # The editor's own warnings first (stale settings, a coded part under a static mount, bare weapon mounts):
+    # an export that drops the weapons must say so where the user looks, not only in the pending notes.
+    checks = [{"name": "editor:settings", "pass": True, "level": "warning", "detail": w} for w in prepared.warnings]
     for stage, findings in result["stages"].items():
         for f in findings:
             if f["level"] == "pending":
                 base["pending"].append(f["message"])
             elif f["code"] != "joints-static":            # already listed part by part in `pending`
-                checks.append({"name": f"{stage}:{f['code']}", "pass": f["level"] != "error", "detail": f["message"]})
+                checks.append({"name": f"{stage}:{f['code']}", "pass": f["level"] != "error", "level": f["level"],
+                               "detail": f["message"]})
     return _report(package_dir, dict(base, ok=bool(result["ok"]), checks=checks))
 
 
@@ -73,7 +76,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     report = export(args.package_dir, make_config(args.vrf, args.shared_data), mak_check=not args.no_mak_check)
     for c in report["checks"]:
-        print(f"{'PASS' if c['pass'] else 'FAIL'}  {c['name']}: {c['detail']}")
+        tag = "FAIL" if not c["pass"] else "WARN" if c.get("level") == "warning" else "PASS"
+        print(f"{tag}  {c['name']}: {c['detail']}")
     for p in report["pending"]:
         print(f"PENDING  {p}")
     for n in report["not_exported"]:

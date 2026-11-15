@@ -14,6 +14,7 @@ import type { ViewName } from '../lib/frames';
 import { PANEL_KEEP, PANEL_MIN, dragHeight } from '../lib/panel';
 import { partLabel } from '../lib/parts';
 import { paths } from '../lib/routing';
+import { staleServerText } from '../lib/report';
 import type { Attachment, ExportResult, MakInstallResult, MakReport, Pin, Scene, UnrealReport, Vec3 } from '../types';
 import { AttachTo, CrewModel, PIN_COLORS, ShipViewer, ViewButtons, stationObjects } from '../viewer/Viewer';
 import { ScenePicker } from './AssemblyScenePicker';
@@ -355,6 +356,7 @@ function ReviewScene({ sceneId }: { sceneId: string }) {
                 </span>
               )}
               {target === 'mak' && installOff && health && <span className="faint">{installOff}</span>}
+              {target === 'mak' && staleServerText(health) && <span className="warn" role="alert">{staleServerText(health)}</span>}
               {exported && (
                 <span className="ok" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                   Exported v{exportVersion}, with the research inside, to <span className="mono">{exported.package_dir}</span>.

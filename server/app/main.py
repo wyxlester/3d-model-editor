@@ -41,6 +41,7 @@ from .uploads import UploadRejected, check_size, content_blocks, decode, resolve
 from .uploads import TYPES as UPLOAD_TYPES
 from .unreal_editor import Refused, UnrealEditorWindow
 from . import mak as mak_export
+from .codever import CodeVersion
 
 UnrealRunner = Callable[[Path, Callable[[str], None]], dict]
 SCENE_ID = re.compile(r"^scene_[a-z0-9]+$")
@@ -87,6 +88,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
                workers: int = 6, mak: mak_export.MakRunner | None = None) -> FastAPI:
     settings = settings or Settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+    code = CodeVersion(settings.repo_root)       # health.code: is this process older than the code on disk?
     store = ProjectStore(settings.projects_dir)
     catalog = Catalog(settings.catalog_dir)
     builds = Builds(store, runner or BlenderRunner(settings))
@@ -147,7 +149,7 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
     def health():
         return {"blender": settings.blender.exists(), "mpfb": settings.mpfb_dir.is_dir(),
                 "ai": find_claude_cli() is not None, "unreal": settings.unreal_cmd.exists(),
-                "mak": mak_export.available(settings)}
+                "mak": mak_export.available(settings), "code": code.status()}
 
     @app.get("/api/catalog")
     def get_catalog():
@@ -1098,6 +1100,11 @@ def create_app(settings: Settings | None = None, runner: BuilderRunner | None = 
             pkg = export_scene(scene, store, settings.packages_dir, log)
             pkg_dir = Path(pkg["package_dir"])
             report = mak(pkg_dir, log)
+            stale = code.warning()
+            if stale:                   # the saved settings were drafted by this (old) process, not the export's code
+                log(f"warning: {stale}")
+                report = dict(report, checks=[{"name": "editor:server-stale", "pass": True, "level": "warning",
+                                               "detail": stale}] + list(report.get("checks") or []))
             return dict(report, package_dir=str(pkg_dir), output_dir=str(pkg_dir / "mak"),
                         zip_url=mak_export.zip_output(pkg_dir, settings.packages_dir) if (pkg_dir / "mak").is_dir() else None)
         return {"job_id": jobs.submit("mak", work, label=f"MAK export of {scene.get('name', sid)}")}

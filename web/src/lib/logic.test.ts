@@ -6,7 +6,7 @@ import { blenderToGltf, cameraFor, gltfToBlender, jointAxisGltf } from './frames
 import { assetLabel, clothesSlot, mergePatch, toggleIn } from './spec';
 import { keyLine, moveRows, refineMessage, removeMovePatch } from './moves';
 import { startsNewResearch, targetFor } from './routing';
-import { splitWarnings } from './report';
+import { splitWarnings, staleServerText } from './report';
 import { fileType, refuse, sizeText } from './attachments';
 import {
   boxText, boxToPercent, clampPan, countLine, coverageSummary, filterPhotos, fitSize, hostOf, photoIdsIn, photoStatus, provenanceRows,
@@ -26,6 +26,16 @@ describe('build report warnings', () => {
     expect(splitWarnings(w)).toEqual({ other: ['socket socket_bow missing'],
       articulation: ['Weapons__Phalanx_1 (gun mount): not built', 'Hull__Rudder_1 (rudder): mount wrong axis'] });
     expect(splitWarnings(undefined)).toEqual({ other: [], articulation: [] });
+  });
+});
+
+describe('stale server', () => {
+  it("asks for a restart when the server's code changed, or the server predates the check", () => {
+    expect(staleServerText(null)).toBeNull();
+    expect(staleServerText({ code: { stale: false, started: '2026-11-15T01:00:00Z', changed_count: 0 } })).toBeNull();
+    expect(staleServerText({ code: { stale: true, started: '2026-11-14T12:14:56Z', changed_count: 3 } }))
+      .toMatch(/since 2026-11-14 12:14:56 UTC, and 3 of its files have changed.*start\.ps1/);
+    expect(staleServerText({})).toMatch(/older than this page/);
   });
 });
 
@@ -1146,7 +1156,7 @@ describe('the scene crew on the version shown in Review', () => {
   });
 });
 // MAK VR-Forces settings (CONTRACT §9b, §10).
-import { disTypeError, installFolders, makFormStart, makRows, makSettingsOf, parseCode, systemChangeText } from './mak';
+import { disTypeError, installFolders, makFormStart, makRows, makSettingsOf, parseCode, systemChangeText, withSuggestions } from './mak';
 import type { MakDraft } from '../types';
 
 const makDraft: MakDraft = {
@@ -1201,6 +1211,25 @@ describe('MAK parts table', () => {
       parts: { Roof__Searchlight: null, Cabin__Door: 4352, Gone__Part: 9 } });
     expect(rows.map((r) => [r.path, r.code])).toEqual([['Roof__Searchlight', ''], ['Cabin__Door', '4352'], ['Mast__Camera', '5376']]);
   });
+  it("follows today's suggestion where the saved code was the suggestion, keeps codes the user changed", () => {
+    // Saved when the draft suggested nothing for the searchlight (as a stale server did for weapon mounts on 15 Nov)
+    // and the user changed the door: the searchlight now takes 4096, the door keeps 4352.
+    const rows = makRows(makDraft, { dis_type: '1:3:0:0:0:0:0', donor_entity: 'Patrol_Boat', short_name: null,
+      parts: { Roof__Searchlight: null, Cabin__Door: 4352, Mast__Camera: 5376 },
+      parts_suggested: { Roof__Searchlight: null, Cabin__Door: null, Mast__Camera: 5376 } });
+    expect(rows.map((r) => [r.path, r.code, r.differs])).toEqual([
+      ['Roof__Searchlight', '4096', false], ['Cabin__Door', '4352', false], ['Mast__Camera', '5376', false]]);
+  });
+  it("flags older settings that differ from today's suggestions, and resets them on request", () => {
+    const rows = makRows(makDraft, { dis_type: '1:3:0:0:0:0:0', donor_entity: 'Patrol_Boat', short_name: null,
+      parts: { Roof__Searchlight: null, Cabin__Door: null, Mast__Camera: 5376 } });
+    expect(rows.map((r) => r.differs)).toEqual([true, false, false]);
+    expect(withSuggestions(rows).map((r) => [r.code, r.differs])).toEqual([['4096', false], ['', false], ['5376', false]]);
+  });
+  it('saves the suggestion beside each code', () => {
+    const built = makSettingsOf({ dis_type: '1:3:15:80:1:0:0', donor_entity: 'Super_Tanker', short_name: '' }, makRows(makDraft, null));
+    expect(built).toMatchObject({ ok: true, mak: { parts_suggested: { Roof__Searchlight: 4096, Cabin__Door: null, Mast__Camera: 5376 } } });
+  });
   it('leaves out saved parts the current version no longer has', () => {
     const rows = makRows(makDraft, { dis_type: '1:3:0:0:0:0:0', donor_entity: 'Patrol_Boat', short_name: null, parts: { Gone__Part: 9 } });
     expect(rows.map((r) => r.path)).not.toContain('Gone__Part');
@@ -1242,7 +1271,8 @@ describe('MAK form', () => {
     rows[1] = { ...rows[1], code: '4352' };
     expect(makSettingsOf({ dis_type: ' 1:3:15:80:1:0:0 ', donor_entity: 'Super_Tanker', short_name: ' ' }, rows)).toEqual({
       ok: true, mak: { dis_type: '1:3:15:80:1:0:0', donor_entity: 'Super_Tanker', short_name: null,
-        parts: { Roof__Searchlight: 4096, Cabin__Door: 4352, Mast__Camera: 5376 } },
+        parts: { Roof__Searchlight: 4096, Cabin__Door: 4352, Mast__Camera: 5376 },
+        parts_suggested: { Roof__Searchlight: 4096, Cabin__Door: null, Mast__Camera: 5376 } },
     });
     expect(makSettingsOf({ dis_type: '1:3', donor_entity: 'Super_Tanker', short_name: 'X' }, rows)).toMatchObject({ ok: false });
     expect(makSettingsOf({ dis_type: '1:3:15:80:1:0:0', donor_entity: '', short_name: 'X' }, rows)).toMatchObject({ ok: false, error: expect.stringMatching(/donor/i) });

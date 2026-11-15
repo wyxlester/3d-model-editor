@@ -107,7 +107,9 @@ def test_project_json_is_written_atomically(settings, make_client):
 
 def test_health_shape(make_client):
     h = make_client().get("/api/health").json()
+    code = h.pop("code")                     # contract §10: is the server older than its code on disk?
     assert set(h) == {"blender", "mpfb", "ai", "unreal", "mak"} and all(isinstance(v, bool) for v in h.values())
+    assert set(code) == {"stale", "started", "changed", "changed_count"} and code["stale"] is False
 
 
 def test_the_real_catalog_offers_a_default_male_and_a_default_female():

@@ -20,7 +20,7 @@ from .store import read_json
 
 MakRunner = Callable[[Path, Callable[[str], None]], dict]
 DIS_TYPE = re.compile(r"^-?\d+(:-?\d+){6}$")
-KEYS = {"dis_type", "donor_entity", "short_name", "parts", "kind", "systems_off"}
+KEYS = {"dis_type", "donor_entity", "short_name", "parts", "parts_suggested", "kind", "systems_off"}
 # Kinds a built model can be exported as (mak/pipeline/profiles.py; humans and animals are DI-Guy characters,
 # not models). The editor builds ships today, so `kind` is optional and means surface_ship when absent.
 MODEL_KINDS = ("surface_ship", "submarine", "ground_vehicle", "fixed_wing", "rotary_wing", "space_object",
@@ -82,6 +82,15 @@ def validate(body, parts: list, settings: Settings) -> dict:
         if code is not None and (isinstance(code, bool) or not isinstance(code, int) or not 0 < code < 65536):
             raise MakRefused(400, f"The DIS code for {part} must be an integer (1-65535) or null")
     out = {"dis_type": dis.strip(), "donor_entity": donor.strip(), "short_name": short, "parts": dict(codes)}
+    # The draft's suggestion for each part when it was saved: a saved code equal to it follows later suggestions
+    # (from_package.effective_codes), so settings saved under older rules (or by a stale server) don't stick.
+    was = body.get("parts_suggested")
+    if was is not None:
+        if not isinstance(was, dict) or set(was) - moving:
+            raise MakRefused(400, "parts_suggested must map moving parts of this version to the suggested code or null")
+        if any(v is not None and (isinstance(v, bool) or not isinstance(v, int)) for v in was.values()):
+            raise MakRefused(400, "parts_suggested values are integers or null")
+        out["parts_suggested"] = dict(was)
     off = body.get("systems_off")
     if off is not None:
         if not isinstance(off, list) or not all(isinstance(x, str) and x.strip() for x in off):
@@ -101,8 +110,7 @@ def draft(parts: list, report: dict, name: str, settings: Settings, mak: dict | 
     draft_mak = _mak_modules(settings)[0]
     mak = mak or {}
     return draft_mak.draft(parts, report or {}, name, mak_config(settings), donor=donor or mak.get("donor_entity"),
-                           codes={k: v for k, v in (mak.get("parts") or {}).items() if v} or None, glb=glb,
-                           kind=mak.get("kind"))
+                           glb=glb, kind=mak.get("kind"), mak=mak or None)
 
 
 def custom_sms(settings: Settings) -> list[str]:

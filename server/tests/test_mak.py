@@ -124,6 +124,18 @@ def test_draft(make_client, vrf):
     assert c.get(f"/api/projects/{ship['id']}/mak/draft?donor=Super_Tanker").json()["systems"]["changes"] == []
 
 
+def test_settings_keep_the_suggestions_they_were_saved_with(make_client, vrf):
+    """Contract §10 parts_suggested: what the draft suggested when saved, so the export can tell a code the user
+    chose from one that should follow newer suggestions."""
+    c = make_client()
+    ship = create_ready(c)
+    body = {**GOOD, "parts": {"Roof__Searchlight": None}, "parts_suggested": {"Roof__Searchlight": None}}
+    r = c.patch(f"/api/projects/{ship['id']}/mak", json=body)
+    assert r.status_code == 200 and r.json()["project"]["mak"]["parts_suggested"] == {"Roof__Searchlight": None}
+    for bad in ({"Hull__Main": 1}, {"Roof__Searchlight": "x"}, ["Roof__Searchlight"]):
+        assert c.patch(f"/api/projects/{ship['id']}/mak", json={**body, "parts_suggested": bad}).status_code == 400
+
+
 def test_export_needs_settings(make_client, vrf):
     c = make_client(mak=fake_mak())
     ship = create_ready(c)
