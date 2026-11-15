@@ -11,17 +11,12 @@ Resolve each against the install, or with a real import in the GUI, then update 
 - **Q3b Copying files straight into an SMS.** Is copying `output/<name>/sms/*` into `data/simulationModelSets/<sms>/`
   enough for the SOE to load them, or is File > Import Visual Models on `output/<name>/visual-import` required
   (UG 64.4.1)? Both layouts are generated.
-- **Q7 medf.** Is encrypting to `.medf` with medfTool worth it for our own content?
-- **Q8 SMS checksum files** (`smsChecksum5.1.1.cksm`). Do new `.entity` files in a custom SMS need them regenerated?
+  - 2026-11-15: PBRProbe and the PBR Lincoln were deployed by copying the model into SharedData, then using the
+    SOE's Import Visual Models and add-entity dialogs. Both loaded and rendered, so that route works. Copying the
+    `sms/*` files alone (as the editor's installer does) is still untested.
 - **Q10 FBX node-name matching (FBX route only).** Is the FBX_NodeNameMap.csv match exact and case-sensitive?
 - **Q13 Attach-point semantics.** Child attach-points are written relative to the parent part (stock 2S1 pattern).
   The hand import has no explicit parts (the SOE takes them from the model, UG 66.3), so this is unconfirmed.
-- **Q14 Support points and bounding volume.** The hand import kept the donor's values (not recalculated). Compare ours
-  with SOE "Calculate Support Points and Bounding Volume from Displayed Model" (UG 66.1.1, 66.1.3).
-- **Q15 Donor weapon systems.** Cloned systems keep the donor's part codes (e.g. 2S1 needs 4128). **Handled in the
-  draft** (`references/systems.md`): each donor weapon is kept, rebound to one of the model's mounts, or removed,
-  with the reason. Whether VR-Forces drives a rebound weapon on our parts is Q19. Mounts missing parts get
-  sim-only parts (Q20).
 - **Q16 Sensor position.** Two different things in the `.entity` sound alike:
   - an **articulated part** (e.g. radar 5376) is visual: a DOF node in the model that VR-Forces turns in the 3D
     view, plus its part entry. Harmony's radars sit correctly on the mast (attach point 136, ±4, -56.15).
@@ -43,6 +38,8 @@ Resolve each against the install, or with a real import in the GUI, then update 
   starts from the bounding volume's centre, not the sensor (UG 51.1), so judge by detections.
 - **Q17 DtRwVisualMetaData.** On save, the SOE adds a `visual-meta-data` block (here `Watercraft.meta`, marking
   variance). We don't. Needed?
+  - 2026-11-15: every import so far went through the SOE's Import Visual Models, which may write the block
+    itself, so this is not settled. A copy-only deploy (Q3b) answers both.
 - **Q18 More parts than Table 58 codes.** Table 58 has one rudder code (1025) and two deck elevator codes
   (7296, 7328). USS Abraham Lincoln has 4 rudders and 4 deck elevators, so the draft maps rudder 1 and elevators
   1-2 and leaves the rest static (`unmapped_joints` says why). Open: can several DOF nodes carry the same
@@ -52,48 +49,6 @@ Resolve each against the install, or with a real import in the GUI, then update 
   model's parts, or adds a stock weapon for a mount named after it, binding each parameter to a part of the family
   stock entities use for it (`Catalog.bindings`). Check in VR-Forces that the weapon slews and elevates those
   parts (UG 73.3.1) and fires from the muzzle `end-point`.
-- **Q20 Azimuth-only weapon mounts (missing elevation joints), under observation.** A mount modelled with
-  one azimuth joint cannot carry a stock ship weapon as it stands: every one also drives an elevating part.
-  `phalanx-20mm-gun` needs turret + gun; `ram-missile-launcher` needs rot-turret + elevating-turret + launcher.
-  - **What the importer does now** (decided 2026-11-15): it adds the missing parts to the `.entity` only
-    ("sim-only" parts; an entity may carry parts the model does not animate, UG 66.3.1). Codes come from the
-    family stock entities bind each parameter to most, and limits from the sysdef component (Phalanx gun
-    -20 to 85 degrees). The weapon binds fully, trains and elevates, fires, and publishes both angles
-    (UG 73.3.1).
-  - **The visible effect:** the mount turns in 3D but never pitches. The model has no node for the elevation,
-    so a CIWS firing upward looks level, in VR-Forces and in any other viewer of the DIS traffic.
-  - **Where it is recorded on every import:**
-    - a `part-sim-only` warning per part in `report.json` (and the editor report);
-    - a `reason` on each `add_parts` item in the manifest;
-    - a note per mount from `draft_manifest`.
-  - **The fix:** add the elevating joint under the mount in Blender and draft again. The model's part is then
-    used, and no sim-only part is added.
-  - **At the source (2026-11-15).** The 3d-model-editor now plans articulation before the build (editor CONTRACT
-    §3b, `references/articulation.md` "Upstream"):
-    - a weapon's research entry names its role (`gun_mount`, `trainable_launcher`);
-    - the design plan lists each chain;
-    - Blender builds it with `me3d.add_chain`, so the elevating part exists in the model.
-    A test ship built that way (Phalanx + RAM) exported with both weapons fully bound and no `part-sim-only`
-    warning. Sim-only parts remain the fallback for models built before this, such as Lincoln.
-  - **To observe in VR-Forces:** the weapon slews and fires at targets above the horizon; the barrel stays
-    level; any errors in the log about articulated parts the model lacks.
-  - **Observation log:**
-    - 2026-11-15, USS Abraham Lincoln (donor Invincible-class Carrier):
-      - 6 mounts, all azimuth-only;
-      - sim-only parts added: Phalanx 1-2 guns 4416/4448; RAM 1-2 elevating mounts 4288/4320 and launchers
-        4736/4768; Sea Sparrow 1-2 (RAM stand-in) elevating mounts 4352/4384 and launchers 4800/4832.
-    - 2026-11-15, the same entity reimported in the SOE (Physical and Systems tabs):
-      - all 10 sim-only parts are listed, with the Associated Component of their weapon (Q21);
-      - they have **no Animate checkbox**, while the model's own parts (turrets, radars, elevators, rudder) do:
-        the SOE knows they have no node in the model;
-      - the two Phalanx guns have a Fire (muzzle flash) button;
-      - the six weapons are on the Systems tab (Phalanx 20mm CIWS ×2, RAM launcher ×4);
-      - still to see in a scenario: the weapon slewing and firing above the horizon with the barrel level, and
-        the log.
-    - 2026-11-15, editor articulation roles:
-      - the post-build check on Lincoln's parts, against a plan with its six weapon chains, names the same 10
-        missing joints the export added as sim-only parts (`server/tests/test_articulation.py`);
-      - Lincoln itself has not been rebuilt yet.
 - **Q22 Sea Sparrow stand-in.** The install has no Sea Sparrow (RIM-7/ESSM) munition or launcher.
   `ram-missile-launcher` (RIM-116, a trainable box launcher like the Mk 29) stands in for mounts named Sea
   Sparrow, ESSM or RIM-7, with "stands in" in the reason. A real Sea Sparrow needs its own munition entity, an
@@ -124,6 +79,63 @@ Resolve each against the install, or with a real import in the GUI, then update 
     - **OE PBR AO:** an even grey with some darkening along edges and deck lines.
 
 ## Resolved
+- **Sweep of 2026-11-15.** Q7, Q8, Q14 and Q15 are answered; Q20 no longer applies. Each entry says how.
+- **Q20 Azimuth-only weapon mounts (missing elevation joints): no longer applicable.** The question was how
+  a weapon behaves when its mount has only an azimuth joint, which the importer fills with "sim-only" parts
+  (UG 66.3.1). It no longer arises for the models we make:
+  - **Why:** the 3d-model-editor now plans each moving part's chain of joints before the build (articulation
+    roles, editor CONTRACT §3b, `references/articulation.md` "Upstream"), and Blender builds every joint with
+    `me3d.add_chain`.
+  - **Evidence:** USS Abraham Lincoln rebuilt that way (editor v13) and run through the pipeline on 2026-11-15:
+    - every weapon binds to the model's own joints: Phalanx turret and gun, RAM and Sea Sparrow mount and
+      launcher elevation;
+    - no moving part is sim-only; the only sim-only parts are the RAM template's fixed launch points, which have
+      no motion in stock either (`part-sim-only-fixed`, info).
+    - Earlier, a test ship with a Phalanx and a RAM also exported fully bound with no `part-sim-only` warning.
+  - **Kept as a fallback:** a model built without the roles (the older Lincoln in `models/`) still gets sim-only
+    parts and a `part-sim-only` warning per part (`references/systems.md`), and the in-scenario look of a level
+    barrel was never observed. The SOE side was seen once: sim-only parts are listed with their Associated
+    Component and no Animate checkbox (2026-11-15).
+  - **Observation log (kept):**
+    - 2026-11-15, Lincoln (old build, donor Invincible-class Carrier): 6 azimuth-only mounts, 10 sim-only parts
+      (Phalanx guns 4416/4448; RAM and Sea Sparrow elevating mounts 4288-4384 and launchers 4736-4832);
+    - the same entity in the SOE: all 10 listed with their Associated Component, no Animate checkbox, a Fire
+      button on the Phalanx guns, six weapons on the Systems tab;
+    - editor roles: the post-build check named the same 10 missing joints on the old Lincoln
+      (`server/tests/test_articulation.py`);
+    - editor v13 Lincoln (roles): no moving sim-only parts; 4 fixed launch points only.
+- **Q14 Support points and bounding volume: answered.** The question was whether our support points and bounding
+  volume agree with what the SOE would compute ("Calculate Support Points and Bounding Volume from Displayed
+  Model", UG 66.1.1, 66.1.3).
+  - **Bounding volume:** computed from the model's bounds (`generate.supports_and_volume`, with a created offset
+    where donors have none). It matched the second hand import of Harmony (TECHNICAL 8.2). On the 2026-11-15 PBR
+    Lincoln import, the SOE's Physical tab showed our values unchanged: 332.9 x 80.3 m, which is the glb's
+    extent.
+  - **Supports:** the SOE's calculate button put Harmony's supports on the keel. 144 of 159 stock ships have
+    them on the waterline, so the importer computes them from the hull at the waterline (`supports-waterline`).
+    The SOE kept them as written: Lincoln PBR left/right (92.07, ±14.06), other (-117.94, 0), identical to our
+    `.entity`.
+  - Waterline against keel is now a design choice backed by the install, not an unknown. Whether the DTS team
+    prefers the keel stays in TECHNICAL's list of questions for them.
+- **Q15 Donor weapon systems: answered and handled.** Cloned systems keep the donor's part codes (e.g. 2S1 needs
+  4128). The draft keeps each donor weapon, rebinds it to one of the model's mounts, or removes it, with the
+  reason (`references/systems.md`).
+  - Confirmed in the SOE on the 2026-11-15 Lincoln reimport: the weapons are on the Systems tab, and each bound
+    part's Associated Component names its weapon (Q21).
+  - Whether a rebound weapon slews our parts in a scenario is a separate check, Q19.
+- **Q8 SMS checksum files: not needed.** The `smsChecksum<version>.cksm` files sit only in the stock `EntityLevel`
+  SMS, one per release (4.4 to 5.1.1). They are the reference the SMS upgrade tool compares an old SMS against
+  when moving to a new VR-Forces version (UG 64.5.2, Table 52); nothing reads them when an SMS loads. New
+  `.entity` files in a custom SMS loaded without touching them (PBRProbe and the PBR Lincoln, 2026-11-15).
+- **Q7 medf: yes, done by default.** The question was whether encrypting our content to `.medf` with medfTool is
+  worth it.
+  - The first baked Lincoln (a `.flt` plus 18 PNGs, 106 MB) loaded slowly.
+  - The manual recommends preprocessing every model, since OpenFlight loads slowly; MAK loads an MEDF version it
+    finds beside the requested file (ACM 19.19).
+  - medfTool turns the folder into the format stock models ship in: DXT1 colour, BC5 normal maps, full mip
+    chains. Baked Lincoln: 16 s, 74 MB from 111 MB.
+  - So the pipeline's package stage now does it by default (`pipeline/medf.py`, TECHNICAL 6.13). The measured
+    load-time gain is Q24.
 - **Q23 Effect maps on an OpenFlight model.** The importer writes the glb's PBR maps beside each diffuse as
   `<diffuse>_NML.png` and `<diffuse>_MTL_GLS_AO.png` (ACM 12.4, 12.4.1), the names the stock PBR ships use
   (Gerald Ford, Arleigh Burke; their `.medf` references only the diffuse).

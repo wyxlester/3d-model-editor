@@ -569,8 +569,9 @@ The `.entity`'s sensors, weapons and other systems are the donor's (UG 65.3.1), 
   - Harmony: the passive radar sensor moves to `Mast__Radar_1` (136, -4, -56.1 body) and the visual sensor to the
     bridge eye.
   - Lincoln: the radar sensor moves to `Radar__Scanner`; `surface-default` damage is added (the donor had none,
-    shown as Undamageable); Phalanx ×2, RAM ×2 and Sea Sparrow ×2 (RAM stand-in) are added with 10 sim-only
-    parts, because its mounts are azimuth-only (Q20).
+    shown as Undamageable); Phalanx ×2, RAM ×2 and Sea Sparrow ×2 (RAM stand-in) are added. The older build's
+    azimuth-only mounts got 10 sim-only parts (Q20). The rebuild with articulation roles (v13) binds them all to
+    its own joints, and only the RAM template's fixed launch points stay sim-only.
 
 ### 6.12 PBR maps as MAK effect maps (`effectmaps.py`)
 VR-Forces lights models with a GGX shader and reads PBR inputs from **effect maps**: image files beside the
@@ -654,8 +655,8 @@ From each glTF material with a normal, metallic-roughness or occlusion texture, 
 | A weapon drives whatever parts its part parameters name, so rebinding them to the model's parts works | UG 73.1.1, 73.3.1; install (1372 of 1383 bindings match the entity's parts); not yet checked in VR-Forces (Q19) |
 | `.entity` object type = super-type `1` (individual) + DIS type | UG D.3.1 |
 | Model schema: `Watercraft` for ships, `Entity` otherwise, `DiGuyCharacter` for characters | ACM 15.1; counted in the install |
-| Ship supports belong on the waterline, not the keel | install (144 of 159 stock ships); the SOE's calculate button put them on the keel. Open question |
-| Copying the files into a custom SMS is enough (no Import Visual Models step needed) | worked in the hand imports; open question |
+| Ship supports belong on the waterline, not the keel | install (144 of 159 stock ships); the SOE's calculate button put them on the keel; the SOE keeps ours as written (Q14, resolved). Whether the DTS team prefers the keel is in 10 |
+| Copying the files into a custom SMS is enough (no Import Visual Models step needed) | worked in the hand imports; the 2026-11-15 imports used Import Visual Models, so copy-only is still open (Q3b) |
 | `spec.json` `meta` may be stale; `custom_ops` is untrusted code | observed in the Blender exports |
 | Effect maps beside a `.flt` diffuse are found by name, as for stock `.medf` models; `_MTL_GLS_AO` is read as R metal, G gloss, B AO; normal maps are +Y up | ACM 12.4, 12.4.1; install (stock PBR ships, `effects.frag.glsl`, `normal_map.frag.glsl`, `medfTool` compresses `_NML` to BC5); confirmed in the SOE with `PBRProbe` (Q23) |
 | When manual and install disagree, the install is right | project rule |
@@ -713,12 +714,12 @@ After the fixes, the bounding volume and both radars (attach points, axes, limit
 - **Sensor and weapon changes are not checked in VR-Forces yet**: that detection runs from the new positions
   (Q16) and that a rebound or added weapon slews the model's parts (Q19). Sonar and gimbaled sensors keep the
   donor's positions.
-- **Missing elevation joints: weapons never visibly pitch.** Every stock ship weapon drives an elevating gun or
-  launcher part as well as its mount. Where the model has only the azimuth joint (all six Lincoln mounts), the
-  missing parts are sim-only: the weapon aims and fires in the simulation, but the 3D mount only turns. Each
-  import reports it (`part-sim-only` warnings) and open question Q20 keeps an observation log. Fix: add the
-  elevating joints in Blender. Ships the editor builds from a plan now get them at the source (6.2, CONTRACT §3b);
-  Lincoln was built before that and needs its plan redrafted and rebuilt. Sea Sparrow has no stock weapon; the RAM launcher stands in (Q22). Guns without
+- **Models built without the articulation roles: weapons never visibly pitch.** Every stock ship weapon
+  drives an elevating gun or launcher part as well as its mount. Where a model has only the azimuth joint (the
+  older Lincoln in `models/`), the missing parts are sim-only: the weapon aims and fires in the simulation, but
+  the 3D mount only turns. Each import reports it with `part-sim-only` warnings. Ships the editor builds from a
+  plan get the joints at the source (6.2, CONTRACT §3b): the rebuilt Lincoln (v13) has no moving sim-only parts,
+  so Q20 is closed. Sea Sparrow has no stock weapon; the RAM launcher stands in (Q22). Guns without
   parts (`muzzle-offset`, as on the F-16) are not drafted.
 - Detonation power and weapon ammunition lists for a new munition are set by hand (UG 73, 74.2.2).
 - Humans and animals use a stock DI-Guy character; a custom mesh would need DI-Guy authoring tools (ACM 25.2).
@@ -740,9 +741,9 @@ Planned, not done:
 3. Kind field and per-kind donor/part suggestions in the Review panel.
 4. Animation sequences for rotors, propellers and wheels; damage switch nodes.
 5. Check the systems in VR-Forces: the SOE's Edit Properties shows each system's position (UG 66.4.4); detection
-   from the mast (Q16); a weapon slewing the model's parts in a scenario (Q19, Q20).
-   Give Lincoln's six weapon mounts their elevation joints, so their weapons pitch in 3D and need no sim-only
-   parts (Q20): redraft its research and plan with the articulation roles (six weapon chains), approve, rebuild.
+   from the mast (Q16); a weapon slewing and elevating the model's parts in a scenario (Q19). Lincoln has its
+   elevation joints since the rebuild with the articulation roles (v13); `models/USS Abraham Lincoln` in
+   vrf-pipeline is still the older build.
 6. Install test against a real custom SMS.
    Lincoln's textures are baked (`model_textured.glb`, v13) and the first reimport (2026-11-15) shows them
    rendering (Q25). Next:

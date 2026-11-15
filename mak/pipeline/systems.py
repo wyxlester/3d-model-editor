@@ -616,7 +616,7 @@ def apply_systems(so: ET.Element, manifest: dict, parts: list, glb: dict,
 def sim_only_parts(manifest: dict, parts: list) -> tuple[list, list[Finding]]:
     """Parts the manifest's `systems` add to the .entity only (`add_parts`; users guide 66.3.1), as artparts.Part
     with node `<mount node>#<code>` (the mount's pivot), and a warning for each: the model has no joint for it,
-    so it never shows that motion (open question Q20)."""
+    so it never shows that motion (a fallback for models built without the editor's articulation roles; Q20)."""
     from .artparts import Part
     out, f = [], []
     by_code = {p.code: p.node for p in parts}
@@ -644,7 +644,7 @@ def sim_only_parts(manifest: dict, parts: list) -> tuple[list, list[Finding]]:
             f.append(Finding("warning", "part-sim-only", f"{mount}: no {part.motion} joint in the model; part "
                              f"{part.code} ({label}) for {e['system']} is "
                              f"sim-only. The system moves it in the simulation, but the model will not {what} in 3D. "
-                             f"Fix: add the joint under {mount} in Blender and draft again (open question Q20)"))
+                             f"Fix: add the joint under {mount} in Blender (the editor's articulation roles build it) and draft again"))
     return out, f
 
 

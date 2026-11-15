@@ -89,7 +89,8 @@ UG = VR-Forces 5.1.1 Users Guide; ACM = Adding Content to MAK ONE Applications; 
        (`add_parts`, UG 66.3.1). Each takes the next free code of the family stock entities bind that parameter
        to most, and the limits of the sysdef component that drives it. The weapon aims and fires in the
        simulation, but the model cannot show what it has no joint for. This is recorded as a `part-sim-only`
-       warning and in open question Q20.
+       warning (Q20, closed 2026-11-15: models built with the editor's articulation roles have the joints, so this
+       is the fallback for older models).
      - **Fixed sim-only parts:** a component whose stock entry has an empty `art-part-param-list` has no motion,
        e.g. RAM's `primary-launcher`, the launch point under the elevating mount. It is added with motion
        `fixed`: an empty list and no limits, as Arleigh Burke's 4992. It is reported as `part-sim-only-fixed`
@@ -173,6 +174,8 @@ Generate also reports `part-sim-only` (warning, one per sim-only part, Q20), `pa
     are azimuth-only.
   - With its own donor: `surface-default` damage added; Phalanx ×2, RAM ×2 and Sea Sparrow ×2 (the RAM
     launcher standing in) added on the six mounts, with 10 sim-only parts and 10 `part-sim-only` warnings (Q20).
+    The rebuild with articulation roles (editor v13) binds every weapon to its own joints; only the RAM
+    template's fixed launch points stay sim-only (`part-sim-only-fixed`).
   - Parts named after their components (`primary-turret-4096`, `azimuth-mount-4160`, `primary-gun-4416`,
     `elevating-mount-4288`, `primary-launcher-4736` ...). Radars, rudder and deck elevators are visual-only.
   - Validate is otherwise clean and medfTool loads the model.
