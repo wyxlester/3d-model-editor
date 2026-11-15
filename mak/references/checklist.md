@@ -14,7 +14,7 @@ Each check has a tier and the code that implements it, or TODO. Articulation rul
 | Effect maps are PNG | texture-jpeg-effect | done |
 | Every palette texture is beside the model; effect maps written | flt-texture-missing / flt-effect-maps | done |
 | Effect maps render in VR-Forces | (PBRProbe, Q23) | confirmed 2026-11-15 on the probe |
-| Model packaged as `.medf` + `.meif` for fast loading (ACM 19.19) | medf-packaged / medf-image-missing / medf-failed / medf-unavailable | done; load gain to measure (Q24) |
+| Model packaged as `.medf` + `.meif` for fast loading (ACM 19.19) | medf-packaged / medf-image-missing / medf-failed / medf-unavailable | done; shorter load in the SOE (Q24); not tested in VR-Forces |
 | Fixed sim-only parts (no motion in the stock component) written with an empty param list | part-sim-only-fixed | done |
 | A baked glb drafts with its bake_report.json (triangles noted, dropped decals excused) | draft note | done |
 | glTF animations will be dropped | gltf-animations | done |

@@ -637,7 +637,9 @@ From each glTF material with a normal, metallic-roughness or occlusion texture, 
 - **Findings:** `medf-packaged` (info), `medf-image-missing` (warning: a texture had no `.meif` made),
   `medf-failed` (error), `medf-unavailable` (warning: no `medfTool`).
 - **Options:** `--no-medf` or `"medf_package": false` skips the stage.
-- **Not yet measured:** the load-time gain in VR-Forces (Q24).
+- **Result (Q24, resolved):** the packaged Lincoln loads noticeably faster in the Simulation Object Editor.
+  Side note: not yet tested in VR-Forces itself (a scenario's front end and simulation), and no load times
+  were measured.
 
 ## 7. Assumptions
 
@@ -747,7 +749,7 @@ Planned, not done:
 6. Install test against a real custom SMS.
    Lincoln's textures are baked (`model_textured.glb`, v13) and the first reimport (2026-11-15) shows them
    rendering (Q25). Next:
-   - measure the load time with the `.medf` package (Q24);
+   - check the `.medf` package's load in a VR-Forces scenario too (the SOE load is shorter, Q24);
    - calibrate the colour tone against stock (Q25);
    - take a close-up to judge the normal-map detail;
    - wire the bake into the editor: a "Bake textures" job, a Flat / Textured viewer toggle, and MAK export and

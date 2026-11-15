@@ -54,11 +54,6 @@ Resolve each against the install, or with a real import in the GUI, then update 
   Sparrow, ESSM or RIM-7, with "stands in" in the reason. A real Sea Sparrow needs its own munition entity, an
   `ammunitionParams.mtl` entry and a weapon sysdef.
 
-- **Q24 Load time with the `.medf` package.** The first baked Lincoln loaded slowly in the SOE as `.flt` + 18
-  PNGs (106 MB). The pipeline now also writes `.medf` + `.meif` beside them (6.13). The manual says MAK loads
-  an MEDF version in the requested file's folder instead (ACM 19.19).
-  - **To check:** load time with the package against without it, and whether the `.medf` is the one loaded
-    (renaming it away should bring the slow load back).
 - **Q25 Baked texture tone and detail against stock** (observation log).
   - 2026-11-15, the first reimport of Lincoln baked in the editor (v13, test type `1:3:225:1:1:97:0`).
     Screenshots: vrf-pipeline `working/probe_perspective.png`, `probe_topdown.png`, `probe_normal.png`,
@@ -79,6 +74,14 @@ Resolve each against the install, or with a real import in the GUI, then update 
     - **OE PBR AO:** an even grey with some darkening along edges and deck lines.
 
 ## Resolved
+- **Q24 Load time with the `.medf` package: shorter in the SOE.** The first baked Lincoln loaded slowly in
+  the SOE as a `.flt` plus 18 PNGs (106 MB).
+  - **The change:** the pipeline now also writes `.medf` + `.meif` beside them (TECHNICAL 6.13). The manual says
+    MAK loads an MEDF version it finds in the requested file's folder instead (ACM 19.19).
+  - **Resolved 2026-11-15** by Bryan's reimport of the packaged Lincoln (74 MB): the model loads noticeably
+    faster in the Simulation Object Editor than the unpackaged one did.
+  - **Side note: not tested in VR-Forces.** The faster load is seen in the SOE only. Loading the entity in a
+    VR-Forces scenario (front end and simulation) has not been tried, and no load times were measured.
 - **Sweep of 2026-11-15.** Q7, Q8, Q14 and Q15 are answered; Q20 no longer applies. Each entry says how.
 - **Q20 Azimuth-only weapon mounts (missing elevation joints): no longer applicable.** The question was how
   a weapon behaves when its mount has only an azimuth joint, which the importer fills with "sim-only" parts
@@ -134,8 +137,8 @@ Resolve each against the install, or with a real import in the GUI, then update 
     finds beside the requested file (ACM 19.19).
   - medfTool turns the folder into the format stock models ship in: DXT1 colour, BC5 normal maps, full mip
     chains. Baked Lincoln: 16 s, 74 MB from 111 MB.
-  - So the pipeline's package stage now does it by default (`pipeline/medf.py`, TECHNICAL 6.13). The measured
-    load-time gain is Q24.
+  - So the pipeline's package stage now does it by default (`pipeline/medf.py`, TECHNICAL 6.13). It shortens
+    the SOE load (Q24).
 - **Q23 Effect maps on an OpenFlight model.** The importer writes the glb's PBR maps beside each diffuse as
   `<diffuse>_NML.png` and `<diffuse>_MTL_GLS_AO.png` (ACM 12.4, 12.4.1), the names the stock PBR ships use
   (Gerald Ford, Arleigh Burke; their `.medf` references only the diffuse).
