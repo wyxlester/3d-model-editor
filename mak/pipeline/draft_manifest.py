@@ -259,11 +259,20 @@ def draft(model_dir: Path, cfg: dict | None = None, node_map: artparts.NodeNameM
     report = inspect_glb.analyse(glb_path, "+Y")
     nodes, bounds = report["nodes"], report["bounds_mak_frame"]
 
+    baked = _load(model_dir, "bake_report.json")       # the editor's texture bake (model_textured.glb)
+    baked = baked if baked is not None and baked.get("ok") else None
     if build is not None:
         if not build.get("ok", False) or build.get("errors"):
             raise DraftError(f"build_report.json says the Blender build failed: {build.get('errors')}")
-        if build.get("triangles") not in (None, report["triangles"]):
-            raise DraftError(f"glb has {report['triangles']} triangles but build_report.json says {build['triangles']}; re-export both")
+        if baked is not None:
+            # the editor's texture bake (model_textured.glb) cuts large faces into plates: same nodes, joints,
+            # sockets and bounds, more triangles, decals dropped
+            if build.get("triangles") not in (None, report["triangles"]):
+                notes.append(f"baked glb (bake_report.json): {report['triangles']} triangles against the build's "
+                             f"{build['triangles']} (the bake cuts large faces); bounds still checked")
+        elif build.get("triangles") not in (None, report["triangles"]):
+            raise DraftError(f"glb has {report['triangles']} triangles but build_report.json says {build['triangles']}; "
+                             "re-export both (a glb baked by the editor needs its bake_report.json beside it)")
         for k, i in (("bounds_min", "min"), ("bounds_max", "max")):
             if k in build and max(abs(a - b) for a, b in zip(build[k], bounds[i])) > 0.01:
                 raise DraftError(f"glb {i} bounds {bounds[i]} != build_report.json {build[k]}; re-export both")
@@ -271,6 +280,13 @@ def draft(model_dir: Path, cfg: dict | None = None, node_map: artparts.NodeNameM
             notes.append(f"build warning: {w}")
 
     parts = parts or []
+    if baked is not None:      # decals baked into the textures are left out of the baked glb (they have no joints)
+        dropped = {d["name"] for d in baked.get("decals") or [] if isinstance(d, dict) and d.get("name")}
+        gone = [p["path"] for p in parts if p["path"] in dropped and p["path"] not in nodes]
+        if gone:
+            parts = [p for p in parts if p["path"] not in gone]
+            notes.append(f"baked glb: {len(gone)} decal node(s) from parts.json were baked into the textures and "
+                         f"dropped (bake_report.json), e.g. {gone[:3]}")
     drift = [p["path"] for p in parts if p["path"] in nodes and (
         nodes[p["path"]]["parent"] != p.get("parent")
         or max(abs(a - b) for a, b in zip(nodes[p["path"]]["pivot"], p.get("origin_m", nodes[p["path"]]["pivot"]))) > 0.01)]

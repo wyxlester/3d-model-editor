@@ -99,6 +99,30 @@ Resolve each against the install, or with a real import in the GUI, then update 
   Sparrow, ESSM or RIM-7, with "stands in" in the reason. A real Sea Sparrow needs its own munition entity, an
   `ammunitionParams.mtl` entry and a weapon sysdef.
 
+- **Q24 Load time with the `.medf` package.** The first baked Lincoln loaded slowly in the SOE as `.flt` + 18
+  PNGs (106 MB). The pipeline now also writes `.medf` + `.meif` beside them (6.13). The manual says MAK loads
+  an MEDF version in the requested file's folder instead (ACM 19.19).
+  - **To check:** load time with the package against without it, and whether the `.medf` is the one loaded
+    (renaming it away should bring the slow load back).
+- **Q25 Baked texture tone and detail against stock** (observation log).
+  - 2026-11-15, the first reimport of Lincoln baked in the editor (v13, test type `1:3:225:1:1:97:0`).
+    Screenshots: vrf-pipeline `working/probe_perspective.png`, `probe_topdown.png`, `probe_normal.png`,
+    `probe_oe_pbr_ao.png`.
+    - **Renders:** the deck has a non-skid tone with stains, and the markings are painted into the texture (no
+      floating strips). Turrets and radars keep their parts.
+    - **Too light:** mean grey in the Perspective View, against the stock Nimitz (`stock.png`) from the same
+      angle:
+      - deck about 158 against 136;
+      - hull about 235 against 148 (near white);
+      - island about 225 against 172.
+      The bake writes sRGB colour from the spec colours, which were chosen when face colours were written as
+      linear bytes (Q0). MAK shows texture bytes as they are, under bright lighting.
+    - **Deck stains** read as large pale blotches at this distance; the stock deck shows wear and many more
+      markings.
+    - **Debug Visuals > Normals:** flat colours per face direction at this range (deck green, hull magenta). The
+      normal-map detail (4 cm texels) is too fine to judge from here; a close-up is needed.
+    - **OE PBR AO:** an even grey with some darkening along edges and deck lines.
+
 ## Resolved
 - **Q23 Effect maps on an OpenFlight model.** The importer writes the glb's PBR maps beside each diffuse as
   `<diffuse>_NML.png` and `<diffuse>_MTL_GLS_AO.png` (ACM 12.4, 12.4.1), the names the stock PBR ships use

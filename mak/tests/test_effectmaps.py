@@ -217,8 +217,23 @@ class TestEndToEnd(unittest.TestCase):
             self.assertNotIn("flt-texture-missing", codes)
             folder = next((tmp / "output").rglob("*.flt")).parent
             self.assertTrue((folder / f"{MANIFEST['name']}_tex1_NML.png").exists())
+            if Path(CFG.get("medf_tool", "")).exists():      # packaged like stock models (ACM 19.19)
+                self.assertEqual([x["code"] for x in r["stages"]["package"]], ["medf-packaged"])
+                name = MANIFEST["name"]
+                self.assertTrue((folder / f"{name}.medf").exists())
+                for stem in (f"{name}_tex0", f"{name}_tex1", f"{name}_tex1_NML", f"{name}_tex1_MTL_GLS_AO"):
+                    self.assertTrue((folder / f"{stem}_png.meif").exists(), stem)
+                r2 = run.run(d, output_root=tmp / "output", fmt="flt", mak_check=False, medf_package=False)
+                self.assertNotIn("package", r2["stages"])
         finally:
             shutil.rmtree(tmp)
+
+
+class TestMedf(unittest.TestCase):
+    def test_unavailable_tool_warns(self):
+        from pipeline import medf
+        f = medf.package(Path("nowhere/x.flt"), "C:/no/medfTool.exe")
+        self.assertEqual([(x.level, x.code) for x in f], [("warning", "medf-unavailable")])
 
 
 if __name__ == "__main__":

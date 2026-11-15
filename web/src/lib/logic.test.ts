@@ -1249,6 +1249,10 @@ describe('MAK systems', () => {
       bind: { 'turret-art-part-type': 'Weapons__Phalanx_1', 'gun-art-part-type': 4416 },
       add_parts: [{ code: 4416, parent: 'Weapons__Phalanx_1', motion: 'elevation', min: -20, max: 85, max_rate: 115 }] }))
       .toBe('Add weapon (phalanx-20mm-gun) on Weapons › Phalanx 1, 4416, with sim-only part 4416 (no joint in the model)');
+    expect(systemChangeText({ system: 'weapon-3', sysdef: 'weapons/ram-missile-launcher.sysdef', reason: '',
+      bind: { 'rot-turret-art-part-type': 'Weapons__RAM_1', 'launcher-art-part-type': 4864 },
+      add_parts: [{ code: 4864, parent: 'Weapons__RAM_1__Launcher', motion: 'fixed', min: 0, max: 0, max_rate: 0 }] }))
+      .toBe('Add weapon-3 (ram-missile-launcher) on Weapons › RAM 1, 4864, with fixed launch point 4864 (no motion, nothing to show)');
   });
   it('saves the changes turned off, only when there are some', () => {
     const rows = makRows(makDraft, null);

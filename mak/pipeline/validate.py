@@ -224,9 +224,9 @@ def validate_entity(fname: str, root, metx_types: set[str], catalog: systems.Cat
         if parent not in (-1, 0) and parent not in codes:
             f.append(Finding("error", "entity-artpart-parent", f"{fname}: part {code} has parent {parent}, which is not in the list"))
         params = [int(x.text) for x in d.findall("DtRwList/int") if x.text]
-        if len(params) != 2 or params[1] != params[0] + 1:
+        if params and (len(params) != 2 or params[1] != params[0] + 1):     # empty = a fixed part, as in stock
             f.append(Finding("error", "entity-artpart-params", f"{fname}: part {code} param list {params} is not a (value, rate) pair"))
-        elif params[0] in FIELDS_BY_PARAM:
+        elif params and params[0] in FIELDS_BY_PARAM:
             need = FIELDS_BY_PARAM[params[0]]
             tag = "vector" if need == "max-translation" else "real"
             if d.find(f"{tag}[@paramName='{need}']") is None:

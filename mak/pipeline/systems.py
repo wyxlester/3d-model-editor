@@ -175,9 +175,11 @@ def _component_entries(tree, comp: str | None = None, out: list | None = None) -
                 v = _values(f)
                 default = _values(first(f, "default"))
                 limits[k] = [str(x) for x in v[:1]] + [str(x) for x in default[:1]]
+            plist = next((x for x in e[1:] if isinstance(x, list) and x and x[0] == "art-part-param-list"), None)
             out.append({"component": comp, "entry": str(e[0]),
                         "code": int(t) if re.fullmatch(r"\d+", t) else None,
-                        "param": t.lstrip("$") if t.startswith("$") else None, "limits": limits})
+                        "param": t.lstrip("$") if t.startswith("$") else None, "limits": limits,
+                        "fixed": plist is not None and len(plist) == 1})   # empty param list: no motion
         return out
     for x in tree:
         _component_entries(x, comp, out)
@@ -379,7 +381,7 @@ class Catalog:
         return cls(sysdefs, d["usage"], d["repositories"], d["bindings"], d["class_sizes"])
 
 
-CATALOG_VERSION = 2
+CATALOG_VERSION = 3
 
 
 def _sms_vrfsim(cfg: dict) -> Path:
@@ -632,9 +634,15 @@ def sim_only_parts(manifest: dict, parts: list) -> tuple[list, list[Finding]]:
                         float(a.get("max", 0)), float(a.get("max_rate", 0)), False)
             out.append(part)
             by_code[part.code] = node
+            label = artparts.CODES.get(part.code, ("", "part", ""))[1]
+            if part.motion == "fixed":
+                f.append(Finding("info", "part-sim-only-fixed", f"{mount}: part {part.code} ({label}) for "
+                                 f"{e['system']} is a fixed point the stock weapon needs (no motion); it lives in the "
+                                 ".entity only, with no visible effect"))
+                continue
             what = "pitch" if part.motion == "elevation" else "turn"
             f.append(Finding("warning", "part-sim-only", f"{mount}: no {part.motion} joint in the model; part "
-                             f"{part.code} ({artparts.CODES.get(part.code, ('', 'part', ''))[1]}) for {e['system']} is "
+                             f"{part.code} ({label}) for {e['system']} is "
                              f"sim-only. The system moves it in the simulation, but the model will not {what} in 3D. "
                              f"Fix: add the joint under {mount} in Blender and draft again (open question Q20)"))
     return out, f
@@ -934,9 +942,14 @@ def _sim_only_part(sd: Sysdef, param: str, parent, used: set[int], catalog: Cata
     if code is None:
         return None
     used.add(code)
+    entry = _entry_for(sd, param) or {}
+    if entry.get("fixed"):            # e.g. RAM's launch point: no motion in the stock component either
+        return {"code": code, "parent": parent, "motion": "fixed", "min": 0.0, "max": 0.0, "max_rate": 0.0,
+                "reason": f"the stock {entry.get('entry', param)} is a fixed point (no motion) and the model has no "
+                          f"part for it under {mount}"}
     motion = "azimuth" if param in AZIMUTH_PARAMS else "elevation"
     lo, hi, rate = artparts.DEFAULT_LIMITS[motion]
-    lim = (_entry_for(sd, param) or {}).get("limits", {})
+    lim = entry.get("limits", {})
 
     def deg(r: float) -> float:                                      # sysdef limits are radians
         return round(math.degrees(r), 3)
@@ -1118,15 +1131,20 @@ def draft_systems(donor_xml: str, parts: list[dict], nodes: dict, catalog: Catal
                "stands in (open question Q22)" if stand_in else
                f"{ch.top} is named like {stem} ('{sd.name}'), used by {catalog.used_in(sd.path, group)} stock "
                "entities of this kind")
-        if adds:
-            why += ("; sim-only part(s) " + ", ".join(str(a["code"]) for a in adds)
+        moving = [a for a in adds if a.get("motion") != "fixed"]
+        fixed = [a for a in adds if a.get("motion") == "fixed"]
+        if moving:
+            why += ("; sim-only part(s) " + ", ".join(str(a["code"]) for a in moving)
                     + " added because the model has no joint for them (it will not show them moving)")
+        if fixed:
+            why += ("; fixed sim-only part(s) " + ", ".join(str(a["code"]) for a in fixed)
+                    + " (no motion in the stock weapon either; no visible effect)")
         ammo = {var for var in sd.ammunition.values() if var}
         add(sd.path, "weapon", why + ("; ammunition counts are the stock median" if ammo else ""), bind=bind,
             **({"add_parts": adds} if adds else {}))
-        if adds:
+        if moving:
             notes.append(f"{ch.top}: no elevating joint in the model; {stem} gets sim-only part(s) "
-                         f"{', '.join(str(a['code']) for a in adds)}. It aims and fires in the simulation, but the "
+                         f"{', '.join(str(a['code']) for a in moving)}. It aims and fires in the simulation, but the "
                          f"mount will not pitch in 3D. Fix: add the joint under {ch.top} in Blender and draft again")
         weapons += 1
 

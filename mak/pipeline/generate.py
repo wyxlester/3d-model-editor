@@ -124,6 +124,8 @@ def art_part_element(part: Part, parts: list[Part], glb: dict) -> ET.Element | N
         _real(el, f"max-{m}", hi)
         _real(el, f"max-{m}-rate", rate)
         _real(el, f"min-{m}", lo)
+    elif m == "fixed":                  # no motion fields, as stock fixed launchers
+        pass
     elif m == "rotation":
         _real(el, "max-rotation", hi)
         _real(el, "max-rotation-rate", rate)

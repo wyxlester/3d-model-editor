@@ -69,6 +69,8 @@ model.glb + manifest.json
    v               (fbx route: headless Blender instead)
    |  verify       openflight.read_flt + check_flt (re-read), openflight.check_mak (medfTool loads it)
    v
+   |  package      medf.package: medfTool writes <name>.medf + .meif textures beside the model (ACM 19.19)
+   v
    |  generate     .ommx, .leaf (cloned from the donor), .metx, .entity (cloned from the donor),
    v               munition table entry, visual-import/
    |  validate     validate.validate: cross-references, collisions with the install, .entity consistency
@@ -92,6 +94,7 @@ Pipeline (`vrf-pipeline/pipeline/`, copied to `mak/pipeline/`):
 | `openflight.py` | OpenFlight 16.1 writer and reader; DOF nodes, `@dis` comments, face colours, textures; `medfTool` check |
 | `effectmaps.py` | glTF PBR maps -> MAK effect maps beside each diffuse: `_NML` (normal) and `_MTL_GLS_AO` (metal, gloss, AO) (6.12) |
 | `png.py` | PNG reader and writer (standard library), for repacking texture maps |
+| `medf.py` | packages the written model with `medfTool` as `.medf` + `.meif` (pre-compressed, mip-mapped textures), which VR-Forces loads instead of the `.flt` and PNGs (ACM 19.19) |
 | `artparts.py` | DIS articulated-part codes (ACM Table 58), default motions and limits, FBX node-name map |
 | `systems.py` | **systems**: sysdef reader and catalog of the install (categories, platforms allowed, part parameters, ammunition, stock usage), applying the manifest's `systems` to the cloned `.entity`, drafting them from the model, system checks |
 | `convert.py` | model conversion entry (OpenFlight, or FBX via Blender) |
@@ -157,6 +160,7 @@ Standalone (`vrf-pipeline/pipeline.config.json`):
 | `blender` | Blender executable | FBX route only |
 | `limits` | `max_triangles` 100000, `max_texture_px` 4096, `max_extent_m` 400, `min_extent_m` 0.05 | inspect warnings/errors |
 | `effect_maps` (optional) | `{"enabled": true, "normal_green": "up"}` | writing MAK effect maps from the glb's PBR maps (6.12); `"down"` flips the normal map's Y |
+| `medf_package` (optional) | `true` | the package stage (`medf.py`); needs `medf_tool` |
 
 Editor (environment variables; contract §9b):
 
@@ -232,7 +236,7 @@ Passing a `.glb` gives an error that explains the folder layout and the next com
 | Command | Options | Does |
 |---|---|---|
 | `python -m pipeline.draft_manifest models/<Name>` | `--kind <kind>`, `--munition-class <class>`, `--force` | drafts `manifest.json` from Blender exports (`parts.json`, `spec.json`, `build_report.json`); writes `manifest.draft.json` if a manifest exists and `--force` is not given; fields it cannot infer are `TODO...` |
-| `python -m pipeline.run models/<Name>` | `--format flt\|fbx`, `--skip-convert`, `--no-mak-check` | all stages; writes `output/<Name>/report.json` |
+| `python -m pipeline.run models/<Name>` | `--format flt\|fbx`, `--skip-convert`, `--no-mak-check`, `--no-medf` | all stages; writes `output/<Name>/report.json` |
 | `python -m pipeline.inspect_glb <file.glb>` | `--manifest <path>`, `--json` | inspect only |
 | `python -m pipeline.generate models/<Name>` | | definitions and `.entity` only |
 | `python -m pipeline.validate output/<Name>` | `--json` | validation only |
@@ -542,7 +546,10 @@ The `.entity`'s sensors, weapons and other systems are the donor's (UG 65.3.1), 
   - a stock weapon added for a mount whose name names it (`phalanx`, `ram`), or a reported stand-in (Sea Sparrow ->
     the RAM launcher, Q22); ammunition counts are the stock median. Parts the mount lacks are added to the
     `.entity` only (**sim-only parts**, UG 66.3.1): the weapon aims and fires, but the model never shows that
-    motion; each is a `part-sim-only` warning (Q20);
+    motion; each is a `part-sim-only` warning (Q20). A part the stock component gives no motion (an empty
+    `art-part-param-list`, e.g. RAM's `primary-launcher` launch point) is added as a **fixed** sim-only part,
+    written as stock files write it (empty list, no limits, e.g. Arleigh Burke's 4992). It is reported as
+    `part-sim-only-fixed` (info), since there is nothing to show;
   - damage or movement added when the donor has none (UG 66.4.2-3): the most common for the **class**, stock
     entities of the same kind, military or civilian;
   - the class baseline added: sensors and additional systems at least 50% of the class has (military ships:
@@ -605,6 +612,31 @@ From each glTF material with a normal, metallic-roughness or occlusion texture, 
     other decals within 5 cm of a surface are baked into the colour and dropped;
   - it writes `model_textured.glb` beside `model.glb`, which it leaves alone. Lincoln: 6 pages, 35 decals,
     118 MB, about 10 minutes on a 16-thread CPU at 4 samples.
+- **Drafting from a baked glb:** `draft_manifest` takes `model_textured.glb` (as `model.glb`) with its
+  `bake_report.json` beside it. The bake cuts large faces into plates and drops decals, so for a baked glb:
+  - the triangle count against `build_report.json` is noted, not refused (the bounds are still checked);
+  - `parts.json` nodes listed as decals in `bake_report.json` are left out (Lincoln: 15 624 against 15 184
+    triangles, 35 decals);
+  - without `bake_report.json`, a mismatch is refused as before.
+
+### 6.13 Packaging for fast loading (`medf.py`)
+- **The problem:** the first baked Lincoln (6 PNG pages at 4096² and 2048², plus 12 effect maps, 106 MB) loaded
+  slowly in the SOE (2026-11-15). Plain OpenFlight "load[s] slowly", and MAK recommends preprocessing every model
+  (ACM terrain notes, 19.19). Raw PNGs are decoded, mip-mapped and compressed at every load.
+- **The stage:** after the model is verified, `medfTool --directory <model folder> -x flt -m png` writes
+  `<name>.medf` and one `<image>_png.meif` per texture beside the `.flt`. This is the format stock models ship
+  in:
+  - DXT1 colour and BC5 (ATI2N) normal maps, as on the stock Gerald Ford;
+  - full mip chains;
+  - effect maps keep their names (`X_png.meif`, `X_NML_png.meif`, `X_MTL_GLS_AO_png.meif`).
+- **Loading:** MAK checks the requested file's folder for an MEDF version and loads it instead (19.19). So the
+  `.ommx` keeps naming the `.flt`, and the `.flt` and PNGs stay as the readable source. The installer copies
+  the whole folder.
+- **Cost:** baked Lincoln took 16 s and came out at 74 MB from 111 MB.
+- **Findings:** `medf-packaged` (info), `medf-image-missing` (warning: a texture had no `.meif` made),
+  `medf-failed` (error), `medf-unavailable` (warning: no `medfTool`).
+- **Options:** `--no-medf` or `"medf_package": false` skips the stage.
+- **Not yet measured:** the load-time gain in VR-Forces (Q24).
 
 ## 7. Assumptions
 
@@ -634,8 +666,8 @@ From each glTF material with a normal, metallic-roughness or occlusion texture, 
 
 | Suite | Command | Count (2026-11-15) | Covers |
 |---|---|---|---|
-| vrf-pipeline | `python -m unittest discover -s tests` | 174 | artparts, inspect rules, OpenFlight write/read, colours, entity building, hand-import comparisons, drafts, profiles, one full run per kind, systems (sysdef reader, catalog, apply, checks, drafts), PNG codec and effect maps |
-| editor `mak/tests` | `server/.venv/Scripts/python -m pytest mak/tests -q` | 205 (+8 skipped without the Harmony and Lincoln files) | the pipeline tests, package conversion, systems draft and `systems_off`, install, draft, export script, editor rules (no MAK-derived files), articulation roles against the install (`test_roles.py`), codes following suggestions and the export's own warnings |
+| vrf-pipeline | `python -m unittest discover -s tests` | 177 | artparts, inspect rules, OpenFlight write/read, colours, entity building, hand-import comparisons, drafts, profiles, one full run per kind, systems (sysdef reader, catalog, apply, checks, drafts), PNG codec, effect maps and `.medf` packaging |
+| editor `mak/tests` | `server/.venv/Scripts/python -m pytest mak/tests -q` | 208 (+8 skipped without the Harmony and Lincoln files) | the pipeline tests, package conversion, systems draft and `systems_off`, install, draft, export script, editor rules (no MAK-derived files), articulation roles against the install (`test_roles.py`), codes following suggestions and the export's own warnings |
 | editor `tests/mak` | `server/.venv/Scripts/python -m pytest tests/mak -q` | 1 (slow) | export of a built package with the real `medfTool` |
 | editor server | `server/.venv/Scripts/python -m pytest server/tests -q` | 339 | endpoints, settings validation (`systems_off` included), export job with a fake runner, install refusals and backups, articulation roles (research, plan gate, post-build check on Lincoln's parts), stale-server check, `parts_suggested` |
 | editor Blender | `server/.venv/Scripts/python -m pytest tests/blender/test_add_chain.py -q` | 4 (slow) | `me3d.add_chain` builds nested joints that survive into the glb and pass the post-build check; `joint_limits` reach joints a custom op made |
@@ -668,6 +700,9 @@ After the fixes, the bounding volume and both radars (attach points, axes, limit
 - **Effect maps** are confirmed on a test model only (Q23), not yet on a baked ship. Emissive (`_EMM`) and
   SensorFX (`_SNR`) maps are not written, and the FBX route writes no effect maps. Large maps are slow to repack
   (pure-Python PNG decoding).
+- **Baked colours render lighter than stock** (Q25). Mean grey in the SOE's Perspective View, against the stock
+  Nimitz from the same angle: deck about 158 against 136, hull about 235 against 148. The bake writes sRGB colour
+  (glTF's convention) from the spec colours; MAK shows texture bytes as they are, under bright lighting.
 - **The texture bake** runs from the command line only (no button or job in the editor yet). It is CPU-only
   (about 10 minutes for Lincoln) and makes a large glb (118 MB). Finishes are chosen from material and part
   names, so an odd name falls back on a generic paint. A twisted source face can bake an inverted patch into
@@ -690,7 +725,6 @@ After the fixes, the bounding volume and both radars (attach points, axes, limit
 - Editor: exports ships only; crew are listed in `not_exported`. The Review panel has no kind field, and its
   donor suggestions search ship donors only.
 - FBX route (Blender) exists but is not offered in the editor UI.
-- No `.medf` encryption of the output (ACM 19.19).
 - Short name is cut at a word boundary within 11 characters ("Harmony of").
 - Table 58 has one rudder code and two deck elevator codes, so further rudders and elevators stay static. Whether
   several DOF nodes may share one code (all rudders turning together) is untested
@@ -710,10 +744,13 @@ Planned, not done:
    Give Lincoln's six weapon mounts their elevation joints, so their weapons pitch in 3D and need no sim-only
    parts (Q20): redraft its research and plan with the articulation roles (six weapon chains), approve, rebuild.
 6. Install test against a real custom SMS.
-   Lincoln's textures are baked (`model_textured.glb`, v13): export it, import it into VR-Forces and compare it
-   with the stock Nimitz from the same angle (the effect-map format itself is confirmed, Q23). Then wire the bake
-   into the editor: a "Bake textures" job, a Flat / Textured viewer toggle, and MAK export and packaging using
-   the baked glb.
+   Lincoln's textures are baked (`model_textured.glb`, v13) and the first reimport (2026-11-15) shows them
+   rendering (Q25). Next:
+   - measure the load time with the `.medf` package (Q24);
+   - calibrate the colour tone against stock (Q25);
+   - take a close-up to judge the normal-map detail;
+   - wire the bake into the editor: a "Bake textures" job, a Flat / Textured viewer toggle, and MAK export and
+     packaging using the baked glb with its `bake_report.json`.
 7. Review and merge `feat/mak-export` and `feat/mak-kinds`.
 8. Live check of the articulation roles with the real AI: a research turn names the roles, the plan lists every
    chain, and the build turn uses `add_chain` and clears its own `articulation` warnings.

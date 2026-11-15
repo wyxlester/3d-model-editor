@@ -104,6 +104,25 @@ class TestDraft(DraftBase):
         with self.assertRaisesRegex(draft_manifest.DraftError, "triangles"):
             self.draft(triangles=1)
 
+    def test_baked_glb_accepted(self):
+        """The editor's texture bake cuts large faces into plates: more triangles, same nodes and bounds."""
+        (self.dir / "bake_report.json").write_text('{"ok": true, "output": "model_textured.glb"}', encoding="utf-8")
+        m, notes = self.draft(triangles=1)
+        self.assertTrue(m["articulated_parts"])
+        self.assertTrue(any(n.startswith("baked glb (bake_report.json)") for n in notes), notes)
+        parts = json.loads((self.dir / "parts.json").read_text(encoding="utf-8"))   # a decal the bake dropped
+        parts.append({"path": "Deck_Marking", "parent": None})
+        (self.dir / "parts.json").write_text(json.dumps(parts), encoding="utf-8")
+        with self.assertRaisesRegex(draft_manifest.DraftError, "not in the glb"):
+            draft_manifest.draft(self.dir, CFG, self.node_map)      # self.draft() would rewrite parts.json
+        (self.dir / "bake_report.json").write_text(
+            '{"ok": true, "decals": [{"name": "Deck_Marking", "target": "hull"}]}', encoding="utf-8")
+        _, notes = draft_manifest.draft(self.dir, CFG, self.node_map)
+        self.assertTrue(any("1 decal node(s)" in n for n in notes), notes)
+        (self.dir / "bake_report.json").write_text('{"ok": false}', encoding="utf-8")
+        with self.assertRaisesRegex(draft_manifest.DraftError, "bake_report"):
+            self.draft(triangles=1)
+
     def test_no_joints_no_parts(self):
         m, _ = self.draft(joints=False)
         self.assertEqual((m["articulated_parts"], m["unmapped_joints"]), ([], []))

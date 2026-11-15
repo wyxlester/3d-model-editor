@@ -90,6 +90,10 @@ UG = VR-Forces 5.1.1 Users Guide; ACM = Adding Content to MAK ONE Applications; 
        to most, and the limits of the sysdef component that drives it. The weapon aims and fires in the
        simulation, but the model cannot show what it has no joint for. This is recorded as a `part-sim-only`
        warning and in open question Q20.
+     - **Fixed sim-only parts:** a component whose stock entry has an empty `art-part-param-list` has no motion,
+       e.g. RAM's `primary-launcher`, the launch point under the elevating mount. It is added with motion
+       `fixed`: an empty list and no limits, as Arleigh Burke's 4992. It is reported as `part-sim-only-fixed`
+       (info), since nothing can show.
      - Ammunition counts are the median of stock entities that use the weapon.
    - **Damage and movement.** One of each (UG 66.4.2-3). If the donor has none, the most common one for the
      **class** is added: stock entities of the same kind, military or civilian (`systems.class_of`). Lincoln's

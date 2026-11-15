@@ -435,6 +435,21 @@ class TestComponents(unittest.TestCase):
         self.assertEqual([x.level + ":" + x.code for x in f], ["warning:part-sim-only"])
         self.assertIn("will not pitch in 3D", f[0].message)
 
+    def test_fixed_sim_only_part(self):
+        """RAM's launch point has no motion in the stock template: no misleading warning, no motion fields."""
+        from pipeline import generate
+        m = {"systems": [{"system": "weapon-3", "add_parts": [
+            {"code": 4864, "parent": "Launcher", "motion": "fixed", "min": 0, "max": 0, "max_rate": 0}]}]}
+        parts = as_parts(parts_of(("Mount", 4224, None), ("Launcher", 4736, "Mount")))
+        extra, f = systems.sim_only_parts(m, parts)
+        self.assertEqual([x.level + ":" + x.code for x in f], ["info:part-sim-only-fixed"])
+        self.assertIn("no visible effect", f[0].message)
+        glb = {"nodes": {n: {"pivot": [0.0, 0.0, 1.0], "subtree_bounds": None} for n in ("Mount", "Launcher")}}
+        el = generate.art_part_element(extra[0], parts + extra, glb)
+        self.assertEqual(list(el.find("DtRwList")), [])
+        self.assertEqual(el.findall("real"), [])
+        self.assertEqual(el.findtext("int[@paramName='parent-part-type']"), "4736")
+
 
 class TestManifestShape(unittest.TestCase):
     def test_problems(self):
@@ -482,6 +497,7 @@ class TestInstall(unittest.TestCase):
         ram = {e["entry"]: e for e in self.cat.get("weapons/ram-missile-launcher.sysdef").art_entries}
         self.assertEqual(ram["azimuth-mount"]["component"], "rotating-mount-point")
         self.assertAlmostEqual(ram["elevating-mount"]["limits"]["max-elevation"], 0.698)
+        self.assertEqual((ram["primary-launcher"]["fixed"], ram["elevating-mount"]["fixed"]), (True, False))
         self.assertTrue({"turret", "gun", "launcher"} <= set(self.cat.bindings["elevating-turret-art-part-type"]))
 
     def test_every_stock_sensor_with_a_position_reads(self):

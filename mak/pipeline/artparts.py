@@ -110,9 +110,11 @@ def is_weapon(code: int) -> bool:
 
 # ---------------------------------------------------------------- motions
 # DIS articulated-parameter metric pairs (value, rate), as used in stock art-part-param-list.
+# "fixed": a part with no motion and an empty list, e.g. the stock RAM launcher's launch point (primary-launcher
+# in rotating-elevating-missile-launcher.template_sysdef; Arleigh Burke's part 4992).
 MOTION_PARAMS = {
     "extension": (3, 4), "translate_x": (5, 6), "translate_y": (7, 8), "translate_z": (9, 10),
-    "azimuth": (11, 12), "elevation": (13, 14), "rotation": (15, 16),
+    "azimuth": (11, 12), "elevation": (13, 14), "rotation": (15, 16), "fixed": (),
 }
 MOTIONS = set(MOTION_PARAMS) | {"visual"}
 ROTATIONAL = {"azimuth", "elevation", "rotation"}
@@ -126,6 +128,7 @@ DEFAULT_LIMITS = {
     "translate_x": (0.0, 1.0, 1.0),
     "translate_y": (0.0, 1.0, 1.0),
     "translate_z": (0.0, 1.0, 1.0),
+    "fixed": (0.0, 0.0, 0.0),
 }
 
 

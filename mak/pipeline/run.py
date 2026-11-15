@@ -1,11 +1,13 @@
-"""Full pipeline for one model: inspect -> convert -> verify model -> generate -> validate -> report.
+"""Full pipeline for one model: inspect -> convert -> verify model -> package -> generate -> validate -> report.
 
-    python -m pipeline.run models/<name> [--skip-convert] [--format flt|fbx] [--no-mak-check]
+    python -m pipeline.run models/<name> [--skip-convert] [--format flt|fbx] [--no-mak-check] [--no-medf]
 
 model_format (ME3D_MAK_FORMAT, or --format):
   flt  OpenFlight, written in pure Python. No Blender. Verified by re-reading the file, and by loading it with
        MAK's own reader (medfTool --writeNodeInfo) when VR-Forces is installed.
   fbx  FBX via headless Blender, verified by re-importing it in Blender.
+package: medfTool writes <name>.medf + .meif textures beside the model, which VR-Forces loads instead (fast;
+  ACM 19.19). "medf_package": false in the config, or --no-medf, skips it.
 
 Exit code 0 = no errors (pending items are allowed), 1 = errors, 2 = bad input.
 The report is written to output/<name>/report.json.
@@ -17,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import artparts, convert, generate, inspect_glb, openflight, profiles, validate, verify_fbx
+from . import artparts, convert, generate, inspect_glb, medf, openflight, profiles, validate, verify_fbx
 from . import glb as glbmod
 from .common import (Finding, InputError, Layout, check_model_dir, has_errors, layout_for, load_config,
                      load_manifest, print_findings)
@@ -43,9 +45,12 @@ def _verify_flt(lay, report, parts, manifest, cfg, mak_check: bool, model_dir: P
 
 def run(model_dir: Path, skip_convert: bool = False, output_root: Path | None = None,
         node_map: artparts.NodeNameMap | None = None, fmt: str | None = None, mak_check: bool = True,
-        cfg: dict | None = None, out_dir: Path | None = None, quiet: bool = False) -> dict:
-    """`out_dir`, when given, is the exact output folder (otherwise <output_root>/<name>)."""
+        cfg: dict | None = None, out_dir: Path | None = None, quiet: bool = False,
+        medf_package: bool | None = None) -> dict:
+    """`out_dir`, when given, is the exact output folder (otherwise <output_root>/<name>).
+    medf_package: package the model as .medf/.meif (None = the config's "medf_package", default true)."""
     cfg = cfg or load_config()
+    package = cfg.get("medf_package", True) if medf_package is None else medf_package
     fmt = fmt or cfg.get("model_format", "flt")
     manifest = load_manifest(model_dir)
     lay = layout_for(manifest, output_root, fmt)
@@ -119,6 +124,11 @@ def run(model_dir: Path, skip_convert: bool = False, output_root: Path | None = 
                         stages["verify_model"] = verify_fbx.compare(verify_fbx.dump_fbx(lay.model_file, cfg["blender"]), report, parts)
                 except Exception as e:  # noqa: BLE001
                     stages["verify_model"] = [Finding("error", "verify-failed", str(e))]
+                if package and not has_errors(stages.get("verify_model", [])):
+                    try:
+                        stages["package"] = medf.package(lay.model_file, cfg.get("medf_tool"))
+                    except Exception as e:  # noqa: BLE001
+                        stages["package"] = [Finding("error", "medf-failed", str(e))]
         stages["generate"] = generate.generate(manifest, lay, report, cfg, node_map)
         stages["validate"] = validate.validate(lay.root, cfg)
 
@@ -146,9 +156,11 @@ def main(argv=None) -> int:
     ap.add_argument("--skip-convert", action="store_true")
     ap.add_argument("--format", choices=["flt", "fbx"], help="override ME3D_MAK_FORMAT")
     ap.add_argument("--no-mak-check", action="store_true", help="flt: don't load the result with medfTool")
+    ap.add_argument("--no-medf", action="store_true", help="don't package the model as .medf/.meif (ACM 19.19)")
     args = ap.parse_args(argv)
     try:
-        result = run(check_model_dir(args.model_dir), args.skip_convert, fmt=args.format, mak_check=not args.no_mak_check)
+        result = run(check_model_dir(args.model_dir), args.skip_convert, fmt=args.format, mak_check=not args.no_mak_check,
+                     medf_package=False if args.no_medf else None)
     except (InputError, ValueError, FileNotFoundError) as e:
         print(f"input error: {e}", file=sys.stderr)
         return 2
