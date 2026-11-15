@@ -431,6 +431,9 @@ export interface MakSystemChange {
   /** Adds this stock system, e.g. weapons/phalanx-20mm-gun.sysdef. */
   sysdef?: string;
   params?: Record<string, number | string | boolean>;
+  /** Parts the model has no joint for, added to the .entity only: the system moves them in the simulation,
+   * but the 3D model cannot show it (e.g. a gun that never pitches on an azimuth-only mount). */
+  add_parts?: { code: number; parent: string | number; motion: string; min: number; max: number; max_rate: number; reason?: string }[];
   reason: string;
 }
 

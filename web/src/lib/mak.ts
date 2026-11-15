@@ -61,7 +61,8 @@ export function systemChangeText(c: MakSystemChange): string {
   if (c.sysdef) {
     const what = c.sysdef.split('/').pop()!.replace(/\.sysdef$/, '');
     const on = c.bind ? Object.values(c.bind).map((v) => (typeof v === 'string' ? where(v) : String(v))) : [];
-    return `Add ${c.system} (${what})${on.length ? ` on ${[...new Set(on)].join(', ')}` : ''}${c.position_from ? ` at ${where(c.position_from)}` : ''}`;
+    const sim = c.add_parts?.length ? `, with sim-only part${c.add_parts.length > 1 ? 's' : ''} ${c.add_parts.map((a) => a.code).join(', ')} (no joint in the model)` : '';
+    return `Add ${c.system} (${what})${on.length ? ` on ${[...new Set(on)].join(', ')}` : ''}${c.position_from ? ` at ${where(c.position_from)}` : ''}${sim}`;
   }
   const parts: string[] = [];
   if (c.position_from) parts.push(`move ${c.system} to ${where(c.position_from)}`);

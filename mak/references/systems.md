@@ -83,12 +83,43 @@ UG = VR-Forces 5.1.1 Users Guide; ACM = Adding Content to MAK ONE Applications; 
    - **The model's own mounts.**
      - For a mount no weapon uses, the draft looks for a stock weapon whose name the node names (`phalanx` ->
        `phalanx-20mm-gun`, `ram` -> `ram-missile-launcher`). The weapon must suit the platform's repository.
-     - It is added only if the mount can carry all its part parameters. Ammunition counts are the median of
-       stock entities that use it.
-     - Otherwise a note says which joint is missing.
-   - **Sensor for weapons.** If weapons remain and the donor has no sensor, the draft adds the sensor most stock
+     - **Stand-ins:** when no stock weapon matches, a reported stand-in is used. Sea Sparrow, ESSM and RIM-7 ->
+       `ram-missile-launcher` (Q22).
+     - **Sim-only parts:** when the mount lacks parts the weapon drives, they are added to the `.entity` only
+       (`add_parts`, UG 66.3.1). Each takes the next free code of the family stock entities bind that parameter
+       to most, and the limits of the sysdef component that drives it. The weapon aims and fires in the
+       simulation, but the model cannot show what it has no joint for. This is recorded as a `part-sim-only`
+       warning and in open question Q20.
+     - Ammunition counts are the median of stock entities that use the weapon.
+   - **Damage and movement.** One of each (UG 66.4.2-3). If the donor has none, the most common one for the
+     **class** is added: stock entities of the same kind, military or civilian (`systems.class_of`). Lincoln's
+     Invincible donor has no damage system (the SOE showed Undamageable), so it gets `surface-default`, which 70%
+     of military ships have.
+   - **Class baseline.** Sensors and additional systems that at least 50% of the class has, and the donor lacks,
+     are added with the stock median parameters. Sensors are placed by the rules above.
+     - Military ships: active radar 92%, TDL surface message generator 86%, spot report generator 86% and
+       receiver 84%.
+     - Civilian ships: visual sensor.
+   - **Systems that drive a part the model has.** Added when the platform allows them: periscope (2048-2144),
+     folding wing (7584), cargo door (7648), car doors, refuelling booms. Landing gear and engine nacelles belong
+     to movement systems, so they get a note instead.
+   - **Sensor for weapons.** If weapons remain and the entity has no sensor, the draft adds the sensor most stock
      entities of the kind use (UG 66.4).
-   - **Everything else** (damage, movement, IFF, spot reports, data links, countermeasures) stays the donor's.
+   - Everything else stays the donor's.
+
+## Parts and their components (UG 66.3)
+An entity's parts come from its systems' components (each sysdef's art-part lists) and from its visual model.
+The catalog records every art-part entry with its component (`Sysdef.art_entries`), e.g.:
+- phalanx: `turret` -> `primary-turret`, `main-gun-joy` -> `primary-gun`;
+- RAM: `rotating-mount-point` -> `azimuth-mount`, `elevating-mount-point` -> `elevating-mount`, `launcher` ->
+  `primary-launcher`;
+- periscope: `periscope` -> 2048.
+
+After the systems are applied, `systems.associate_parts` names every part a system drives `<entry>-<code>`,
+as stock entities do (1709 descriptors, e.g. 2S1 `azimuth-mount-4096`). A repeated name gets `-<code>` again.
+It reports `part-component` (part -> system / component) and `part-visual-only` (parts no component drives:
+radars, rudders and deck elevators have no stock system). Whether the SOE's "Associated Component" column
+follows these names is open question Q21.
 4. **Check.** `validate` checks the written `.entity` (`systems.check_entity_systems`, `check_ammunition`):
 
 | Finding | Level | Check |
@@ -102,6 +133,10 @@ UG = VR-Forces 5.1.1 Users Guide; ACM = Adding Content to MAK ONE Applications; 
 | `system-position-outside` | warning | `sensor-position` inside the bounding volume (+5 %, +1 m) |
 | `system-weapon-no-sensor` | warning | UG 66.4, 73.1 |
 | `system-ammunition-unknown` | warning | ammunition in `ammunitionParams.mtl` or our additions (UG 73.2.1) |
+| `system-part-unowned` | info | weapon parts that no system drives (they turn in the model only) |
+
+Generate also reports `part-sim-only` (warning, one per sim-only part, Q20), `part-component` and
+`part-visual-only` (info).
 
 ## Manifest `systems`
 ```json
@@ -132,8 +167,11 @@ UG = VR-Forces 5.1.1 Users Guide; ACM = Adding Content to MAK ONE Applications; 
   - active radar at `Radar__Scanner` (-21.4, 28, -51.4), visual sensor at the bridge eye.
   - With the Nimitz donor, its four weapons (Phalanx ×2, vertical launchers ×2) are removed: the model's mounts
     are azimuth-only.
-  - The six mounts get no weapon. `phalanx-20mm-gun` and `ram-missile-launcher` match by name, but they also
-    need an elevating gun or launcher part (Q20).
+  - With its own donor: `surface-default` damage added; Phalanx ×2, RAM ×2 and Sea Sparrow ×2 (the RAM
+    launcher standing in) added on the six mounts, with 10 sim-only parts and 10 `part-sim-only` warnings (Q20).
+  - Parts named after their components (`primary-turret-4096`, `azimuth-mount-4160`, `primary-gun-4416`,
+    `elevating-mount-4288`, `primary-launcher-4736` ...). Radars, rudder and deck elevators are visual-only.
+  - Validate is otherwise clean and medfTool loads the model.
 - **Not yet checked in VR-Forces** (Q16, Q19): that the sensors detect from the new positions, and that a
   rebound or added weapon slews the model's parts. To check:
   - open the entity in the SOE and Edit Properties: the red dot marks the system's position (UG 66.4.4);

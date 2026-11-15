@@ -294,10 +294,23 @@ class TestLincolnExports(unittest.TestCase):
 
     @unittest.skipUnless(HAVE_INSTALL, "VR-Forces install not present")
     def test_systems_drafted_from_the_model(self):
-        """Sensors move to the highest radar part and the bridge eye. The weapon mounts are azimuth-only, and
-        every stock ship weapon also needs an elevating part, so none is added: the notes say what is missing."""
-        moved = {e["system"]: e.get("position_from") for e in self.m.get("systems", [])}
+        """Sensors move to the highest radar part and the bridge eye. The Invincible donor has no damage system,
+        so the military ships' most common one is added. Each azimuth-only mount gets its stock weapon (Sea Sparrow:
+        the RAM launcher stands in) with sim-only elevating parts, and a note per mount says the model won't pitch."""
+        sys_ = self.m.get("systems", [])
+        moved = {e["system"]: e.get("position_from") for e in sys_}
         self.assertIn("Radar__Scanner", moved.values())
         self.assertIn("socket_bridge_eye", moved.values())
-        self.assertFalse(any(e.get("sysdef", "").startswith("weapons/") for e in self.m.get("systems", [])))
-        self.assertTrue(any("Weapons__Phalanx_1: phalanx-20mm-gun" in n for n in self.notes), self.notes)
+        self.assertIn("damage/surface-default.sysdef", [e.get("sysdef") for e in sys_])
+        weapons = {e["bind"].get("turret-art-part-type") or e["bind"].get("rot-turret-art-part-type"): e
+                   for e in sys_ if e.get("sysdef", "").startswith("weapons/")}
+        self.assertEqual({k: Path(w["sysdef"]).stem for k, w in weapons.items()}, {
+            "Weapons__Phalanx_1": "phalanx-20mm-gun", "Weapons__Phalanx_2": "phalanx-20mm-gun",
+            "Weapons__RAM_1": "ram-missile-launcher", "Weapons__RAM_2": "ram-missile-launcher",
+            "Weapons__SeaSparrow_1": "ram-missile-launcher", "Weapons__SeaSparrow_2": "ram-missile-launcher"})
+        self.assertTrue(all(w["add_parts"] for w in weapons.values()))
+        self.assertIn("stands in", weapons["Weapons__SeaSparrow_1"]["reason"])
+        codes = [a["code"] for w in weapons.values() for a in w["add_parts"]]
+        self.assertEqual(len(codes), len(set(codes)))                     # every sim-only part has its own code
+        self.assertFalse(set(codes) & {p["dis_part"] for p in self.m["articulated_parts"]})
+        self.assertEqual(sum("will not pitch in 3D" in n for n in self.notes), 6, self.notes)

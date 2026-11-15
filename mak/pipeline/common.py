@@ -142,7 +142,9 @@ def load_manifest(model_dir: Path) -> dict:
     return m
 
 
-SYSTEM_KEYS = {"system", "sysdef", "remove", "keep", "bind", "params", "position_from", "position_param", "reason"}
+SYSTEM_KEYS = {"system", "sysdef", "remove", "keep", "bind", "params", "position_from", "position_param", "reason",
+               "add_parts"}
+ADD_PART_KEYS = {"code", "parent", "motion", "min", "max", "max_rate", "reason"}
 
 
 def system_problems(entries) -> list[str]:
@@ -164,6 +166,17 @@ def system_problems(entries) -> list[str]:
         unknown = set(e) - SYSTEM_KEYS
         if unknown:
             out.append(f"systems[{i}]: unknown key(s) {sorted(unknown)}; use {sorted(SYSTEM_KEYS)}")
+        adds = e.get("add_parts")
+        if adds is not None:
+            if not isinstance(adds, list):
+                out.append(f"systems[{i}].add_parts must be a list")
+            else:
+                for j, a in enumerate(adds):
+                    if not isinstance(a, dict) or not isinstance(a.get("code"), int) or a.get("parent") in (None, ""):
+                        out.append(f"systems[{i}].add_parts[{j}] needs an integer 'code' and a 'parent' "
+                                   "(a part node or code)")
+                    elif set(a) - ADD_PART_KEYS:
+                        out.append(f"systems[{i}].add_parts[{j}]: unknown key(s) {sorted(set(a) - ADD_PART_KEYS)}")
         for key in ("bind", "params"):
             if key in e and not isinstance(e[key], dict):
                 out.append(f"systems[{i}].{key} must be an object")

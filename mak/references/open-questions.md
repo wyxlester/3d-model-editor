@@ -24,7 +24,8 @@ Resolve each against the install, or with a real import in the GUI, then update 
   with SOE "Calculate Support Points and Bounding Volume from Displayed Model" (UG 66.1.1, 66.1.3).
 - **Q15 Donor weapon systems.** Cloned systems keep the donor's part codes (e.g. 2S1 needs 4128). **Handled in the
   draft** (`references/systems.md`): each donor weapon is kept, rebound to one of the model's mounts, or removed,
-  with the reason. Whether VR-Forces drives a rebound weapon on our parts is Q19.
+  with the reason. Whether VR-Forces drives a rebound weapon on our parts is Q19. Mounts missing parts get
+  sim-only parts (Q20).
 - **Q16 Sensor position.** Two different things in the `.entity` sound alike:
   - an **articulated part** (e.g. radar 5376) is visual: a DOF node in the model that VR-Forces turns in the 3D
     view, plus its part entry. Harmony's radars sit correctly on the mast (attach point 136, ±4, -56.15).
@@ -55,12 +56,43 @@ Resolve each against the install, or with a real import in the GUI, then update 
   model's parts, or adds a stock weapon for a mount named after it, binding each parameter to a part of the family
   stock entities use for it (`Catalog.bindings`). Check in VR-Forces that the weapon slews and elevates those
   parts (UG 73.3.1) and fires from the muzzle `end-point`.
-- **Q20 Azimuth-only weapon mounts.** USS Abraham Lincoln's Phalanx, RAM and Sea Sparrow mounts are single
-  azimuth joints. Every stock ship weapon that matches them by name needs an elevating part too:
-  `phalanx-20mm-gun` needs turret + gun, and `ram-missile-launcher` needs rot-turret + elevating-turret +
-  launcher. So no weapon is added; the draft says which joint is missing. Options: add the elevating joints in
-  the Blender model (preferred, matches stock), or test whether a weapon works with `gun-art-part-type` = -1.
-  No stock entity does that: all 11 -1 values are parents.
+- **Q20 Azimuth-only weapon mounts (missing elevation joints), under observation.** A mount modelled with
+  one azimuth joint cannot carry a stock ship weapon as it stands: every one also drives an elevating part.
+  `phalanx-20mm-gun` needs turret + gun; `ram-missile-launcher` needs rot-turret + elevating-turret + launcher.
+  - **What the importer does now** (decided 2026-11-15): it adds the missing parts to the `.entity` only
+    ("sim-only" parts; an entity may carry parts the model does not animate, UG 66.3.1). Codes come from the
+    family stock entities bind each parameter to most, and limits from the sysdef component (Phalanx gun
+    -20 to 85 degrees). The weapon binds fully, trains and elevates, fires, and publishes both angles
+    (UG 73.3.1).
+  - **The visible effect:** the mount turns in 3D but never pitches. The model has no node for the elevation,
+    so a CIWS firing upward looks level, in VR-Forces and in any other viewer of the DIS traffic.
+  - **Where it is recorded on every import:**
+    - a `part-sim-only` warning per part in `report.json` (and the editor report);
+    - a `reason` on each `add_parts` item in the manifest;
+    - a note per mount from `draft_manifest`.
+  - **The fix:** add the elevating joint under the mount in Blender and draft again. The model's part is then
+    used, and no sim-only part is added.
+  - **To observe in VR-Forces:** the weapon slews and fires at targets above the horizon; the barrel stays
+    level; any errors in the log about articulated parts the model lacks.
+  - **Observation log:**
+    - 2026-11-15, USS Abraham Lincoln (donor Invincible-class Carrier):
+      - 6 mounts, all azimuth-only;
+      - sim-only parts added: Phalanx 1-2 guns 4416/4448; RAM 1-2 elevating mounts 4288/4320 and launchers
+        4736/4768; Sea Sparrow 1-2 (RAM stand-in) elevating mounts 4352/4384 and launchers 4800/4832;
+      - not yet checked in VR-Forces.
+- **Q21 Associated Component.** The SOE's Physical tab has an "Associated Component" column for each part.
+  - **What the importer does:** names each part a system drives after that component's art-part entry,
+    `<entry>-<code>` (e.g. `primary-turret-4096`, `azimuth-mount-4160`). Stock entities do the same: 1709
+    descriptors use this form, and about 90% of all stock descriptors use the name of an entry in one of their
+    systems' sysdefs.
+  - **Unconfirmed:** whether the SOE fills the column from this name, from the bound code, or both. Check on
+    the Lincoln import.
+  - **Parts no stock system drives** (radars, rudder, deck elevators) stay unassociated: they move in the model
+    only (`part-visual-only`).
+- **Q22 Sea Sparrow stand-in.** The install has no Sea Sparrow (RIM-7/ESSM) munition or launcher.
+  `ram-missile-launcher` (RIM-116, a trainable box launcher like the Mk 29) stands in for mounts named Sea
+  Sparrow, ESSM or RIM-7, with "stands in" in the reason. A real Sea Sparrow needs its own munition entity, an
+  `ammunitionParams.mtl` entry and a weapon sysdef.
 
 ## Resolved
 - **Q2 8-field vs 7-field type.** `.entity` objectType = VR-Forces object super-type + 7-field DIS type (UG D.3.1).

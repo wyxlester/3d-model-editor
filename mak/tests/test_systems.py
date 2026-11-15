@@ -21,7 +21,13 @@ HAVE_INSTALL = (Path(CFG["sms_dir"]) / CFG.get("donor_sms", "EntityLevel") / "vr
 
 TEMPLATE = """; a gun template: turret + gun parts
 (gun-template
-   (systems (main-gun (variable-bindings (DtRwInt (gun-art-part-type $gun-art-part-type)))))
+   (systems
+      (turret (variable-bindings (DtRwInt (turret-art-part-type $turret-art-part-type)))
+         (default-art-part-list (primary-turret (art-part-type $turret-art-part-type) (parent-part-type -1)
+            (min-azimuth $left-slew-limit (default -3.14)) (max-azimuth $right-slew-limit (default 3.14)))))
+      (main-gun-joy (variable-bindings (DtRwInt (gun-art-part-type $gun-art-part-type)))
+         (default-art-part-list (primary-gun (art-part-type $gun-art-part-type)
+            (min-elevation $default-min-elevation (default -0.5)) (max-elevation $default-max-elevation (default 1.1))))))
    (meta-data
       (system-name "Gun template")
       (allowed-state-repository-types "surface-entity-param" "ground-vehicle-param")
@@ -38,6 +44,7 @@ TEMPLATE = """; a gun template: turret + gun parts
 GUN = """(test-gun
    (systems
       (main-gun
+         (variable-bindings (DtRwReal (default-max-elevation 1.483530)) (DtRwReal (default-min-elevation -0.349066)))
          (targeting (ammunition-list (TEST-20mm (amount $num-rounds))))
          (system-definition (filename "$(system-dir)\\weapons\\templates\\gun.template_sysdef"))
       )
@@ -63,6 +70,14 @@ VARCAT = """(var-cat
             (art-part-category "$default-gun-art-part-type"))))
 )
 """
+PERISCOPE = """(periscope-system
+   (systems (periscope (create-component True)
+      (default-art-part-list (periscope (art-part-type 2048)) (antenna (art-part-type 2080)))))
+   (meta-data (system-name "Periscope") (system-categories "other") (allowed-state-repository-types "all"))
+)
+"""
+DAMAGE = """(surface-damage (meta-data (system-name "Surface damage") (allowed-state-repository-types "all")))
+"""
 SENSOR = """(radar
    (meta-data (system-name "Radar") (system-categories "sensor" "object-sensor") (allowed-state-repository-types "all")
       (parameter-data-list
@@ -76,7 +91,9 @@ SENSOR = """(radar
 def write_systems(root: Path) -> Path:
     files = {"weapons/templates/gun.template_sysdef": TEMPLATE, "weapons/test-gun.sysdef": GUN,
              "weapons/fixed-gun.sysdef": FIXED, "weapons/var-cat.sysdef": VARCAT,
-             "sensors/active-radar-sensor.sysdef": SENSOR, "sensors/visual-sensor.sysdef": SENSOR}
+             "sensors/active-radar-sensor.sysdef": SENSOR, "sensors/visual-sensor.sysdef": SENSOR,
+             "other/periscope.sysdef": PERISCOPE, "damage/surface-default.sysdef": DAMAGE,
+             "other/spot-report-generator.sysdef": DAMAGE.replace("Surface damage", "Spot reports")}
     for rel, text in files.items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text(text, encoding="utf-8")
@@ -85,11 +102,16 @@ def write_systems(root: Path) -> Path:
 
 def catalog(root: Path) -> systems.Catalog:
     sds = {p.relative_to(root).as_posix().lower(): systems.read_sysdef(p, root) for p in root.rglob("*.sysdef")}
-    usage = {"weapons/test-gun.sysdef": {"groups": {"1:3": 5}, "ints": {"num-rounds": 1500}},
-             "sensors/active-radar-sensor.sysdef": {"groups": {"1:3": 9}, "ints": {}}}
-    bindings = {"turret-art-part-type": ["turret"], "gun-art-part-type": ["8192", "gun"],
-                "elevating-turret-art-part-type": ["gun", "launcher", "turret"]}
-    return systems.Catalog(sds, usage, {"Surface_Ship.ope": "surface-entity-param"}, bindings)
+    mil, civ = "1:3|military", "1:3|civilian"
+    usage = {"weapons/test-gun.sysdef": {"groups": {"1:3": 5}, "classes": {mil: 5}, "ints": {"num-rounds": 1500}},
+             "sensors/active-radar-sensor.sysdef": {"groups": {"1:3": 9}, "classes": {mil: 9}, "ints": {},
+                                                    "reals": {"max-range": 20000.0}},
+             "damage/surface-default.sysdef": {"groups": {"1:3": 7}, "classes": {mil: 7}, "ints": {"full-health": 5}},
+             "other/spot-report-generator.sysdef": {"groups": {"1:3": 6}, "classes": {mil: 6, civ: 1}},
+             "other/periscope.sysdef": {"groups": {"1:4": 3}, "classes": {}}}
+    bindings = {"turret-art-part-type": {"turret": 295}, "gun-art-part-type": {"gun": 447, "8192": 59},
+                "elevating-turret-art-part-type": {"turret": 140, "gun": 70, "launcher": 34}}
+    return systems.Catalog(sds, usage, {"Surface_Ship.ope": "surface-entity-param"}, bindings, {mil: 10, civ: 10})
 
 
 DONOR = """<?xml version="1.0" encoding="utf-8"?>
@@ -239,7 +261,7 @@ class TestChecks(unittest.TestCase):
         return {x.code for x in systems.check_entity_systems(so, self.cat, repo, parts)}
 
     def test_donor_is_clean(self):
-        self.assertEqual(self.codes(DONOR), {"system-sysdef-missing"})     # damage isn't in the stand-in catalog
+        self.assertEqual(self.codes(DONOR), set())
 
     def test_problems(self):
         bad = DONOR.replace('systemName="damage" platform="@(system-dir)\\damage\\surface-default.sysdef"',
@@ -295,7 +317,8 @@ class TestDraft(unittest.TestCase):
         self.assertEqual(by["sensor"]["position_from"], "Mast__Radar")
         self.assertEqual(by["weapon"]["bind"], {"turret-art-part-type": "Weapons__Phalanx_1",
                                                 "gun-art-part-type": "Weapons__Phalanx_1_Gun"})
-        self.assertEqual(len(entries), 2, entries)            # the mount is taken: no extra weapon added
+        self.assertEqual([e["system"] for e in entries if "sysdef" not in e or "weapons/" in e["sysdef"]],
+                         ["sensor", "weapon"], entries)   # the mount is taken: no extra weapon added
         self.assertEqual(notes, [])
 
     def test_donor_weapon_kept_when_the_model_has_its_parts(self):
@@ -317,17 +340,54 @@ class TestDraft(unittest.TestCase):
                                                "surface-entity-param", "1:3")
         added = [e for e in entries if e.get("sysdef") == "weapons/test-gun.sysdef"]
         self.assertEqual(len(added), 1, entries)
-        self.assertEqual(added[0]["system"], "weapon-1")
+        self.assertEqual(added[0]["system"], "weapon-2")         # the donor's "weapon" is still there
         self.assertEqual(added[0]["params"], {"num-rounds": 1500})       # stock median
         self.assertEqual(added[0]["bind"]["gun-art-part-type"], "Weapons__Phalanx_1_Gun")
 
-    def test_turret_only_mount_is_explained(self):
+    def test_turret_only_mount_gets_a_sim_only_gun(self):
+        """The mount has no elevating joint: the gun part is added to the .entity only (users guide 66.3.1), with the
+        sysdef's own limits (phalanx-like: -20 to 85 degrees), and a note says the model will not pitch."""
         self.cat.sysdefs["weapons/test-gun.sysdef"].name = "Phalanx CIWS"
         donor = DONOR.replace("test-gun.sysdef", "var-cat.sysdef").replace(">4416<", ">9999<")
         entries, notes = systems.draft_systems(donor, parts_of(("Weapons__Phalanx_1", 4128, None)), NODES, self.cat,
                                                "surface-entity-param", "1:3")
-        self.assertFalse(any(e.get("sysdef") for e in entries))
-        self.assertTrue(any("needs turret + gun parts" in n for n in notes), notes)
+        w = next(e for e in entries if e.get("sysdef") == "weapons/test-gun.sysdef")
+        self.assertEqual(w["bind"], {"turret-art-part-type": "Weapons__Phalanx_1", "gun-art-part-type": 4416})
+        self.assertEqual(w["add_parts"], [{"code": 4416, "parent": "Weapons__Phalanx_1", "motion": "elevation",
+                                           "min": -20.0, "max": 85.0, "max_rate": 45.0,
+                                           "reason": "model has no elevating joint for gun under Weapons__Phalanx_1"}])
+        self.assertTrue(any("will not pitch in 3D" in n and "Weapons__Phalanx_1" in n for n in notes), notes)
+
+    def test_sea_sparrow_uses_the_stand_in(self):
+        ram = systems.Sysdef("weapons/ram-missile-launcher.sysdef", name="RAM", repositories=["surface-entity-param"],
+                             categories=["weapon"],
+                             params={"rot-turret-art-part-type": systems.Param("rot-turret-art-part-type", "DtRwInt", "turret")})
+        self.cat.sysdefs[ram.path] = ram
+        entries, notes = self.draft(parts_of(("Weapons__SeaSparrow_1", 4224, None)))
+        w = next(e for e in entries if e.get("sysdef") == ram.path)
+        self.assertIn("stands in", w["reason"])
+        self.assertEqual(w["bind"], {"rot-turret-art-part-type": "Weapons__SeaSparrow_1"})
+
+    def test_damage_added_when_the_donor_has_none(self):
+        donor = DONOR.replace('<componentSystem systemName="damage" platform="@(system-dir)\\damage\\surface-default.sysdef"/>', "")
+        self.assertNotIn("surface-default", donor)
+        entries, _ = systems.draft_systems(donor, [], NODES, self.cat, "surface-entity-param", "1:3", military=True)
+        d = next(e for e in entries if e.get("sysdef") == "damage/surface-default.sysdef")
+        self.assertEqual((d["system"], d["params"]), ("damage", {"full-health": 5}))
+        self.assertIn("Undamageable", d["reason"])
+
+    def test_class_baseline_added(self):
+        """60% of the military class has spot reports: added; the civilian class (10%) does not get it."""
+        entries, _ = systems.draft_systems(DONOR, [], NODES, self.cat, "surface-entity-param", "1:3", military=True)
+        self.assertTrue(any(e.get("sysdef") == "other/spot-report-generator.sysdef" for e in entries), entries)
+        entries, _ = systems.draft_systems(DONOR, [], NODES, self.cat, "surface-entity-param", "1:3", military=False)
+        self.assertFalse(any(e.get("sysdef") == "other/spot-report-generator.sysdef" for e in entries))
+
+    def test_part_owner_added(self):
+        """A periscope part brings the periscope system, which drives it."""
+        entries, _ = self.draft(parts_of(("Mast__Periscope", 2048, None)))
+        e = next(e for e in entries if e.get("sysdef") == "other/periscope.sysdef")
+        self.assertIn("component periscope", e["reason"])
 
     def test_sensor_added_for_weapons_when_the_donor_has_none(self):
         donor = DONOR.replace('systemName="sensor" platform="@(system-dir)\\sensors\\active-radar-sensor.sysdef"',
@@ -339,6 +399,43 @@ class TestDraft(unittest.TestCase):
                          ("sensor", "sensors/active-radar-sensor.sysdef", "Mast__Radar"))
 
 
+class TestComponents(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cat = catalog(write_systems(Path(self.tmp.name)))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_entries_and_limits_through_the_template(self):
+        sd = self.cat.get("weapons/test-gun.sysdef")
+        by = {e["entry"]: e for e in sd.art_entries}
+        self.assertEqual((by["primary-turret"]["component"], by["primary-turret"]["param"]), ("turret", "turret-art-part-type"))
+        self.assertEqual(by["primary-gun"]["component"], "main-gun-joy")
+        self.assertAlmostEqual(by["primary-gun"]["limits"]["max-elevation"], 1.48353)    # the sysdef's binding wins
+        self.assertEqual([(e["entry"], e["code"]) for e in self.cat.get("other/periscope.sysdef").art_entries],
+                         [("periscope", 2048), ("antenna", 2080)])
+
+    def test_parts_named_after_their_component(self):
+        so = ET.fromstring(DONOR).find("simObject")
+        lst = so.find("DtSimArtPartDescriptorList")
+        for code in (4096, 4416, 5376):
+            d = ET.SubElement(lst, "DtSimArtPartDescriptor", paramName=f"art-part-{code}")
+            ET.SubElement(d, "int", paramName="art-part-type").text = str(code)
+        f = systems.associate_parts(so, self.cat)
+        self.assertEqual([d.get("paramName") for d in lst], ["primary-turret-4096", "primary-gun-4416", "art-part-5376"])
+        self.assertEqual([x.code for x in f], ["part-component", "part-visual-only"])
+        self.assertIn("4416 -> weapon / main-gun-joy", f[0].message)
+
+    def test_sim_only_parts_and_warning(self):
+        m = {"systems": [{"system": "weapon-1", "add_parts": [
+            {"code": 4416, "parent": "Mount", "motion": "elevation", "min": -20, "max": 85, "max_rate": 60}]}]}
+        extra, f = systems.sim_only_parts(m, as_parts(parts_of(("Mount", 4096, None))))
+        self.assertEqual([(p.node, p.code, p.parent, p.motion) for p in extra], [("Mount#4416", 4416, "Mount", "elevation")])
+        self.assertEqual([x.level + ":" + x.code for x in f], ["warning:part-sim-only"])
+        self.assertIn("will not pitch in 3D", f[0].message)
+
+
 class TestManifestShape(unittest.TestCase):
     def test_problems(self):
         self.assertEqual(system_problems(None), [])
@@ -346,6 +443,8 @@ class TestManifestShape(unittest.TestCase):
         p = system_problems([{"system": "a"}, {"system": "a"}, {"nope": 1}, {"system": "1x", "bind": [],
                              "sysdef": "x.txt", "colour": "red"}])
         self.assertEqual(len(p), 6, p)
+        self.assertEqual(system_problems([{"system": "w", "add_parts": [{"code": 4416, "parent": "Mount"}]}]), [])
+        self.assertEqual(len(system_problems([{"system": "w", "add_parts": [{"code": "x"}]}])), 1)
         self.assertEqual(system_problems({"a": 1}), ["systems must be a list of {system, ...} entries"])
 
 
@@ -369,8 +468,20 @@ class TestInstall(unittest.TestCase):
         self.assertEqual(self.cat.repositories["Fixed_Wing_Aircraft.ope"], "fixed-wing-entity-param")
 
     def test_stock_bindings(self):
-        self.assertEqual(self.cat.bindings["turret-art-part-type"], ["turret"])
+        self.assertEqual(set(self.cat.bindings["turret-art-part-type"]), {"turret"})
         self.assertTrue({"gun", "8192"} <= set(self.cat.bindings["gun-art-part-type"]))
+        self.assertEqual(self.cat.preferred_family("elevating-turret-art-part-type"), "turret")
+
+    def test_military_ship_baseline_and_damage(self):
+        cls = systems.class_of("1:3", True)
+        self.assertEqual(systems.most_common(self.cat, cls, "surface-entity-param", "damage"),
+                         "damage/surface-default.sysdef")
+        self.assertIn("sensors/active-radar-sensor.sysdef", systems.baseline(self.cat, cls, "surface-entity-param"))
+
+    def test_component_entries(self):
+        ram = {e["entry"]: e for e in self.cat.get("weapons/ram-missile-launcher.sysdef").art_entries}
+        self.assertEqual(ram["azimuth-mount"]["component"], "rotating-mount-point")
+        self.assertAlmostEqual(ram["elevating-mount"]["limits"]["max-elevation"], 0.698)
         self.assertTrue({"turret", "gun", "launcher"} <= set(self.cat.bindings["elevating-turret-art-part-type"]))
 
     def test_every_stock_sensor_with_a_position_reads(self):

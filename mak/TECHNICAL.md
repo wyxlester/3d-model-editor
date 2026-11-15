@@ -499,15 +499,29 @@ The `.entity`'s sensors, weapons and other systems are the donor's (UG 65.3.1), 
     (else `station__helm`); others keep the donor's position, with a note;
   - donor weapons kept when the model has their parts, else rebound to a free mount of the model (parameters
     assigned top-down, each to a part of a family stock entities bind it to), else removed with the reason;
-  - a stock weapon added for a mount whose name names it (`phalanx`, `ram`), when the platform allows it and the
-    mount has every part it needs; ammunition counts are the stock median. Otherwise a note says what is missing;
-  - a sensor added when weapons remain and the donor has none (UG 66.4); everything else stays the donor's.
+  - a stock weapon added for a mount whose name names it (`phalanx`, `ram`), or a reported stand-in (Sea Sparrow ->
+    the RAM launcher, Q22); ammunition counts are the stock median. Parts the mount lacks are added to the
+    `.entity` only (**sim-only parts**, UG 66.3.1): the weapon aims and fires, but the model never shows that
+    motion; each is a `part-sim-only` warning (Q20);
+  - damage or movement added when the donor has none (UG 66.4.2-3): the most common for the **class**, stock
+    entities of the same kind, military or civilian;
+  - the class baseline added: sensors and additional systems at least 50% of the class has (military ships:
+    active radar, TDL, spot reports), with stock median parameters;
+  - systems that drive a part the model has (periscope, folding wing, cargo door ...);
+  - a sensor added when weapons remain and there is none (UG 66.4).
 - **Apply** (`generate`): edits the cloned `componentSystem`s in place; new ones go after the donor's, in the
   stock form. Each change is a `system-changed`/`-added`/`-removed` finding with its reason. A manifest without
   `systems` changes nothing.
-- Results: Harmony's passive radar sensor moves to `Mast__Radar_1` (136, -4, -56.1 body) and its visual sensor to
-  the bridge eye; Lincoln's radar sensor to `Radar__Scanner`, and with the Nimitz donor its four weapons are
-  removed because its mounts are azimuth-only (Q20).
+- **Parts and components** (UG 66.3): every part a system drives is named after that component's art-part entry,
+  `<entry>-<code>`, as stock entities name theirs (e.g. `primary-turret-4096`, `azimuth-mount-4160`). The report
+  lists part -> system / component (`part-component`) and the parts no stock system drives (`part-visual-only`:
+  radars, rudders, deck elevators). Whether the SOE's Associated Component column follows the names is Q21.
+- Results:
+  - Harmony: the passive radar sensor moves to `Mast__Radar_1` (136, -4, -56.1 body) and the visual sensor to the
+    bridge eye.
+  - Lincoln: the radar sensor moves to `Radar__Scanner`; `surface-default` damage is added (the donor had none,
+    shown as Undamageable); Phalanx ×2, RAM ×2 and Sea Sparrow ×2 (RAM stand-in) are added with 10 sim-only
+    parts, because its mounts are azimuth-only (Q20).
 
 ## 7. Assumptions
 
@@ -562,15 +576,18 @@ After the fixes, the bounding volume and both radars (attach points, axes, limit
 - Install into a real custom SMS has been exercised only on a fake install tree in tests.
 - Rotors, propellers and wheels are static: no `@dis animation` sequences (ACM 14.3, 21.6).
 - No damage-state geometry (`@dis switch damage`, ACM 21.5) and no LODs.
-- **Systems are fitted, not designed.** The draft moves sensors and rebinds or removes weapons (6.11); it does
-  not choose sensors or weapons the donor lacks, except a stock weapon a mount is named after and a sensor for
-  weapons. Ranges, rounds and other values stay the donor's or the stock median.
+- **Systems follow the stock class, not the real ship.** The draft adds what most stock entities of the kind
+  have, the weapons its mounts are named after, and the systems that drive its parts (6.11). Ranges, rounds and
+  other values are the donor's or the stock median, not the real ship's.
 - **Sensor and weapon changes are not checked in VR-Forces yet**: that detection runs from the new positions
   (Q16) and that a rebound or added weapon slews the model's parts (Q19). Sonar and gimbaled sensors keep the
   donor's positions.
-- **Azimuth-only weapon mounts get no weapon.** Every stock ship weapon needs an elevating gun or launcher part as
-  well; Lincoln's six mounts are single joints, so the draft says which joint to add (Q20). Guns without parts
-  (`muzzle-offset`, as on the F-16) are not drafted.
+- **Missing elevation joints: weapons never visibly pitch.** Every stock ship weapon drives an elevating gun or
+  launcher part as well as its mount. Where the model has only the azimuth joint (all six Lincoln mounts), the
+  missing parts are sim-only: the weapon aims and fires in the simulation, but the 3D mount only turns. Each
+  import reports it (`part-sim-only` warnings) and open question Q20 keeps an observation log. Fix: add the
+  elevating joints in Blender. Sea Sparrow has no stock weapon; the RAM launcher stands in (Q22). Guns without
+  parts (`muzzle-offset`, as on the F-16) are not drafted.
 - Detonation power and weapon ammunition lists for a new munition are set by hand (UG 73, 74.2.2).
 - Humans and animals use a stock DI-Guy character; a custom mesh would need DI-Guy authoring tools (ACM 25.2).
 - Editor: exports ships only; crew are listed in `not_exported`. The Review panel has no kind field, and its
@@ -592,8 +609,9 @@ Planned, not done:
 3. Kind field and per-kind donor/part suggestions in the Review panel.
 4. Animation sequences for rotors, propellers and wheels; damage switch nodes.
 5. Check the systems in VR-Forces: the SOE's Edit Properties shows each system's position (UG 66.4.4); detection
-   from the mast (Q16); a rebound weapon slewing the model's parts (Q19). Add elevating joints to Lincoln's weapon
-   mounts so stock weapons can be drafted for them (Q20).
+   from the mast (Q16); a rebound weapon slewing the model's parts (Q19); the Associated Component column (Q21).
+   Add elevation joints to Lincoln's six weapon mounts in Blender, so their weapons pitch in 3D and need no
+   sim-only parts (Q20).
 6. Install test against a real custom SMS.
 7. Review and merge `feat/mak-export` and `feat/mak-kinds`.
 

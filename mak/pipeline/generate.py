@@ -93,14 +93,15 @@ def art_part_element(part: Part, parts: list[Part], glb: dict) -> ET.Element | N
         return None
     by_node = {p.node: p for p in parts}
     nodes = glb["nodes"]
-    pivot = nodes[part.node]["pivot"]
+    base = part.node.split("#")[0]       # a sim-only part "<mount>#<code>" sits at its mount's pivot
+    pivot = nodes[base]["pivot"]
     parent = by_node.get(part.parent) if part.parent else None
     # attach-point is relative to the parent part's attach point (as in stock files, e.g. 2S1 4128 -> 4416)
-    origin = nodes[parent.node]["pivot"] if parent else [0.0, 0.0, 0.0]
+    origin = nodes[parent.node.split("#")[0]]["pivot"] if parent else [0.0, 0.0, 0.0]
     rel = [pivot[i] - origin[i] for i in range(3)]
     end = (0.0, 0.0, 0.0)
-    if artparts.is_weapon(part.code) and nodes[part.node]["subtree_bounds"]:
-        end = (nodes[part.node]["subtree_bounds"]["max"][1] - pivot[1], 0.0, 0.0)   # muzzle: furthest forward point
+    if artparts.is_weapon(part.code) and nodes[base]["subtree_bounds"]:
+        end = (nodes[base]["subtree_bounds"]["max"][1] - pivot[1], 0.0, 0.0)   # muzzle: furthest forward point
 
     family = {4096: "primary-turret", 4416: "primary-gun", 4736: "primary-launcher"}
     stem = next((s for b, s in family.items() if b <= part.code < b + 320), "art-part")
@@ -245,6 +246,9 @@ def build_entity(donor_xml: str, manifest: dict, parts: list[Part], glb: dict, m
     if old is not None:
         so.remove(old)
     lst = ET.Element("DtSimArtPartDescriptorList", paramName="articulated-parts")
+    extra, notes = systems.sim_only_parts(manifest, parts)    # parts the model lacks (users guide 66.3.1)
+    f += notes
+    parts = parts + extra
     for p in parts:
         el = art_part_element(p, parts, glb)
         if el is not None:
@@ -253,6 +257,8 @@ def build_entity(donor_xml: str, manifest: dict, parts: list[Part], glb: dict, m
 
     # systems: the donor's, with the manifest's changes (sensor positions, weapon part bindings, additions)
     f += systems.apply_systems(so, manifest, parts, glb, catalog)
+    if manifest.get("systems"):
+        f += systems.associate_parts(so, catalog)        # each part named after the component that drives it
 
     # size and supports
     volume, (left, right), other = supports_and_volume(glb["bounds_mak_frame"])

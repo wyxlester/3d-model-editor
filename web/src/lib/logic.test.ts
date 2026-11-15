@@ -1205,6 +1205,10 @@ describe('MAK systems', () => {
       .toBe('Bind weapon to Weapons › Gun 1, 4448');
     expect(systemChangeText({ system: 'weapon-1', sysdef: 'weapons/phalanx-20mm-gun.sysdef', bind: { 'turret-art-part-type': 'Weapons__Phalanx_1' }, reason: '' }))
       .toBe('Add weapon-1 (phalanx-20mm-gun) on Weapons › Phalanx 1');
+    expect(systemChangeText({ system: 'weapon', sysdef: 'weapons/phalanx-20mm-gun.sysdef', reason: '',
+      bind: { 'turret-art-part-type': 'Weapons__Phalanx_1', 'gun-art-part-type': 4416 },
+      add_parts: [{ code: 4416, parent: 'Weapons__Phalanx_1', motion: 'elevation', min: -20, max: 85, max_rate: 115 }] }))
+      .toBe('Add weapon (phalanx-20mm-gun) on Weapons › Phalanx 1, 4416, with sim-only part 4416 (no joint in the model)');
   });
   it('saves the changes turned off, only when there are some', () => {
     const rows = makRows(makDraft, null);
